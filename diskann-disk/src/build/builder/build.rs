@@ -10,7 +10,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use crate::data_model::{GraphDataType, graph_data_types::BuildVector};
+use crate::data_model::{BuildVector, GraphDataType};
 use diskann::{
     ANNResult,
     utils::{ONE, VectorRepr, async_tools},
@@ -64,6 +64,9 @@ where
     index_configuration: IndexConfiguration,
     storage_provider: &'a StorageProvider,
     build_quantizer: BuildQuantizer,
+    /// The PiPNN configuration, if PiPNN builds the graph.
+    #[cfg(feature = "pipnn")]
+    pipnn: Option<diskann::graph::pipnn::Config>,
     _phantom: PhantomData<Data>,
 }
 
@@ -80,11 +83,16 @@ where
         index_configuration: IndexConfiguration,
         index_writer: DiskIndexWriter,
     ) -> ANNResult<Self> {
+        // Parse the PiPNN parameters before the quantizer is trained.
         #[cfg(feature = "pipnn")]
-        if let Some(parameters) = disk_build_param.pipnn_parameters() {
-            // Reject bad parameters before the quantizer is trained.
-            parameters.builder(&index_configuration.config).build()?;
-        }
+        let pipnn = match disk_build_param.build_algorithm() {
+            crate::BuildAlgorithm::Vamana => None,
+            crate::BuildAlgorithm::PiPNN(parameters) => Some(pipnn::config(
+                parameters,
+                &index_configuration,
+                disk_build_param.build_quantization(),
+            )?),
+        };
 
         let pq_storage = PQStorage::new(
             &(index_writer.get_index_path_prefix() + "_pq_pivots.bin"),
@@ -111,6 +119,8 @@ where
             storage_provider,
             pq_storage,
             build_quantizer,
+            #[cfg(feature = "pipnn")]
+            pipnn,
             _phantom: PhantomData,
         })
     }
@@ -136,7 +146,7 @@ where
         self.generate_compressed_data(pool.as_ref())?;
         logger.log_checkpoint(DiskIndexBuildCheckpoint::PqConstruction);
 
-        self.build_graph(pool.as_ref()).await?;
+        self.build_inmem_index(pool.as_ref()).await?;
         logger.log_checkpoint(DiskIndexBuildCheckpoint::InmemIndexBuild);
 
         // Use physical file to pass the memory index to the disk writer
@@ -185,10 +195,17 @@ where
         generator.generate_data(storage_provider, pool, max_block_size)
     }
 
-    async fn build_graph(&mut self, pool: RayonThreadPoolRef<'_>) -> ANNResult<()> {
+    async fn build_inmem_index(&mut self, pool: RayonThreadPoolRef<'_>) -> ANNResult<()> {
         #[cfg(feature = "pipnn")]
-        if let Some(parameters) = self.disk_build_param.pipnn_parameters() {
-            return pipnn::build_graph(self, pool, parameters);
+        if let Some(config) = &self.pipnn {
+            return pipnn::build_inmem_index::<Data::VectorDataType, _>(
+                &self.index_configuration,
+                config,
+                &self.index_writer.get_dataset_file(),
+                &self.index_writer.get_mem_index_file(),
+                self.storage_provider,
+                pool,
+            );
         }
 
         match determine_build_strategy::<Data>(

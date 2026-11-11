@@ -380,15 +380,14 @@ where
     Ok(index_size.into_usize())
 }
 
-/// Save real-point adjacency lists in the canonical graph layout.
+/// Save `graph` in the canonical graph layout at `path`.
 ///
-/// # Errors
-///
-/// Returns an error before file creation if an ID is outside `adjacency`. It also
-/// returns an error if a row exceeds `max_degree`. The function returns storage
-/// creation and write errors from `provider`.
+/// Row `i` of `graph` lists the out-neighbors of point `i`. The header records
+/// `start_point`, `max_degree` and no additional points. The caller must pass a
+/// `start_point` and neighbor IDs below `graph.len()`, and rows of at most
+/// `max_degree` neighbors; otherwise the file does not describe a valid graph.
 pub fn save_adjacency_graph<P>(
-    adjacency: &[AdjacencyList<u32>],
+    graph: &[AdjacencyList<u32>],
     max_degree: u32,
     provider: &P,
     start_point: u32,
@@ -397,40 +396,17 @@ pub fn save_adjacency_graph<P>(
 where
     P: StorageWriteProvider,
 {
-    let points = adjacency.len();
-    if start_point.into_usize() >= points {
-        return Err(ANNError::message(format!(
-            "graph start point {start_point} is outside {points} rows"
-        )));
-    }
-    let max_degree = max_degree.into_usize();
-    for (source, neighbors) in adjacency.iter().enumerate() {
-        if neighbors.len() > max_degree {
-            return Err(ANNError::message(format!(
-                "graph row {source} has degree {}, exceeding configured max degree {max_degree}",
-                neighbors.len()
-            )));
-        }
-        if let Some(&neighbor) = neighbors.iter().find(|&&id| id.into_usize() >= points) {
-            return Err(ANNError::message(format!(
-                "graph row {source} has neighbor {neighbor} outside {points} rows"
-            )));
-        }
-    }
-
     save_graph(
-        &AdjacencyGraph {
-            adjacency,
-            max_degree: max_degree as u32,
-        },
+        &AdjacencyGraph { graph, max_degree },
         provider,
         start_point,
         path,
     )
 }
 
+/// Hook [`save_adjacency_graph`] into [`save_graph`].
 struct AdjacencyGraph<'a> {
-    adjacency: &'a [AdjacencyList<u32>],
+    graph: &'a [AdjacencyList<u32>],
     max_degree: u32,
 }
 
@@ -441,15 +417,12 @@ impl GetAdjacencyList for AdjacencyGraph<'_> {
     where
         Self: 'a;
 
-    fn get_adjacency_list(&self, index: usize) -> ANNResult<Self::Item<'_>> {
-        self.adjacency
-            .get(index)
-            .map(|row| &**row)
-            .ok_or_else(|| ANNError::message(format!("missing graph row {index}")))
+    fn get_adjacency_list(&self, i: usize) -> ANNResult<Self::Item<'_>> {
+        Ok(&self.graph[i])
     }
 
     fn total(&self) -> usize {
-        self.adjacency.len()
+        self.graph.len()
     }
 
     fn additional_points(&self) -> u64 {
@@ -483,18 +456,16 @@ mod tests {
         }
     }
 
-    fn adjacency(rows: &[&[u32]]) -> Vec<AdjacencyList<u32>> {
-        rows.iter()
-            .map(|row| AdjacencyList::from_iter_untrusted(row.iter().copied()))
-            .collect()
-    }
-
     #[test]
     fn adjacency_graph_roundtrips_through_the_canonical_loader() {
         let storage = VirtualStorageProvider::<MemoryFS>::new_memory();
-        let expected = adjacency(&[&[1, 2], &[0], &[]]);
+        let rows: [&[u32]; 3] = [&[1, 2], &[0], &[]];
+        let graph: Vec<_> = rows
+            .iter()
+            .map(|row| AdjacencyList::from_iter_untrusted(row.iter().copied()))
+            .collect();
 
-        save_adjacency_graph(&expected, 2, &storage, 1, "/graph").unwrap();
+        save_adjacency_graph(&graph, 3, &storage, 1, "/graph").unwrap();
         let actual = load_graph(&storage, "/graph", |points, max_degree, start_points| {
             Ok(LoadedGraph {
                 rows: vec![Vec::new(); points],
@@ -504,27 +475,8 @@ mod tests {
         })
         .unwrap();
 
-        assert_eq!(actual.rows, [vec![1, 2], vec![0], vec![]]);
-        assert_eq!(actual.max_degree, 2);
+        assert_eq!(actual.rows, rows);
+        assert_eq!(actual.max_degree, 3);
         assert_eq!(actual.start_points, 0);
-    }
-
-    #[test]
-    fn adjacency_graph_rejects_inconsistent_header_and_ids_before_writing() {
-        let cases = [
-            (adjacency(&[&[1, 2], &[], &[]]), 1, 0, "degree"),
-            (adjacency(&[&[3], &[], &[]]), 1, 0, "neighbor"),
-            (adjacency(&[&[], &[]]), 1, 2, "start point"),
-        ];
-
-        for (index, (graph, max_degree, start_point, message)) in cases.into_iter().enumerate() {
-            let storage = VirtualStorageProvider::<MemoryFS>::new_memory();
-            let path = format!("/graph-{index}");
-            let error =
-                save_adjacency_graph(&graph, max_degree, &storage, start_point, &path).unwrap_err();
-
-            assert!(error.to_string().contains(message), "{error}");
-            assert!(!storage.exists(&path));
-        }
     }
 }

@@ -66,9 +66,9 @@ features = [
 
 [dev-dependencies]
 rstest.workspace = true
+serde_json.workspace = true
 tempfile.workspace = true
 vfs.workspace = true
-serde_json.workspace = true
 diskann-providers = { workspace = true, default-features = false, features = [
     "testing",
     "virtual_storage",
@@ -84,7 +84,6 @@ proptest.workspace = true
 default = []
 perf_test = ["dep:opentelemetry"]
 pipnn = ["diskann/pipnn", "diskann-providers/pipnn"]
-virtual_storage = ["diskann-providers/virtual_storage"]
 experimental_diversity_search = [
     "diskann/experimental_diversity_search",
     "diskann-providers/experimental_diversity_search",

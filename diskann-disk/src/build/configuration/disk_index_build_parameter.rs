@@ -10,8 +10,6 @@ use std::num::NonZeroUsize;
 use diskann::ANNError;
 use thiserror::Error;
 
-#[cfg(feature = "pipnn")]
-use super::PiPNNParameters;
 use super::{BuildAlgorithm, QuantizationType};
 
 use crate::error::{ErrorKind, diskann_error};
@@ -111,8 +109,7 @@ impl NumPQChunks {
 /// Parameters specific for disk index construction.
 #[derive(Clone, PartialEq, Debug)]
 pub struct DiskIndexBuildParameters {
-    /// Memory budget for disk-index stages that support bounded work.
-    /// PiPNN always uses its one-shot graph build.
+    /// Limit on the memory allowed for building the index.
     build_memory_limit: MemoryBudget,
 
     /// Number of PQ chunks stored in-memory for search and to be generated during build.
@@ -124,7 +121,7 @@ pub struct DiskIndexBuildParameters {
     /// Number of vectors processed per data-compression chunk.
     data_compression_chunk_vector_count: usize,
 
-    /// Which graph construction algorithm to use.
+    /// Algorithm that builds the graph.
     build_algorithm: BuildAlgorithm,
 }
 
@@ -144,31 +141,19 @@ impl DiskIndexBuildParameters {
         }
     }
 
-    /// Create parameters for one-shot PiPNN graph construction.
-    ///
-    /// PiPNN uses the common search-PQ and disk layout. The memory budget does
-    /// not limit its one-shot graph build.
-    #[cfg(feature = "pipnn")]
-    pub fn new_pipnn(
-        build_memory_limit: MemoryBudget,
-        search_pq_chunks: NumPQChunks,
-        config: PiPNNParameters,
-    ) -> Self {
-        Self {
-            build_memory_limit,
-            search_pq_chunks,
-            build_quantization: QuantizationType::FP,
-            data_compression_chunk_vector_count: DEFAULT_DATA_COMPRESSION_CHUNK_VECTOR_COUNT,
-            build_algorithm: BuildAlgorithm::PiPNN(config),
-        }
-    }
-
     /// Set the number of vectors processed per data-compression chunk.
     pub fn with_data_compression_chunk_vector_count(
         mut self,
         data_compression_chunk_vector_count: usize,
     ) -> Self {
         self.data_compression_chunk_vector_count = data_compression_chunk_vector_count;
+        self
+    }
+
+    /// Set the algorithm that builds the graph. The default is
+    /// [`BuildAlgorithm::Vamana`].
+    pub fn with_build_algorithm(mut self, build_algorithm: BuildAlgorithm) -> Self {
+        self.build_algorithm = build_algorithm;
         self
     }
 
@@ -192,17 +177,9 @@ impl DiskIndexBuildParameters {
         self.data_compression_chunk_vector_count
     }
 
-    /// Get the graph-construction algorithm.
+    /// Get the algorithm that builds the graph.
     pub fn build_algorithm(&self) -> &BuildAlgorithm {
         &self.build_algorithm
-    }
-
-    #[cfg(feature = "pipnn")]
-    pub(crate) fn pipnn_parameters(&self) -> Option<&PiPNNParameters> {
-        match &self.build_algorithm {
-            BuildAlgorithm::PiPNN(parameters) => Some(parameters),
-            BuildAlgorithm::Vamana => None,
-        }
     }
 }
 

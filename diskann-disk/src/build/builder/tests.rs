@@ -245,10 +245,9 @@ mod disk_index_build_tests {
         Ok(())
     }
 
-    // PiPNN converts MinMax rows to `f32` with `VectorRepr`. With 256 points,
-    // `p_samp = 0.05` gives 13 leaders, so the fanout-10 level applies and the
-    // leaves overlap. With fewer leaders the leaves are disjoint, and the two
-    // clusters of this sample stay disconnected.
+    // With 256 points, `p_samp = 0.05` gives 13 leaders, so the fanout-10
+    // level applies and the leaves overlap. With fewer leaders the leaves are
+    // disjoint, and the two clusters of this sample stay disconnected.
     #[cfg(feature = "pipnn")]
     #[test]
     fn test_disk_minmax_pipnn_index_builder() {
@@ -256,9 +255,9 @@ mod disk_index_build_tests {
             dim: 148,
             full_dim: 128,
             data_path: "/sift/siftsmall_learn_256pts_minmax.fbin".to_string(),
-            pipnn: Some(crate::PiPNNParameters {
-                c_max: std::num::NonZeroUsize::new(64).unwrap(),
-                p_samp: 0.05,
+            build_algorithm: crate::BuildAlgorithm::PiPNN(crate::PiPNNParameters {
+                c_max: std::num::NonZeroUsize::new(64),
+                p_samp: Some(0.05),
                 ..Default::default()
             }),
             ..TestParams::default()

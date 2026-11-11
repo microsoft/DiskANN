@@ -3,97 +3,79 @@
  * Licensed under the MIT license.
  */
 
-//! Graph-build algorithm selection and its JSON-facing configuration.
+//! Graph-build algorithm of a disk index.
 
-use std::fmt;
 #[cfg(feature = "pipnn")]
 use std::num::NonZeroUsize;
 
 use serde::{Deserialize, Serialize};
 
-/// PiPNN parameters in the JSON build configuration.
-///
-/// The common index configuration supplies graph degree, alpha, metric, thread
-/// count, and memory limit. [`diskann::graph::pipnn::Builder`] describes the
-/// effect of each parameter.
-#[cfg(feature = "pipnn")]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct PiPNNParameters {
-    /// Maximum number of points in a leaf.
-    pub c_max: NonZeroUsize,
-    /// Fraction of a cluster sampled as leaders.
-    pub p_samp: f64,
-    /// Maximum number of leaders in one split.
-    pub max_leaders: NonZeroUsize,
-    /// Number of nearest leaders retained at each partition level.
-    pub fanout: Vec<NonZeroUsize>,
-    /// Maximum number of partition levels; a cluster still larger than c_max at
-    /// this level is cut into leaves.
-    pub max_depth: NonZeroUsize,
-    /// Number of nearest neighbors selected within each leaf.
-    pub k: NonZeroUsize,
-}
-
-#[cfg(feature = "pipnn")]
-impl Default for PiPNNParameters {
-    fn default() -> Self {
-        const C_MAX: NonZeroUsize = NonZeroUsize::new(512).unwrap();
-        const MAX_LEADERS: NonZeroUsize = NonZeroUsize::new(1000).unwrap();
-        const FANOUT: [NonZeroUsize; 2] = [
-            NonZeroUsize::new(10).unwrap(),
-            NonZeroUsize::new(3).unwrap(),
-        ];
-        const MAX_DEPTH: NonZeroUsize = NonZeroUsize::new(30).unwrap();
-        const K: NonZeroUsize = NonZeroUsize::new(2).unwrap();
-        Self {
-            c_max: C_MAX,
-            p_samp: 0.005,
-            max_leaders: MAX_LEADERS,
-            fanout: FANOUT.to_vec(),
-            max_depth: MAX_DEPTH,
-            k: K,
-        }
-    }
-}
-
-#[cfg(feature = "pipnn")]
-impl PiPNNParameters {
-    /// Start a PiPNN configuration from these parameters and the prune policy
-    /// of `graph`. The caller adds the seed and builds it; the disk builder
-    /// takes the seed from `IndexConfiguration::random_seed`.
-    pub fn builder(&self, graph: &diskann::graph::Config) -> diskann::graph::pipnn::Builder {
-        diskann::graph::pipnn::Builder::from_graph(graph)
-            .c_max(self.c_max)
-            .p_samp(self.p_samp)
-            .max_leaders(self.max_leaders)
-            .fanout(self.fanout.clone())
-            .max_depth(self.max_depth)
-            .leaf_k(self.k)
-    }
-}
-
-/// Graph construction algorithm for index building.
+/// Graph-build algorithm of a disk index.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "algorithm")]
 #[non_exhaustive]
 pub enum BuildAlgorithm {
-    /// Default Vamana graph construction.
+    /// Vamana: insert the points one by one, searching the graph for each.
     #[default]
     Vamana,
 
-    /// PiPNN one-shot partition-based graph construction.
+    /// PiPNN: build the graph from overlapping leaves in one pass.
+    ///
+    /// PiPNN reads the full-precision rows, so the build quantization must be
+    /// [`QuantizationType::FP`](crate::QuantizationType::FP). PiPNN does not
+    /// read the build memory limit.
     #[cfg(feature = "pipnn")]
     PiPNN(PiPNNParameters),
 }
 
-impl fmt::Display for BuildAlgorithm {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Vamana => write!(f, "Vamana"),
-            #[cfg(feature = "pipnn")]
-            Self::PiPNN(config) => write!(f, "PiPNN({config:?})"),
+/// PiPNN parameters of a disk index build.
+///
+/// The index configuration supplies the prune policy, metric and seed. A
+/// parameter that is not set keeps the default of
+/// [`diskann::graph::pipnn::Builder`], which also describes each parameter.
+#[cfg(feature = "pipnn")]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PiPNNParameters {
+    /// See [`diskann::graph::pipnn::Builder::c_max`].
+    pub c_max: Option<NonZeroUsize>,
+    /// See [`diskann::graph::pipnn::Builder::p_samp`].
+    pub p_samp: Option<f64>,
+    /// See [`diskann::graph::pipnn::Builder::max_leaders`].
+    pub max_leaders: Option<NonZeroUsize>,
+    /// See [`diskann::graph::pipnn::Builder::fanout`].
+    pub fanout: Option<Vec<NonZeroUsize>>,
+    /// See [`diskann::graph::pipnn::Builder::max_depth`].
+    pub max_depth: Option<NonZeroUsize>,
+    /// See [`diskann::graph::pipnn::Builder::leaf_k`].
+    pub leaf_k: Option<NonZeroUsize>,
+}
+
+#[cfg(feature = "pipnn")]
+impl PiPNNParameters {
+    /// Start a PiPNN configuration from the prune policy of `graph` and the
+    /// parameters that are set.
+    pub fn builder(&self, graph: &diskann::graph::Config) -> diskann::graph::pipnn::Builder {
+        let mut builder = diskann::graph::pipnn::Builder::from_graph(graph);
+        if let Some(c_max) = self.c_max {
+            builder = builder.c_max(c_max);
         }
+        if let Some(p_samp) = self.p_samp {
+            builder = builder.p_samp(p_samp);
+        }
+        if let Some(max_leaders) = self.max_leaders {
+            builder = builder.max_leaders(max_leaders);
+        }
+        if let Some(fanout) = &self.fanout {
+            builder = builder.fanout(fanout.clone());
+        }
+        if let Some(max_depth) = self.max_depth {
+            builder = builder.max_depth(max_depth);
+        }
+        if let Some(leaf_k) = self.leaf_k {
+            builder = builder.leaf_k(leaf_k);
+        }
+        builder
     }
 }
 
@@ -102,38 +84,51 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_is_vamana() {
-        assert_eq!(BuildAlgorithm::default(), BuildAlgorithm::Vamana);
-    }
+    fn the_algorithm_tag_selects_the_variant() {
+        let vamana: BuildAlgorithm = serde_json::from_str(r#"{"algorithm":"Vamana"}"#).unwrap();
+        assert_eq!(vamana, BuildAlgorithm::Vamana);
 
-    #[test]
-    fn vamana_serde_roundtrip() {
-        let json = serde_json::to_string(&BuildAlgorithm::Vamana).unwrap();
-        assert_eq!(
-            serde_json::from_str::<BuildAlgorithm>(&json).unwrap(),
-            BuildAlgorithm::Vamana
-        );
+        #[cfg(feature = "pipnn")]
+        {
+            let pipnn: BuildAlgorithm =
+                serde_json::from_str(r#"{"algorithm":"PiPNN","c_max":64,"fanout":[8,3]}"#).unwrap();
+            let nz = |value| NonZeroUsize::new(value).unwrap();
+            let expected = PiPNNParameters {
+                c_max: Some(nz(64)),
+                fanout: Some(vec![nz(8), nz(3)]),
+                ..PiPNNParameters::default()
+            };
+            assert_eq!(pipnn, BuildAlgorithm::PiPNN(expected));
+
+            let unknown = serde_json::from_str::<BuildAlgorithm>(r#"{"algorithm":"PiPNN","l":1}"#);
+            assert!(unknown.is_err());
+        }
     }
 
     #[cfg(feature = "pipnn")]
     #[test]
-    fn pipnn_serde_uses_inline_defaults_and_rejects_unknown_fields() {
-        let algorithm: BuildAlgorithm =
-            serde_json::from_str(r#"{"algorithm":"PiPNN","c_max":512,"fanout":[10,3],"k":3}"#)
-                .unwrap();
-        let BuildAlgorithm::PiPNN(config) = algorithm else {
-            panic!("expected PiPNN");
+    fn unset_parameters_keep_the_pipnn_defaults() {
+        let graph = diskann::graph::config::Builder::new(
+            16,
+            diskann::graph::config::MaxDegree::default_slack(),
+            32,
+            diskann_vector::distance::Metric::L2.into(),
+        )
+        .build()
+        .unwrap();
+        let leaf_k = NonZeroUsize::new(3).unwrap();
+        let parameters = PiPNNParameters {
+            leaf_k: Some(leaf_k),
+            ..PiPNNParameters::default()
         };
-        assert_eq!(config.c_max.get(), 512);
-        assert_eq!(config.max_leaders.get(), 1000);
-        assert_eq!(
-            config.fanout.iter().map(|f| f.get()).collect::<Vec<_>>(),
-            [10, 3]
-        );
-        assert_eq!(config.max_depth.get(), 30);
-        assert_eq!(config.k.get(), 3);
-        assert!(
-            serde_json::from_str::<BuildAlgorithm>(r#"{"algorithm":"PiPNN","l_max":72}"#).is_err()
-        );
+
+        let actual = parameters.builder(&graph).build().unwrap();
+        let expected = diskann::graph::pipnn::Builder::from_graph(&graph)
+            .leaf_k(leaf_k)
+            .seed(actual.seed())
+            .build()
+            .unwrap();
+
+        assert_eq!(actual, expected);
     }
 }

@@ -3,304 +3,232 @@
  * Licensed under the MIT license.
  */
 
-//! PiPNN graph build for the disk index.
+//! PiPNN graph build of a disk index.
 //!
-//! The adapter checks the dataset shape, finds the start point from a storage
-//! sample, builds the graph from the dataset in memory, and writes the
-//! adjacency lists as the in-memory index file that the disk layout step reads.
-//! The dataset lives only inside [`build_adjacency`], so it is gone before the
-//! graph is written.
+//! PiPNN replaces the Vamana graph build and writes the same in-memory index
+//! file, so the PQ and disk layout steps of the disk build do not change.
 
 use diskann::{
-    ANNError, ANNResult,
+    ANNResult,
     graph::{AdjacencyList, pipnn},
     utils::VectorRepr,
 };
 use diskann_providers::{
+    model::IndexConfiguration,
     storage::{StorageReadProvider, StorageWriteProvider, save_adjacency_graph},
-    utils::{MAX_MEDOID_SAMPLE_SIZE, RayonThreadPoolRef, find_medoid_with_sampling},
+    utils::RayonThreadPoolRef,
 };
-use diskann_utils::{
-    io::{Metadata, read_bin},
-    views::rowmajor::Matrix,
+use diskann_utils::{io::read_bin, views::rowmajor::Matrix};
+
+use super::start_point_from_medoid;
+use crate::{
+    PiPNNParameters, QuantizationType,
+    error::{ErrorKind, diskann_error},
 };
-use diskann_vector::distance::Metric;
 
-use super::{DiskIndexBuilder, u32_try_from};
-use crate::{PiPNNParameters, data_model::GraphDataType};
-
-/// Build the PiPNN graph of the dataset of `builder` and write it as the
-/// in-memory index file.
-pub(super) fn build_graph<Data, StorageProvider>(
-    builder: &DiskIndexBuilder<'_, Data, StorageProvider>,
-    pool: RayonThreadPoolRef<'_>,
+/// Make the PiPNN configuration of a disk build. The index configuration
+/// supplies the prune policy and the seed.
+///
+/// # Errors
+///
+/// Returns an error if `parameters` are invalid, or if `quantization` is not
+/// [`QuantizationType::FP`]: PiPNN reads the full-precision rows and does not
+/// use a build quantizer.
+pub(super) fn config(
     parameters: &PiPNNParameters,
+    index_configuration: &IndexConfiguration,
+    quantization: &QuantizationType,
+) -> ANNResult<pipnn::Config> {
+    if !matches!(quantization, QuantizationType::FP) {
+        return Err(diskann_error!(
+            ErrorKind::IndexConfigError("build_quantization"),
+            "PiPNN reads full-precision rows and needs FP build quantization, not {quantization}"
+        ));
+    }
+    let mut builder = parameters.builder(&index_configuration.config);
+    if let Some(seed) = index_configuration.random_seed {
+        builder = builder.seed(seed);
+    }
+    Ok(builder.build()?)
+}
+
+/// Build the PiPNN graph of the dataset at `data_path` and write it to
+/// `save_path` as an in-memory index file.
+///
+/// The start point is the medoid of a storage sample, as in the Vamana build.
+/// The file records the pruned degree as the maximum degree and no frozen
+/// points.
+pub(super) fn build_inmem_index<T, StorageProvider>(
+    index_configuration: &IndexConfiguration,
+    config: &pipnn::Config,
+    data_path: &str,
+    save_path: &str,
+    storage_provider: &StorageProvider,
+    pool: RayonThreadPoolRef<'_>,
 ) -> ANNResult<()>
 where
-    Data: GraphDataType<VectorIdType = u32>,
-    Data::VectorDataType: pipnn::Element,
+    T: VectorRepr + pipnn::Element,
     StorageProvider: StorageReadProvider + StorageWriteProvider,
 {
-    let data_path = builder.index_writer.get_dataset_file();
-    let (points, dimensions) =
-        Metadata::read(&mut builder.storage_provider.open_reader(&data_path)?)?.into_dims();
-    if dimensions != builder.index_configuration.dim {
-        return Err(ANNError::message(format!(
-            "configured dimension {} does not match dataset dimension {dimensions}",
-            builder.index_configuration.dim
-        )));
-    }
-    if points != builder.index_configuration.max_points {
-        return Err(ANNError::message(format!(
-            "configured point count {} does not match dataset point count {points}",
-            builder.index_configuration.max_points
-        )));
-    }
-
-    let mut config = parameters.builder(&builder.index_configuration.config);
-    if let Some(seed) = builder.index_configuration.random_seed {
-        config = config.seed(seed);
-    }
-    let config = config.build()?;
-
-    // The start point comes from a storage sample, as in the Vamana build, and
-    // is found before the dataset is in memory.
-    let mut rng = diskann_providers::utils::create_rnd_from_optional_seed(
-        builder.index_configuration.random_seed,
-    );
-    let (_, start_id) = find_medoid_with_sampling::<Data::VectorDataType, _>(
-        &data_path,
-        builder.storage_provider,
-        MAX_MEDOID_SAMPLE_SIZE,
-        &mut rng,
-    )?;
-
-    let adjacency = build_adjacency::<Data::VectorDataType, _>(
-        &data_path,
-        builder.storage_provider,
-        builder.index_configuration.dist_metric,
-        &config,
+    let start_point = start_point_from_medoid::<T, _>(
+        data_path,
+        index_configuration.random_seed,
+        storage_provider,
+    )?
+    .id();
+    let graph = build_graph::<T, _>(
+        index_configuration,
+        config,
+        data_path,
+        storage_provider,
         pool,
     )?;
     save_adjacency_graph(
-        &adjacency,
-        u32_try_from(builder.index_configuration.config.pruned_degree().get())?,
-        builder.storage_provider,
-        u32_try_from(start_id)?,
-        &builder.index_writer.get_mem_index_file(),
+        &graph,
+        index_configuration.config.pruned_degree_u32().get(),
+        storage_provider,
+        start_point,
+        save_path,
     )?;
     Ok(())
 }
 
 /// Read the dataset at `data_path` and build its PiPNN graph on `pool`.
 ///
-/// The dataset is dropped on return, so only the adjacency lists stay in
-/// memory while the graph is written.
-fn build_adjacency<T, StorageProvider>(
-    data_path: &str,
-    storage: &StorageProvider,
-    metric: Metric,
+/// The dataset is dropped on return, so only the graph stays in memory while
+/// it is written.
+fn build_graph<T, StorageProvider>(
+    index_configuration: &IndexConfiguration,
     config: &pipnn::Config,
+    data_path: &str,
+    storage_provider: &StorageProvider,
     pool: RayonThreadPoolRef<'_>,
 ) -> ANNResult<Vec<AdjacencyList<u32>>>
 where
     T: VectorRepr + pipnn::Element,
     StorageProvider: StorageReadProvider,
 {
-    let data = read_bin::<T>(&mut storage.open_reader(data_path)?)?;
-    let rows = pipnn::Rows::new(data.as_view(), metric)?;
+    let data = read_bin::<T>(&mut storage_provider.open_reader(data_path)?)?;
+    // PiPNN builds one graph row for each dataset row. The other build steps
+    // size their work by the index configuration, so the shapes must agree.
+    let (points, dimensions) = (data.nrows(), data.ncols());
+    if (points, dimensions) != (index_configuration.max_points, index_configuration.dim) {
+        return Err(diskann_error!(
+            ErrorKind::IndexError,
+            "the dataset has {points} points of {dimensions} dimensions, but the index \
+             configuration has {} points of {} dimensions",
+            index_configuration.max_points,
+            index_configuration.dim
+        ));
+    }
+    let rows = pipnn::Rows::new(data.as_view(), index_configuration.dist_metric)?;
     pool.install(|| pipnn::build_graph(&rows, config))
 }
 
 #[cfg(test)]
 mod tests {
     use diskann::{graph::config, utils::ONE};
-    use diskann_providers::utils::create_thread_pool;
-    use diskann_providers::{
-        model::IndexConfiguration,
-        storage::{
-            StorageReadProvider, StorageWriteProvider, VirtualStorageProvider, get_disk_index_file,
-        },
-    };
+    use diskann_providers::{storage::VirtualStorageProvider, utils::create_thread_pool};
     use diskann_utils::{io::write_bin, views::rowmajor};
     use diskann_vector::distance::Metric;
     use vfs::MemoryFS;
 
-    use crate::{
-        DiskIndexBuildParameters,
-        build::{
-            builder::build::DiskIndexBuilder,
-            configuration::{MemoryBudget, NumPQChunks, PiPNNParameters},
-        },
-        data_model::AdHoc,
-        storage::DiskIndexWriter,
-    };
+    use super::*;
 
-    fn pipnn() -> PiPNNParameters {
-        let nz = |value| std::num::NonZeroUsize::new(value).unwrap();
-        PiPNNParameters {
-            c_max: nz(512),
-            p_samp: 0.01,
-            max_leaders: nz(1000),
-            fanout: vec![nz(10), nz(3)],
-            max_depth: nz(10),
-            k: nz(2),
-        }
+    const DATA: &str = "/data.fbin";
+    const GRAPH: &str = "/graph";
+    const DEGREE: usize = 32;
+    const SEED: u64 = 42;
+
+    fn index_configuration(points: usize, dimensions: usize) -> IndexConfiguration {
+        let graph = config::Builder::new(
+            DEGREE,
+            config::MaxDegree::default_slack(),
+            50,
+            Metric::L2.into(),
+        )
+        .build()
+        .unwrap();
+        IndexConfiguration::new(Metric::L2, dimensions, points, ONE, 1, graph)
+            .with_pseudo_rng_from_seed(SEED)
     }
 
-    fn write_data(storage: &VirtualStorageProvider<MemoryFS>, points: usize, dimensions: usize) {
+    fn storage_with_data(points: usize, dimensions: usize) -> VirtualStorageProvider<MemoryFS> {
+        let storage = VirtualStorageProvider::new_memory();
         let data: Vec<f32> = (0..points * dimensions)
             .map(|index| ((index * 17) % 251) as f32)
             .collect();
         write_bin(
             rowmajor::Ref::try_from_data(data.as_slice(), points, dimensions).unwrap(),
-            &mut storage.create_for_write("/data.fbin").unwrap(),
+            &mut storage.create_for_write(DATA).unwrap(),
         )
         .unwrap();
+        storage
     }
 
-    fn graph_config(degree: usize, alpha: f32) -> diskann::graph::Config {
-        config::Builder::new_with(
-            degree,
-            config::MaxDegree::default_slack(),
-            50,
-            Metric::L2.into(),
-            |builder| {
-                builder.alpha(alpha);
-            },
+    fn build(
+        storage: &VirtualStorageProvider<MemoryFS>,
+        index_configuration: &IndexConfiguration,
+    ) -> ANNResult<()> {
+        let pipnn_config = config(
+            &PiPNNParameters::default(),
+            index_configuration,
+            &QuantizationType::FP,
+        )?;
+        let pool = create_thread_pool(1)?;
+        build_inmem_index::<f32, _>(
+            index_configuration,
+            &pipnn_config,
+            DATA,
+            GRAPH,
+            storage,
+            pool.as_ref(),
         )
-        .build()
-        .unwrap()
-    }
-
-    fn builder<'a>(
-        storage: &'a VirtualStorageProvider<MemoryFS>,
-        points: usize,
-        dimensions: usize,
-        budget_gib: f64,
-        alpha: f32,
-        parameters: PiPNNParameters,
-    ) -> DiskIndexBuilder<'a, AdHoc<f32>, VirtualStorageProvider<MemoryFS>> {
-        let params = DiskIndexBuildParameters::new_pipnn(
-            MemoryBudget::try_from_gb(budget_gib).unwrap(),
-            NumPQChunks::new_with(dimensions, dimensions).unwrap(),
-            parameters,
-        );
-        let config = IndexConfiguration::new(
-            Metric::L2,
-            dimensions,
-            points,
-            ONE,
-            1,
-            graph_config(32, alpha),
-        )
-        .with_pseudo_rng_from_seed(42);
-        let writer =
-            DiskIndexWriter::new("/data.fbin".into(), "/index".into(), None, 4096).unwrap();
-        DiskIndexBuilder::new(storage, params, config, writer).unwrap()
     }
 
     #[test]
-    fn disk_build_rejects_dataset_shape_mismatch() {
-        let storage = VirtualStorageProvider::new_memory();
-        write_data(&storage, 2, 8);
-        let params = DiskIndexBuildParameters::new_pipnn(
-            MemoryBudget::try_from_gb(10_000.0).unwrap(),
-            NumPQChunks::new_with(4, 4).unwrap(),
-            PiPNNParameters::default(),
-        );
-        let config = IndexConfiguration::new(Metric::L2, 4, 3, ONE, 1, graph_config(4, 1.2));
-        let writer =
-            DiskIndexWriter::new("/data.fbin".into(), "/index".into(), None, 4096).unwrap();
-        let mut builder =
-            DiskIndexBuilder::<AdHoc<f32>, _>::new(&storage, params, config, writer).unwrap();
+    fn config_takes_the_index_seed_and_rejects_build_quantization() {
+        let index_configuration = index_configuration(1, 1);
+        let parameters = PiPNNParameters::default();
 
-        let error = builder.build().unwrap_err();
-        assert!(format!("{error:?}").contains("configured dimension 4"));
-        assert!(storage.exists("/index_pq_compressed.bin"));
+        let pipnn_config = config(&parameters, &index_configuration, &QuantizationType::FP);
+        assert_eq!(pipnn_config.unwrap().seed(), SEED);
+
+        let quantized = QuantizationType::PQ { num_chunks: 1 };
+        let error = config(&parameters, &index_configuration, &quantized).unwrap_err();
+        assert!(error.to_string().contains("needs FP"), "{error}");
     }
 
     #[test]
-    fn graph_adapter_rejects_point_count_mismatch() {
-        let storage = VirtualStorageProvider::new_memory();
-        write_data(&storage, 2, 8);
-        let parameters = pipnn();
-        let builder = builder(&storage, 3, 8, 1.0, 1.2, parameters.clone());
-        let pool = create_thread_pool(1).unwrap();
+    fn build_rejects_a_dataset_that_does_not_match_the_configuration() {
+        let (points, dimensions) = (2, 8);
+        for (configured_points, configured_dimensions) in [(3, dimensions), (points, 4)] {
+            let storage = storage_with_data(points, dimensions);
+            let index_configuration = index_configuration(configured_points, configured_dimensions);
 
-        let error = super::build_graph(&builder, pool.as_ref(), &parameters).unwrap_err();
-        assert!(format!("{error:?}").contains("configured point count 3"));
-        assert!(!storage.exists(&builder.index_writer.get_mem_index_file()));
+            let error = build(&storage, &index_configuration).unwrap_err();
+
+            assert!(error.to_string().contains("has 2 points of 8"), "{error}");
+            assert!(!storage.exists(GRAPH));
+        }
     }
 
     #[test]
-    fn graph_adapter_writes_degree_medoid_and_frozen_count() {
-        let storage = VirtualStorageProvider::new_memory();
+    fn build_writes_the_pruned_degree_and_the_medoid() {
         let (points, dimensions) = (256, 8);
-        write_data(&storage, points, dimensions);
-        let parameters = pipnn();
-        let builder = builder(&storage, points, dimensions, 1.0, 1.2, parameters.clone());
-        let pool = create_thread_pool(1).unwrap();
+        let storage = storage_with_data(points, dimensions);
 
-        super::build_graph(&builder, pool.as_ref(), &parameters).unwrap();
+        build(&storage, &index_configuration(points, dimensions)).unwrap();
 
+        // Header: file size (u64), maximum degree (u32), start point (u32),
+        // frozen points (u64).
         let mut header = [0_u8; 24];
-        std::io::Read::read_exact(
-            &mut storage
-                .open_reader(&builder.index_writer.get_mem_index_file())
-                .unwrap(),
-            &mut header,
-        )
-        .unwrap();
-        assert_eq!(u32::from_le_bytes(header[8..12].try_into().unwrap()), 32);
-        assert!(u32::from_le_bytes(header[12..16].try_into().unwrap()) < points as u32);
-        assert_eq!(u64::from_le_bytes(header[16..24].try_into().unwrap()), 0);
-    }
-
-    #[test]
-    fn explicit_selection_ignores_the_vamana_memory_strategy() {
-        let storage = VirtualStorageProvider::new_memory();
-        let (points, dimensions) = (256, 8);
-        write_data(&storage, points, dimensions);
-        let mut builder = builder(&storage, points, dimensions, 0.000001, 1.3, pipnn());
-
-        assert!(matches!(
-            builder.disk_build_param.build_algorithm(),
-            crate::BuildAlgorithm::PiPNN(_)
-        ));
-        assert_eq!(
-            builder.disk_build_param.build_quantization(),
-            &crate::QuantizationType::FP
-        );
-        assert_eq!(builder.index_configuration.config.pruned_degree().get(), 32);
-        assert_eq!(builder.index_configuration.config.l_build().get(), 50);
-        assert_eq!(builder.index_configuration.config.alpha(), 1.3);
-        builder.build().unwrap();
-        assert!(storage.exists(&get_disk_index_file("/index")));
-        assert!(storage.exists("/index_pq_compressed.bin"));
-    }
-
-    #[test]
-    fn builder_rejects_invalid_pipnn_config() {
-        let storage = VirtualStorageProvider::new_memory();
-        let invalid = PiPNNParameters {
-            p_samp: 0.0,
-            ..PiPNNParameters::default()
-        };
-        let params = DiskIndexBuildParameters::new_pipnn(
-            MemoryBudget::try_from_gb(0.0001).unwrap(),
-            NumPQChunks::new_with(1, 1).unwrap(),
-            invalid,
-        );
-        let config = IndexConfiguration::new(Metric::L2, 1, 1, ONE, 1, graph_config(4, 1.2));
-        let writer =
-            DiskIndexWriter::new("/data.fbin".into(), "/index".into(), None, 4096).unwrap();
-
-        let error = match DiskIndexBuilder::<AdHoc<f32>, _>::new(&storage, params, config, writer) {
-            Ok(_) => panic!("invalid PiPNN config must be rejected"),
-            Err(error) => error,
-        };
-
-        assert!(format!("{error:?}").contains("p_samp (0) must be in (0, 1]"));
+        std::io::Read::read_exact(&mut storage.open_reader(GRAPH).unwrap(), &mut header).unwrap();
+        let medoid = start_point_from_medoid::<f32, _>(DATA, Some(SEED), &storage)
+            .unwrap()
+            .id();
+        assert_eq!(header[8..12], (DEGREE as u32).to_le_bytes());
+        assert_eq!(header[12..16], medoid.to_le_bytes());
+        assert_eq!(header[16..24], 0_u64.to_le_bytes());
     }
 }
