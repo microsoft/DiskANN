@@ -9,12 +9,15 @@ mod disk_index_build_tests {
     use std::io::{Read, Write};
 
     use crate::test_utils::{GraphDataF32VectorUnitData, GraphDataMinMaxVectorUnitData};
+    use diskann::ANNResult;
     use diskann_providers::storage::{
-        StorageReadProvider, StorageWriteProvider, get_compressed_pq_file, get_pq_pivot_file,
+        StorageReadProvider, StorageWriteProvider, VirtualStorageProvider, get_compressed_pq_file,
+        get_pq_pivot_file,
     };
     use diskann_utils::io::Metadata;
     use diskann_vector::distance::Metric;
     use rstest::rstest;
+    use vfs::OverlayFS;
 
     use crate::{
         QuantizationType, SphericalBits,
@@ -241,7 +244,14 @@ mod disk_index_build_tests {
             data_path: DATA_FILE.to_string(),
             ..TestParams::default()
         };
-        run_minmax_test(index_path_prefix, params, use_sharded_build, 10, 32);
+        run_minmax_test(
+            index_path_prefix,
+            params,
+            use_sharded_build,
+            10,
+            32,
+            |fixture| fixture.build::<GraphDataMinMaxVectorUnitData>(),
+        );
         Ok(())
     }
 
@@ -252,24 +262,18 @@ mod disk_index_build_tests {
     #[cfg(feature = "pipnn")]
     #[rstest]
     #[case::direct(None)]
-    #[case::hash_prune(Some(crate::HashPruneParameters {
+    #[case::hash_prune(Some(diskann::graph::pipnn::HashPruneConfig {
         num_hash_planes: 12,
         l_max: 72,
         final_prune: true,
     }))]
     fn test_disk_minmax_pipnn_index_builder(
-        #[case] hash_prune: Option<crate::HashPruneParameters>,
+        #[case] hash_prune: Option<diskann::graph::pipnn::HashPruneConfig>,
     ) {
         let params = TestParams {
             dim: 148,
             full_dim: 128,
             data_path: "/sift/siftsmall_learn_256pts_minmax.fbin".to_string(),
-            build_algorithm: crate::BuildAlgorithm::PiPNN(crate::PiPNNParameters {
-                c_max: std::num::NonZeroUsize::new(64),
-                p_samp: Some(0.05),
-                hash_prune,
-                ..Default::default()
-            }),
             ..TestParams::default()
         };
         run_minmax_test(
@@ -278,6 +282,18 @@ mod disk_index_build_tests {
             false,
             10,
             32,
+            |fixture| {
+                fixture.build_with_pipnn::<GraphDataMinMaxVectorUnitData>(|pipnn| {
+                    let pipnn = pipnn
+                        .c_max(std::num::NonZeroUsize::new(64).unwrap())
+                        .p_samp(0.05)
+                        .seed(42);
+                    match hash_prune {
+                        Some(hash_prune) => pipnn.hash_prune(hash_prune),
+                        None => pipnn,
+                    }
+                })
+            },
         );
     }
 
@@ -287,6 +303,7 @@ mod disk_index_build_tests {
         use_sharded_build: bool,
         top_k: usize,
         search_l: u32,
+        build: impl FnOnce(&IndexBuildFixture<VirtualStorageProvider<OverlayFS>>) -> ANNResult<()>,
     ) {
         // Use the same parameters from [test_sift_build_and_search] in diskann_index
         let l_build = 64;
@@ -305,7 +322,7 @@ mod disk_index_build_tests {
 
         let fixture = IndexBuildFixture::new(new_vfs(), params).unwrap();
 
-        fixture.build::<GraphDataMinMaxVectorUnitData>().unwrap();
+        build(&fixture).unwrap();
 
         verify_search_result_with_ground_truth::<GraphDataMinMaxVectorUnitData>(
             &fixture.params,
