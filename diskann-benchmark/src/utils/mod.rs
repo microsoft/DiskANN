@@ -135,6 +135,24 @@ impl std::fmt::Display for SmallBanner<'_> {
 // Tests //
 ///////////
 
+/// Vector element types that the index builds accept. With the `pipnn`
+/// feature, PiPNN also needs the [`Element`] gather of the type.
+///
+/// [`Element`]: diskann::graph::pipnn::Element
+#[cfg(feature = "pipnn")]
+pub(crate) trait BuildElement:
+    diskann::utils::VectorRepr + diskann::graph::pipnn::Element
+{
+}
+#[cfg(feature = "pipnn")]
+impl<T: diskann::utils::VectorRepr + diskann::graph::pipnn::Element> BuildElement for T {}
+
+/// Vector element types that the index builds accept.
+#[cfg(not(feature = "pipnn"))]
+pub(crate) trait BuildElement: diskann::utils::VectorRepr {}
+#[cfg(not(feature = "pipnn"))]
+impl<T: diskann::utils::VectorRepr> BuildElement for T {}
+
 #[cfg(test)]
 mod tests {
     use super::*;

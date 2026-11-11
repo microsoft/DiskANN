@@ -81,6 +81,7 @@ where
         params.l_build,
         metric.into(),
         |b| {
+            b.alpha(params.alpha);
             b.saturate_after_prune(true);
         },
     )
@@ -90,11 +91,15 @@ where
 
     let metadata = load_metadata_from_file(storage_provider, &data_path)?;
 
+    // Input validation requires the quantization for Vamana. PiPNN leaves it
+    // unset, which means FP. The disk builder rejects PiPNN with any other
+    // quantization.
     let build_parameters = DiskIndexBuildParameters::new(
         MemoryBudget::try_from_gb(params.build_ram_limit_gb)?,
-        params.quantization_type,
+        params.quantization_type.unwrap_or_default(),
         NumPQChunks::new_with(params.num_pq_chunks.get(), metadata.ndims())?,
-    );
+    )
+    .with_build_algorithm(params.build_algorithm.clone());
 
     let index_configuration = IndexConfiguration::new(
         metric,
