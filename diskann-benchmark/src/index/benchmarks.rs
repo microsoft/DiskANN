@@ -46,7 +46,10 @@ use crate::{
         search::plugins,
         streaming::{self, managed, stats::StreamStats, FullPrecisionStream, Managed},
     },
-    inputs::graph_index::{DynamicIndexRun, IndexBuild, IndexOperation, IndexSource, SearchPhase},
+    inputs::{
+        build_algorithm::BuildAlgorithm,
+        graph_index::{DynamicIndexRun, IndexBuild, IndexOperation, IndexSource, SearchPhase},
+    },
     utils::{
         self,
         datafiles::{self},
@@ -212,8 +215,16 @@ where
         writeln!(output, "{}", input)?;
         let (index, build_stats) = match &input.source {
             IndexSource::Build(build) => {
-                let mut incremental = || {
-                    run_build(
+                let (index, build_stats) = match build.build_algorithm() {
+                    // PiPNN uses the batch build path. Do not create an incremental
+                    // provider or run Vamana insertion.
+                    #[cfg(feature = "pipnn")]
+                    BuildAlgorithm::PiPNN(parameters) => {
+                        let data =
+                            Arc::new(datafiles::load_dataset(datafiles::BinFile(build.data()))?);
+                        build::pipnn_build(data, build, parameters)?
+                    }
+                    BuildAlgorithm::Vamana => run_build(
                         build,
                         common::FullPrecision,
                         None,
@@ -232,22 +243,8 @@ where
                             Ok(index)
                         },
                         single_or_multi_insert,
-                    )
+                    )?,
                 };
-                // PiPNN uses the batch build path. Do not create an incremental
-                // provider or run Vamana insertion.
-                #[cfg(feature = "pipnn")]
-                let result = match build.build_algorithm() {
-                    diskann_disk::BuildAlgorithm::PiPNN(parameters) => {
-                        let data =
-                            Arc::new(datafiles::load_dataset(datafiles::BinFile(build.data()))?);
-                        build::pipnn_build(data, build, parameters)
-                    }
-                    _ => incremental(),
-                };
-                #[cfg(not(feature = "pipnn"))]
-                let result = incremental();
-                let (index, build_stats) = result?;
 
                 // save the index if requested
                 if let Some(save_path) = build.save_path() {

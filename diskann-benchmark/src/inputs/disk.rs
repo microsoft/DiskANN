@@ -15,8 +15,6 @@ use diskann_benchmark_runner::{files::InputFile, utils::datatype::DataType, Chec
 #[cfg(feature = "disk-index")]
 use diskann_disk::search::search_mode::SearchMode;
 #[cfg(feature = "disk-index")]
-use diskann_disk::BuildAlgorithm;
-#[cfg(feature = "disk-index")]
 use diskann_disk::QuantizationType;
 use diskann_providers::storage::{get_compressed_pq_file, get_disk_index_file, get_pq_pivot_file};
 use serde::{Deserialize, Serialize};
@@ -27,7 +25,7 @@ use crate::{
 };
 
 #[cfg(feature = "disk-index")]
-use crate::inputs::graph_index::AdaptiveL;
+use crate::inputs::{build_algorithm::BuildAlgorithm, graph_index::AdaptiveL};
 
 //////////////
 // Registry //

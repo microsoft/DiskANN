@@ -6,10 +6,7 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
-use diskann::{
-    graph::config,
-    utils::{VectorRepr, ONE},
-};
+use diskann::{graph::config, utils::ONE};
 use diskann_benchmark_runner::utils::MicroSeconds;
 use diskann_disk::{
     build::builder::build::DiskIndexBuilder,
@@ -27,7 +24,11 @@ use opentelemetry::trace::Tracer;
 use opentelemetry_sdk::trace::SdkTracerProvider;
 use scopeguard::defer;
 
-use crate::{disk_index::json_spancollector::JsonSpanCollector, inputs::disk::DiskIndexBuild};
+use crate::{
+    disk_index::json_spancollector::JsonSpanCollector,
+    inputs::{build_algorithm::BuildAlgorithm, disk::DiskIndexBuild},
+    utils::BuildElement,
+};
 
 #[derive(Serialize, Deserialize, Debug)]
 pub(super) struct DiskBuildStats {
@@ -60,7 +61,7 @@ pub(super) fn build_disk_index<T, StorageProviderType>(
     params: &DiskIndexBuild,
 ) -> anyhow::Result<DiskBuildStats>
 where
-    T: VectorRepr,
+    T: BuildElement,
     StorageProviderType: StorageReadProvider + StorageWriteProvider + 'static,
     <StorageProviderType as StorageReadProvider>::Reader: std::marker::Send,
 {
@@ -101,8 +102,7 @@ where
         MemoryBudget::try_from_gb(params.build_ram_limit_gb)?,
         params.quantization_type.unwrap_or_default(),
         NumPQChunks::new_with(params.num_pq_chunks.get(), metadata.ndims())?,
-    )
-    .with_build_algorithm(params.build_algorithm.clone());
+    );
 
     let index_configuration = IndexConfiguration::new(
         metric,
@@ -110,7 +110,7 @@ where
         metadata.npoints(),
         ONE,
         params.num_threads,
-        config,
+        config.clone(),
     )
     .with_pseudo_rng();
 
@@ -134,7 +134,13 @@ where
     };
 
     let start = std::time::Instant::now();
-    disk_index.build()?;
+    match &params.build_algorithm {
+        BuildAlgorithm::Vamana => disk_index.build()?,
+        #[cfg(feature = "pipnn")]
+        BuildAlgorithm::PiPNN(parameters) => {
+            disk_index.build_with_pipnn(&parameters.config(&config)?)?
+        }
+    }
     let total_time: MicroSeconds = start.elapsed().into();
 
     drop(span);

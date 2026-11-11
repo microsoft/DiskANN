@@ -123,7 +123,7 @@ where
 pub(crate) fn pipnn_build<T>(
     data: Arc<rowmajor::Owned<T>>,
     input: &IndexBuild,
-    parameters: &diskann_disk::PiPNNParameters,
+    parameters: &crate::inputs::build_algorithm::PiPNNParameters,
 ) -> anyhow::Result<(diskann_async::MemoryIndex<T>, BuildStats)>
 where
     T: diskann::graph::SampleableForStart + crate::utils::BuildElement,
@@ -141,7 +141,7 @@ where
         .context("failed to create PiPNN build thread pool")?;
 
     let started = std::time::Instant::now();
-    let config = parameters.builder(&graph).build()?;
+    let config = parameters.config(&graph)?;
     let adjacency = pool.install(|| {
         let rows = diskann::graph::pipnn::Rows::new(data.as_view(), metric)?;
         diskann::graph::pipnn::build_graph(&rows, &config)
@@ -430,7 +430,9 @@ mod pipnn_tests {
             }
         }))
         .unwrap();
-        let diskann_disk::BuildAlgorithm::PiPNN(parameters) = input.build_algorithm() else {
+        let crate::inputs::build_algorithm::BuildAlgorithm::PiPNN(parameters) =
+            input.build_algorithm()
+        else {
             panic!("expected PiPNN parameters");
         };
         let data =
