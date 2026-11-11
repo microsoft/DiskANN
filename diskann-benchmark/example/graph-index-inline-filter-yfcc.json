@@ -36,13 +36,15 @@
               "search_l": [
                 20,
                 30,
-                40
+                40,
+                100,
+                1000
               ],
               "recall_k": 10
             }
           ],
           "adaptive_l": {
-            "sample_count": 10,
+            "sample_count": 50,
             "scale_factor": 16.0
           }
         }
