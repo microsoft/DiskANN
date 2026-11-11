@@ -3,6 +3,8 @@
  * Licensed under the MIT license.
  */
 
+use std::ops::{Add, Mul};
+
 use diskann_vector::{MathematicalValue, PureDistanceFunction};
 use thiserror::Error;
 
@@ -48,6 +50,31 @@ pub struct MinMaxCompensation {
     pub n: f32,            // - Nx
     pub a: f32,            // - ax
     pub norm_squared: f32, // - |ax * X' + bx|^2
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct Coefficients<T> {
+    pub(crate) a: T,
+    pub(crate) b: T,
+    pub(crate) n: T,
+}
+
+impl From<MinMaxCompensation> for Coefficients<f32> {
+    fn from(meta: MinMaxCompensation) -> Self {
+        Self {
+            a: meta.a,
+            b: meta.b,
+            n: meta.n,
+        }
+    }
+}
+
+impl<T: Copy + Add<Output = T> + Mul<Output = T>> Coefficients<T> {
+    /// Compensate a raw code dot product using the logical (unpadded) dimension.
+    #[inline(always)]
+    pub(crate) fn compensate_inner_product(self, other: Self, dot: T, dim: T) -> T {
+        ((self.a * other.a) * dot + self.n * other.b) + other.n * self.b + (self.b * other.b) * dim
+    }
 }
 
 const META_BYTES: usize = std::mem::size_of::<MinMaxCompensation>(); // This will be 5 * 4 = 20 bytes.
@@ -219,12 +246,11 @@ where
 {
     let raw_product = InnerProduct::evaluate(x.vector(), y.vector())?;
     let (xm, ym) = (x.meta(), y.meta());
-    let term0 = xm.a * ym.a * raw_product.into_inner() as f32;
-    let term1_x = xm.n * ym.b;
-    let term1_y = ym.n * xm.b;
-    let term2 = xm.b * ym.b * (x.len() as f32);
-
-    let v = term0 + term1_x + term1_y + term2;
+    let v = Coefficients::from(xm).compensate_inner_product(
+        ym.into(),
+        raw_product.into_inner() as f32,
+        x.len() as f32,
+    );
     Ok(MV::new(f(v, &xm, &ym)))
 }
 

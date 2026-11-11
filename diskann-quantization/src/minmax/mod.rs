@@ -133,9 +133,12 @@ mod vectors;
 // Exports //
 /////////////
 
-pub use multi::{MinMaxKernel, MinMaxMeta};
+pub use multi::{
+    MinMaxKernel, MinMaxKernelFactory, MinMaxMaxSim, MinMaxMeta, build_minmax_max_sim,
+};
 pub use quantizer::{L2Loss, MinMaxQuantizer};
 pub use recompress::{RecompressError, Recompressor};
+pub(crate) use vectors::Coefficients;
 pub use vectors::{
     Data, DataMutRef, DataRef, DecompressError, FullQuery, FullQueryMeta, FullQueryMut,
     FullQueryRef, MetaParseError, MinMaxCompensation, MinMaxCosine, MinMaxCosineNormalized,

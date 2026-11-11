@@ -1,0 +1,85 @@
+/*
+ * Copyright (c) Microsoft Corporation.
+ * Licensed under the MIT license.
+ */
+
+#![expect(
+    clippy::expect_used,
+    reason = "integration test tools are not production code"
+)]
+
+use std::num::{NonZeroU32, NonZeroUsize};
+
+use crate::{
+    num::{Bytes, IdLimit, MaxDegree},
+    store,
+};
+
+use super::boilerplate;
+
+#[derive(Debug)]
+pub struct Config {
+    pub capacity: usize,
+    pub entry_bytes: usize,
+    pub epoch_guard_slots: usize,
+    pub freelist_recycle_capacity: usize,
+}
+
+boilerplate!(
+    store::packed::Packed => Store,
+    for<'a> store::packed::Reader<'a> => Reader,
+    for<'a> store::packed::Exclusive<'a> => Writer,
+);
+
+impl Store {
+    /// Construct a store with `config.capacity` writable slots, each holding
+    /// `config.entry_bytes` bytes. No frozen points are created.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the underlying store could not be constructed (e.g. `config.capacity`
+    /// exceeds `u32::MAX`) or if other configuration parameters such as the number of epoch
+    /// guard slots are invalid (e.g. zero).
+    pub fn new(config: Config) -> Self {
+        let store_layout = store::Layout::new(
+            IdLimit::new(
+                config
+                    .capacity
+                    .try_into()
+                    .expect("capacity must fit in u32"),
+            ),
+            MaxDegree::new(0),
+        );
+
+        let store_config = store::Config::__exhaustive(
+            NonZeroUsize::new(config.epoch_guard_slots)
+                .expect("`epoch_guard_slots` must be non-zero"),
+            NonZeroU32::new(
+                config
+                    .freelist_recycle_capacity
+                    .try_into()
+                    .expect("`freelist_recycle_capacity` must fit within 32-bits"),
+            )
+            .expect("`freelist_recycle_capacity` must be non-zero"),
+        );
+
+        let slots_config = store::packed::Packed::config(Bytes::new(config.entry_bytes));
+        let store = store::Store::new(store_layout, store_config, slots_config)
+            .expect("failed to construct store");
+
+        Self { store }
+    }
+}
+
+impl<'a> Reader<'a> {
+    pub fn read(&self, i: usize) -> Option<&[u8]> {
+        let i = u32::try_from(i).ok()?;
+        self.reader.read(i)
+    }
+}
+
+impl<'a> Writer<'a> {
+    pub fn as_mut_slice(&mut self) -> &mut [u8] {
+        self.slot.data().as_mut_slice()
+    }
+}

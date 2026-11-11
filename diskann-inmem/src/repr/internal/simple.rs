@@ -125,7 +125,7 @@ mod tests {
         let counters = Counters::new();
         let mut reranker = Reranker::new(
             store.guard(|simple, guard| simple.reader(guard)).unwrap(),
-            repr::test::TestQueryDistance::new(-1.0),
+            repr::test::TestQueryDistance::new(&[-1.0]),
             counters.local(),
         );
 

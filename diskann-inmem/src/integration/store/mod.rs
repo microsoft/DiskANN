@@ -8,6 +8,7 @@
 
 pub mod checked;
 pub mod intrusive;
+pub mod packed;
 pub mod simple;
 
 /// These implementations have a similar structure. A [`boilerplate`] macro is used to ensure

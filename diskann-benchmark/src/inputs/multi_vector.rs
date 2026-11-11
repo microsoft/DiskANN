@@ -5,13 +5,94 @@
 
 use std::num::NonZeroUsize;
 
-use diskann_benchmark_runner::{utils::datatype::DataType, Checker, Input};
+use diskann_benchmark_runner::{Checker, Input};
 use diskann_quantization::multi_vector::MaxSimIsa;
 use serde::{Deserialize, Serialize};
 
 ////////////////
 // Enum types //
 ////////////////
+
+/// Primitive variants retain their existing JSON strings; MinMax carries its bit widths.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase", deny_unknown_fields)]
+pub(crate) enum ElementType {
+    Float32,
+    Float16,
+    Int8,
+    MinMax {
+        query_bits: BitWidth,
+        doc_bits: BitWidth,
+    },
+}
+
+impl ElementType {
+    fn validate(self) -> anyhow::Result<()> {
+        if let Self::MinMax {
+            query_bits,
+            doc_bits,
+        } = self
+        {
+            let (a, b) = (query_bits.get(), doc_bits.get());
+            anyhow::ensure!(
+                a == b || (a == 8 && matches!(b, 1 | 2 | 4)),
+                "unsupported MinMax bit-width pair: query {a}, document {b}; \
+                 expected equal widths in 1..=8 or an 8-bit query with 1-, 2-, or 4-bit documents",
+            );
+        }
+        Ok(())
+    }
+}
+
+impl std::fmt::Display for ElementType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Float32 => f.write_str("float32"),
+            Self::Float16 => f.write_str("float16"),
+            Self::Int8 => f.write_str("int8"),
+            Self::MinMax {
+                query_bits,
+                doc_bits,
+            } => {
+                write!(
+                    f,
+                    "minmax (query: {}, doc: {} bits)",
+                    query_bits.get(),
+                    doc_bits.get()
+                )
+            }
+        }
+    }
+}
+
+/// A MinMax code width in 1..=8, validated when reading benchmark input.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "usize", into = "usize")]
+pub(crate) struct BitWidth(usize);
+
+impl BitWidth {
+    pub(crate) fn get(self) -> usize {
+        self.0
+    }
+}
+
+impl TryFrom<usize> for BitWidth {
+    type Error = &'static str;
+
+    fn try_from(bits: usize) -> Result<Self, Self::Error> {
+        if (1..=8).contains(&bits) {
+            Ok(Self(bits))
+        } else {
+            Err("MinMax bit width must be in 1..=8")
+        }
+    }
+}
+
+impl From<BitWidth> for usize {
+    fn from(bits: BitWidth) -> Self {
+        bits.get()
+    }
+}
 
 /// JSON-facing shadow of [`MaxSimIsa`]. The library's enum is deliberately
 /// serde-free; this owns the kebab-case JSON shape and converts via `From`.
@@ -30,6 +111,20 @@ pub(crate) enum BenchIsa {
     Scalar,
     Reference,
     Auto,
+}
+
+#[cfg(all(test, feature = "multi-vector"))]
+impl BenchIsa {
+    pub(crate) fn all() -> [Self; 6] {
+        [
+            Self::X86_64_V4,
+            Self::X86_64_V3,
+            Self::Neon,
+            Self::Scalar,
+            Self::Reference,
+            Self::Auto,
+        ]
+    }
 }
 
 impl std::fmt::Display for BenchIsa {
@@ -76,7 +171,7 @@ pub(crate) struct Run {
 /// A complete multi-vector benchmark job.
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct MultiVectorOp {
-    pub(crate) element_type: DataType,
+    pub(crate) element_type: ElementType,
     pub(crate) isa: BenchIsa,
     pub(crate) runs: Vec<Run>,
 }
@@ -95,6 +190,7 @@ impl Input for MultiVectorOp {
     }
 
     fn from_raw(raw: Self::Raw, _checker: &mut Checker) -> anyhow::Result<Self> {
+        raw.element_type.validate()?;
         Ok(raw)
     }
 
@@ -126,7 +222,7 @@ impl Input for MultiVectorOp {
         ];
 
         Self {
-            element_type: DataType::Float32,
+            element_type: ElementType::Float32,
             isa: BenchIsa::Auto,
             runs,
         }
@@ -147,5 +243,101 @@ impl std::fmt::Display for MultiVectorOp {
         write_field!(f, "isa", self.isa)?;
         write_field!(f, "number of runs", self.runs.len())?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn element_type_preserves_primitive_json_and_minmax_widths() {
+        let mut representations = vec![json!("float32"), json!("float16"), json!("int8")];
+        for query_bits in 1..=8 {
+            for doc_bits in 1..=8 {
+                representations
+                    .push(json!({"minmax": {"query_bits": query_bits, "doc_bits": doc_bits}}));
+            }
+        }
+        for value in representations {
+            let element: ElementType = serde_json::from_value(value.clone()).unwrap();
+            assert_eq!(serde_json::to_value(element).unwrap(), value);
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_minmax_configuration() {
+        for bits in [json!(0), json!(9), json!(-1), json!(1.5), json!("4")] {
+            for field in ["query_bits", "doc_bits"] {
+                let mut value = json!({"minmax": {"query_bits": 8, "doc_bits": 4}});
+                value["minmax"][field] = bits.clone();
+                assert!(serde_json::from_value::<ElementType>(value).is_err());
+            }
+        }
+        for value in [
+            json!("minmax"),
+            json!({"minmax": {"query_bits": 8}}),
+            json!({"minmax": {"query_bits": 8, "doc_bits": 4, "doc_btis": 2}}),
+        ] {
+            assert!(serde_json::from_value::<ElementType>(value).is_err());
+        }
+    }
+
+    #[test]
+    fn rejects_unsupported_minmax_pair() {
+        let raw = MultiVectorOp {
+            element_type: ElementType::MinMax {
+                query_bits: BitWidth::try_from(8).unwrap(),
+                doc_bits: BitWidth::try_from(6).unwrap(),
+            },
+            ..MultiVectorOp::example()
+        };
+        let mut checker = Checker::new(Vec::new(), None);
+
+        let error = MultiVectorOp::from_raw(raw, &mut checker).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("unsupported MinMax bit-width pair"),
+            "{error:#}",
+        );
+    }
+
+    #[test]
+    fn validates_supported_minmax_pairs() {
+        let mut supported = 0;
+        for a in 1..=8 {
+            for b in 1..=8 {
+                let element: ElementType =
+                    serde_json::from_value(json!({"minmax": {"query_bits": a, "doc_bits": b}}))
+                        .unwrap();
+                let result = element.validate();
+                if a == b || (a == 8 && matches!(b, 1 | 2 | 4)) {
+                    result.unwrap();
+                    supported += 1;
+                } else {
+                    assert!(result
+                        .unwrap_err()
+                        .to_string()
+                        .contains("unsupported MinMax"));
+                }
+            }
+        }
+        assert_eq!(supported, 11);
+    }
+
+    #[test]
+    fn benchmark_inputs_use_supported_minmax_pairs() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        for directory in ["example", "perf_test_inputs"] {
+            let path = root.join(directory).join("multi-vector.json");
+            let input: serde_json::Value =
+                serde_json::from_reader(std::fs::File::open(path).unwrap()).unwrap();
+            for job in input["jobs"].as_array().unwrap() {
+                let op: MultiVectorOp = serde_json::from_value(job["content"].clone()).unwrap();
+                op.element_type.validate().unwrap();
+            }
+        }
     }
 }

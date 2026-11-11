@@ -3,7 +3,11 @@
  * Licensed under the MIT license.
  */
 
-use std::{io::Write, num::NonZeroUsize, sync::Arc};
+use std::{
+    io::Write,
+    num::{NonZeroU32, NonZeroUsize},
+    sync::Arc,
+};
 
 use anyhow::Context;
 use diskann::graph::{DiskANNIndex, search::Knn};
@@ -25,12 +29,10 @@ use diskann_inmem::{
 };
 
 use crate::{
-    index::{Counters, Index},
+    index::{CheckCounters, Counters, Index},
     support::{
-        check::{CheckMatch, check_all_fields},
         datatype::{self, DataType, Dataset, DatasetView},
         io::load_and_convert,
-        tolerance,
     },
 };
 
@@ -171,11 +173,23 @@ mod dto {
     }
 
     #[derive(Debug, Serialize, Deserialize)]
+    #[serde(rename_all = "kebab-case")]
+    pub(super) enum Insert {
+        Single,
+        Multi {
+            batch_size: NonZeroU32,
+            parallelism: NonZeroUsize,
+            intra_batch_candidates: u32,
+        },
+    }
+
+    #[derive(Debug, Serialize, Deserialize)]
     pub(super) struct Build {
         pub(super) pruned_degree: usize,
         pub(super) max_degree: usize,
         pub(super) l_build: usize,
         pub(super) alpha: f32,
+        pub(super) insert: Insert,
     }
 
     #[derive(Debug, Serialize, Deserialize)]
@@ -446,39 +460,80 @@ impl Representation {
 }
 
 #[derive(Debug)]
+pub(super) enum Insert {
+    Single,
+    Multi { batch_size: NonZeroU32 },
+}
+
+#[derive(Debug)]
 struct Build {
     config: diskann::graph::Config,
+    insert: Insert,
 }
 
 impl Build {
     fn from_raw(raw: dto::Build, metric: Metric) -> anyhow::Result<Self> {
+        use diskann::graph::config as graph_config;
+
         let dto::Build {
             pruned_degree,
             max_degree,
             l_build,
             alpha,
+            insert,
         } = raw;
 
-        let config = diskann::graph::config::Builder::new_with(
+        let mut builder = graph_config::Builder::new_with(
             pruned_degree,
-            diskann::graph::config::MaxDegree::new(max_degree),
+            graph_config::MaxDegree::new(max_degree),
             l_build,
             metric.into(),
             |b| {
                 b.alpha(alpha);
             },
-        )
-        .build()?;
+        );
 
-        Ok(Self { config })
+        let insert = match insert {
+            dto::Insert::Single => Insert::Single,
+            dto::Insert::Multi {
+                batch_size,
+                parallelism,
+                intra_batch_candidates,
+            } => {
+                let ibc = graph_config::IntraBatchCandidates::new(intra_batch_candidates);
+                builder
+                    .max_minibatch_par(parallelism.get())
+                    .intra_batch_candidates(ibc);
+                Insert::Multi { batch_size }
+            }
+        };
+
+        let config = builder.build()?;
+        Ok(Self { config, insert })
     }
 
     fn as_raw(&self) -> dto::Build {
+        use diskann::graph::config::IntraBatchCandidates as IBC;
+
+        let insert = match self.insert {
+            Insert::Single => dto::Insert::Single,
+            Insert::Multi { batch_size } => dto::Insert::Multi {
+                batch_size,
+                parallelism: self.config.max_minibatch_par(),
+                intra_batch_candidates: match self.config.intra_batch_candidates() {
+                    IBC::None => 0,
+                    IBC::Max(m) => m.get(),
+                    IBC::All => batch_size.get(),
+                },
+            },
+        };
+
         dto::Build {
             pruned_degree: self.config.pruned_degree().get(),
             max_degree: self.config.max_degree().get(),
             l_build: self.config.l_build().get(),
             alpha: self.config.alpha(),
+            insert,
         }
     }
 }
@@ -842,6 +897,7 @@ impl diskann_benchmark_runner::Input for Test {
                 max_degree: 20,
                 l_build: 50,
                 alpha: 1.2,
+                insert: dto::Insert::Single,
             },
             search: dto::Search {
                 knn: vec![
@@ -926,12 +982,23 @@ impl diskann_benchmark_runner::Benchmark for FullPrecision {
         } = input.data.load_as(data_type)?;
 
         let index = input.index(data.as_view())?;
-        let rt = diskann_benchmark_core::tokio::runtime(1)?;
-        let build = super::tests::insert(&*index, data.as_view(), rt.handle())?;
+        let build = match input.build.insert {
+            Insert::Single => {
+                let rt = diskann_benchmark_core::tokio::runtime(1)?;
+                super::ops::insert(&*index, data.as_view(), rt.handle())?
+            }
+            Insert::Multi { batch_size } => {
+                let rt = diskann_benchmark_core::tokio::runtime(
+                    input.build.config.max_minibatch_par().into(),
+                )?;
+                super::ops::multi_insert(&index, data.as_view(), batch_size, rt.handle())?
+            }
+        };
 
+        let rt = diskann_benchmark_core::tokio::runtime(1)?;
         let mut knn = Vec::new();
         for (k, param) in input.search.knn.iter() {
-            let stats = super::tests::knn(
+            let stats = super::ops::knn(
                 &*index,
                 *k,
                 *param,
@@ -952,18 +1019,18 @@ impl diskann_benchmark_runner::Benchmark for FullPrecision {
 }
 
 impl Regression for FullPrecision {
-    type Tolerances = tolerance::Empty;
+    type Tolerances = CheckBuildAndSearch;
     type Pass = Finished;
     type Fail = Finished;
 
     fn check(
         &self,
-        _tolerances: &Self::Tolerances,
+        tolerances: &Self::Tolerances,
         _input: &Self::Input,
         before: &Self::Output,
         after: &Self::Output,
     ) -> anyhow::Result<PassFail<Self::Pass, Self::Fail>> {
-        Ok(after.check_match(before).pass_fail())
+        Ok(tolerances.check(before, after).pass_fail())
     }
 }
 
@@ -974,7 +1041,7 @@ impl Regression for FullPrecision {
 #[derive(Debug, Serialize, Deserialize)]
 struct BuildAndSearch {
     build: Counters,
-    knn: Vec<super::tests::KnnStats>,
+    knn: Vec<super::ops::KnnStats>,
 }
 
 impl std::fmt::Display for BuildAndSearch {
@@ -990,14 +1057,76 @@ impl std::fmt::Display for BuildAndSearch {
     }
 }
 
-impl CheckMatch for BuildAndSearch {
-    fn check_match(&self, previous: &Self) -> Report {
-        let builder = check_all_fields!(
-            self,
-            previous,
-            { build, knn },
-        );
+///////////////
+// Tolerance //
+///////////////
+
+/// A tolerance [`diskann_benchmark_runner::Input`] for
+/// [`diskann_benchmark_runner::benchmark::Regression`]s.
+///
+/// This allows for minor cross-architecture (`aarch64` vs `x86`) due to different choices
+/// with floating point SIMD width/association.
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct CheckBuildAndSearch {
+    build: CheckCounters,
+    knn: super::ops::CheckKnnStats,
+}
+
+impl CheckBuildAndSearch {
+    fn example() -> Self {
+        Self {
+            build: CheckCounters::example(),
+            knn: super::ops::CheckKnnStats::example(),
+        }
+    }
+
+    fn check(&self, old: &BuildAndSearch, new: &BuildAndSearch) -> Report {
+        let Self {
+            build: check_build,
+            knn: check_knn,
+        } = self;
+        let BuildAndSearch { build, knn } = old;
+        let mut builder = Report::builder();
+        builder.push("build", check_build.check(build, &new.build));
+
+        if knn.len() != new.knn.len() {
+            builder.push(
+                "knn",
+                Report::error(format_args!(
+                    "old KNN has {} entries while the new has {}",
+                    knn.len(),
+                    new.knn.len()
+                )),
+            );
+        } else {
+            let mut sub = Report::builder();
+            for (i, (old, new)) in std::iter::zip(knn.iter(), new.knn.iter()).enumerate() {
+                sub.push(i, check_knn.check(old, new));
+            }
+            builder.push("knn", sub.finish());
+        }
+
         builder.finish()
+    }
+}
+
+impl diskann_benchmark_runner::Input for CheckBuildAndSearch {
+    type Raw = Self;
+
+    fn tag() -> &'static str {
+        "tolerance-build-and-search"
+    }
+
+    fn from_raw(raw: Self::Raw, _: &mut Checker) -> anyhow::Result<Self> {
+        Ok(raw)
+    }
+
+    fn serialize(&self) -> anyhow::Result<serde_json::Value> {
+        Ok(serde_json::to_value(self)?)
+    }
+
+    fn example() -> Self::Raw {
+        <Self>::example()
     }
 }
 
@@ -1009,8 +1138,32 @@ impl CheckMatch for BuildAndSearch {
 mod tests {
     use super::*;
 
+    use diskann_benchmark_runner::report::Status;
+
     #[test]
     fn example_parses() {
         let _ = Test::from_raw(<Test as diskann_benchmark_runner::Input>::example(), None).unwrap();
+    }
+
+    #[test]
+    fn check_build_and_search_rejects_knn_length_mismatch() {
+        let tolerance = CheckBuildAndSearch::example();
+        let output = |len| BuildAndSearch {
+            build: Counters::test_fixture(),
+            knn: (0..len)
+                .map(|_| super::super::ops::KnnStats::test_fixture())
+                .collect(),
+        };
+        for (old_len, new_len, expected) in [
+            (1, 1, Status::Pass),
+            (1, 0, Status::Fail),
+            (0, 1, Status::Fail),
+        ] {
+            assert_eq!(
+                tolerance.check(&output(old_len), &output(new_len)).status(),
+                expected,
+                "old_len = {old_len}, new_len = {new_len}"
+            );
+        }
     }
 }

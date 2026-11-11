@@ -1,3 +1,4 @@
 [toolchain]
+# When updating this channel, also update MIRI_TOOLCHAIN in .github/workflows/nightly.yml.
 channel = "1.97.1"
 components = ["rust-src"]
