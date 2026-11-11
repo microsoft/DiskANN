@@ -35,6 +35,18 @@ pub enum ReassignCount {
     Count(NonZeroUsize),
 }
 
+/// Scoring used for linked-list reassignment. Splitting and routing are unchanged.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum ReassignmentMode {
+    /// Direct squared L2 for every allowed candidate.
+    #[default]
+    Baseline,
+    /// Use 128-row SGEMM tiles for at least 12 candidates, and paired L2 otherwise.
+    /// Floating-point rounding may change membership; this mode is opt-in.
+    #[cfg(feature = "ivf-gemm")]
+    Gemm,
+}
+
 /// Configuration of an [`IVFIndex`].
 #[derive(Debug, Clone, Copy)]
 pub struct Config {
@@ -75,7 +87,7 @@ pub struct InsertStats {
 
 /// An incremental IVF index.
 ///
-/// The index holds only its [`Config`]. Points and lists live in a provider, reached
+/// The index holds its build configuration. Points and lists live in a provider, reached
 /// through the strategy passed to each call; see the [module documentation](crate::ivf).
 ///
 /// Providers shared by several indexes must still keep build operations apart;
@@ -83,6 +95,7 @@ pub struct InsertStats {
 #[derive(Debug)]
 pub struct IVFIndex {
     config: Config,
+    reassignment_mode: ReassignmentMode,
 }
 
 impl IVFIndex {
@@ -105,7 +118,16 @@ impl IVFIndex {
             });
         }
 
-        Ok(Self { config })
+        Ok(Self {
+            config,
+            reassignment_mode: ReassignmentMode::Baseline,
+        })
+    }
+
+    /// Select the scorer used after a split. The default is direct squared L2.
+    pub fn with_reassignment_mode(mut self, mode: ReassignmentMode) -> Self {
+        self.reassignment_mode = mode;
+        self
     }
 
     /// Insert a batch of points as one build operation, splitting every list that routing
@@ -129,6 +151,7 @@ impl IVFIndex {
         B: Send + Sync,
     {
         let config = self.config;
+        let reassignment_mode = self.reassignment_mode;
 
         async move {
             let mut accessor = strategy.build_accessor(context).into_ann_result()?;
@@ -198,11 +221,14 @@ impl IVFIndex {
                     let lists = links.lists().iter().copied();
                     let (region, mut update) = accessor.fill(lists).await?;
 
-                    Linked::new(policies::NearestCentroid).reassign(
-                        &region,
-                        &mut update,
-                        &links,
-                    )?;
+                    match reassignment_mode {
+                        ReassignmentMode::Baseline => Linked::new(policies::NearestCentroid)
+                            .reassign(&region, &mut update, &links)?,
+                        #[cfg(feature = "ivf-gemm")]
+                        ReassignmentMode::Gemm => {
+                            policies::reassign::Gemm.reassign(&region, &mut update, &links)?
+                        }
+                    }
 
                     update.finish().await?;
                 }

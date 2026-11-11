@@ -90,7 +90,8 @@ pub(super) async fn build(
         reassign_count: std::num::NonZeroUsize::new(config.reassign_count)
             .map_or(ReassignCount::None, ReassignCount::Count),
         split_iterations: config.iterations,
-    })?;
+    })?
+    .with_reassignment_mode(config.reassignment_mode.into());
     let initialization_time = start.elapsed();
     let mut insert_time = Duration::ZERO;
     let mut split_calls = 0;

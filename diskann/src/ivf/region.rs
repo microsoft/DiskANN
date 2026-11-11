@@ -84,6 +84,10 @@ pub trait Update<I, L>: Send {
 /// Conversion of borrowed vectors into a row-major matrix, one vector per row.
 pub trait AsMatRef<'a, T> {
     /// Return the vectors as a matrix.
+    #[expect(
+        clippy::wrong_self_convention,
+        reason = "Consumes a borrowed handle while preserving its underlying view lifetime"
+    )]
     fn as_view(self) -> rowmajor::Ref<'a, T>;
 }
 

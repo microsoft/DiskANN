@@ -5,6 +5,11 @@
 
 //! Reassignment of points between linked lists.
 
+#[cfg(feature = "ivf-gemm")]
+mod gemm;
+#[cfg(feature = "ivf-gemm")]
+pub(crate) use gemm::Gemm;
+
 use diskann_utils::Reborrow;
 
 use super::{Assign, Buckets, NearestCentroid, SplitError};

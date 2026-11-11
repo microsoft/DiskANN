@@ -81,6 +81,11 @@ impl std::fmt::Display for IvfBuildSearch {
         write_field!(f, "Iterations", self.build.iterations)?;
         write_field!(f, "Split K", self.build.split_k)?;
         write_field!(f, "Reassignment Neighbors", self.build.reassign_count)?;
+        write_field!(
+            f,
+            "Reassignment Mode",
+            format!("{:?}", self.build.reassignment_mode)
+        )?;
         if let Some(search) = &self.search {
             write_field!(f, "Search Distance", search.distance)?;
             if let Some(queries) = &search.queries {
@@ -149,6 +154,25 @@ impl std::fmt::Display for DataFormat {
     }
 }
 
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ReassignmentMode {
+    #[default]
+    Baseline,
+    #[cfg(feature = "ivf-gemm")]
+    Gemm,
+}
+
+impl From<ReassignmentMode> for diskann::ivf::ReassignmentMode {
+    fn from(mode: ReassignmentMode) -> Self {
+        match mode {
+            ReassignmentMode::Baseline => Self::Baseline,
+            #[cfg(feature = "ivf-gemm")]
+            ReassignmentMode::Gemm => Self::Gemm,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct Build {
@@ -159,6 +183,7 @@ pub(crate) struct Build {
     pub(crate) iterations: NonZeroUsize,
     /// Record every published layout outside the measured insertion interval.
     pub(crate) record_layout: bool,
+    pub(crate) reassignment_mode: ReassignmentMode,
 }
 
 impl Build {
@@ -180,6 +205,7 @@ impl Default for Build {
             reassign_count: 8,
             iterations: NonZeroUsize::new(10).unwrap(),
             record_layout: false,
+            reassignment_mode: ReassignmentMode::Baseline,
         }
     }
 }
