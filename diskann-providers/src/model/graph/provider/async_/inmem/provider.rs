@@ -26,7 +26,7 @@ use crate::{
             SetElementHelper, VectorStore,
         },
     },
-    storage::{AsyncIndexMetadata, AsyncQuantLoadContext, DiskGraphOnly, LoadWith, SaveWith},
+    storage::{AsyncIndexMetadata, AsyncQuantLoadContext, LoadWith, SaveWith},
 };
 
 /////////////////////
@@ -448,31 +448,6 @@ where
     {
         self.base_vectors.save_with(provider, &auxiliary.1).await?;
         self.aux_vectors.save_with(provider, &auxiliary.1).await?;
-        self.neighbor_provider
-            .save_with(provider, auxiliary)
-            .await?;
-        Ok(())
-    }
-}
-
-impl<U, V, D, Ctx> SaveWith<(u32, u32, DiskGraphOnly)> for DefaultProvider<U, V, D, Ctx>
-where
-    U: AsyncFriendly,
-    V: AsyncFriendly,
-    D: AsyncFriendly,
-    Ctx: ExecutionContext,
-{
-    type Ok = ();
-    type Error = ANNError;
-
-    async fn save_with<P>(
-        &self,
-        provider: &P,
-        auxiliary: &(u32, u32, DiskGraphOnly),
-    ) -> Result<Self::Ok, Self::Error>
-    where
-        P: StorageWriteProvider,
-    {
         self.neighbor_provider
             .save_with(provider, auxiliary)
             .await?;

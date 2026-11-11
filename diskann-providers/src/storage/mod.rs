@@ -14,7 +14,7 @@ mod virtual_storage_provider;
 pub use virtual_storage_provider::VirtualStorageProvider;
 
 mod api;
-pub use api::{AsyncIndexMetadata, AsyncQuantLoadContext, DiskGraphOnly, LoadWith, SaveWith};
+pub use api::{AsyncIndexMetadata, AsyncQuantLoadContext, LoadWith, SaveWith};
 
 pub(crate) mod bin;
 
