@@ -285,6 +285,26 @@ mod tests {
     }
 
     #[test]
+    fn rejects_unsupported_minmax_pair() {
+        let raw = MultiVectorOp {
+            element_type: ElementType::MinMax {
+                query_bits: BitWidth::try_from(8).unwrap(),
+                doc_bits: BitWidth::try_from(6).unwrap(),
+            },
+            ..MultiVectorOp::example()
+        };
+        let mut checker = Checker::new(Vec::new(), None);
+
+        let error = MultiVectorOp::from_raw(raw, &mut checker).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("unsupported MinMax bit-width pair"),
+            "{error:#}",
+        );
+    }
+
+    #[test]
     fn validates_supported_minmax_pairs() {
         let mut supported = 0;
         for a in 1..=8 {

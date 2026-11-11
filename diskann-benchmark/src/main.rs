@@ -1020,33 +1020,6 @@ mod tests {
         run_multi_vector_integration(&modified_input_path, &output_path)
     }
 
-    #[test]
-    #[cfg(feature = "multi-vector")]
-    fn multi_vector_rejects_unsupported_minmax_pair() {
-        let tempdir = tempfile::tempdir().unwrap();
-        let input_path = tempdir.path().join("input.json");
-        let output_path = tempdir.path().join("output.json");
-        let mut raw = value_from_file(&example_directory().join("multi-vector.json"));
-        raw["jobs"][0]["content"]["element_type"] =
-            serde_json::json!({"minmax": {"query_bits": 8, "doc_bits": 6}});
-        save_to_file(&input_path, &raw);
-        let cli = Cli::from_commands(
-            Commands::Run {
-                input_file: input_path,
-                output_file: output_path.clone(),
-                dry_run: true,
-                allow_debug: true,
-            },
-            true,
-        );
-        let error = cli.run(&mut Memory::new()).unwrap_err();
-        assert!(
-            format!("{error:#}").contains("unsupported MinMax bit-width pair"),
-            "{error:#}",
-        );
-        assert!(!output_path.exists());
-    }
-
     #[cfg(feature = "multi-vector")]
     fn run_multi_vector_integration(input_path: &std::path::Path, output_path: &std::path::Path) {
         let command = Commands::Run {

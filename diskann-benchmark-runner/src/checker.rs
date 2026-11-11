@@ -31,7 +31,7 @@ pub struct Checker {
 
 impl Checker {
     /// Create a new checker with the list of search directories..
-    pub(crate) fn new(search_directories: Vec<PathBuf>, output_directory: Option<PathBuf>) -> Self {
+    pub fn new(search_directories: Vec<PathBuf>, output_directory: Option<PathBuf>) -> Self {
         Self {
             search_directories,
             output_directory,

@@ -7,7 +7,7 @@
 //!
 //! Representations have separate registrations but share timing results and regression checks.
 
-use std::io::Write;
+use std::{io::Write, marker::PhantomData};
 
 use diskann_benchmark_runner::{
     benchmark::{MatchContext, PassFail, Regression, Score},
@@ -29,39 +29,76 @@ use crate::utils::DisplayWrapper;
 /// Keep registry and serialization adapters monomorphic while allowing each
 /// representation to be registered independently. Dispatch is outside the timed loop.
 #[derive(Debug)]
-pub(super) struct Kernel {
-    element_type: &'static str,
-    match_element: fn(ElementType, &mut Score),
-    run: fn(&MultiVectorOp, &mut dyn Output) -> anyhow::Result<Vec<RunResult>>,
+pub(super) struct Kernel(Box<dyn Representation>);
+
+trait Representation: std::fmt::Debug {
+    fn element_type(&self) -> &'static str;
+    fn match_element(&self, element_type: ElementType, score: &mut Score);
+    fn run(&self, input: &MultiVectorOp, output: &mut dyn Output)
+        -> anyhow::Result<Vec<RunResult>>;
+}
+
+#[derive(Debug)]
+struct Standard<T>(PhantomData<T>);
+
+impl<T> Representation for Standard<T>
+where
+    T: MaxSimElement + AsDataType + std::fmt::Debug,
+    StandardUniform: Distribution<T>,
+{
+    fn element_type(&self) -> &'static str {
+        T::DATA_TYPE.as_str()
+    }
+
+    fn match_element(&self, element_type: ElementType, score: &mut Score) {
+        match_standard::<T>(element_type, score);
+    }
+
+    fn run(
+        &self,
+        input: &MultiVectorOp,
+        output: &mut dyn Output,
+    ) -> anyhow::Result<Vec<RunResult>> {
+        run_job(input, output, &mut |run| {
+            run_standard::<T>(run, input.isa.into())
+        })
+    }
+}
+
+#[derive(Debug)]
+struct MinMax;
+
+impl Representation for MinMax {
+    fn element_type(&self) -> &'static str {
+        "minmax"
+    }
+
+    fn match_element(&self, element_type: ElementType, score: &mut Score) {
+        if !matches!(element_type, ElementType::MinMax { .. }) {
+            score.fail(1000, &"expected a MinMax element type");
+        }
+    }
+
+    fn run(
+        &self,
+        input: &MultiVectorOp,
+        output: &mut dyn Output,
+    ) -> anyhow::Result<Vec<RunResult>> {
+        run_minmax(input, output)
+    }
 }
 
 impl Kernel {
     pub(super) fn standard<T>() -> Self
     where
-        T: MaxSimElement + AsDataType,
+        T: MaxSimElement + AsDataType + std::fmt::Debug,
         StandardUniform: Distribution<T>,
     {
-        Self {
-            element_type: T::DATA_TYPE.as_str(),
-            match_element: match_standard::<T>,
-            run: |input, output| {
-                run_job(input, output, &mut |run| {
-                    run_standard::<T>(run, input.isa.into())
-                })
-            },
-        }
+        Self(Box::new(Standard::<T>(PhantomData)))
     }
 
     pub(super) fn minmax() -> Self {
-        Self {
-            element_type: "minmax",
-            match_element: |element_type, score| {
-                if !matches!(element_type, ElementType::MinMax { .. }) {
-                    score.fail(1000, &"expected a MinMax element type");
-                }
-            },
-            run: run_minmax,
-        }
+        Self(Box::new(MinMax))
     }
 
     pub(super) fn run(
@@ -69,7 +106,7 @@ impl Kernel {
         input: &MultiVectorOp,
         output: &mut dyn Output,
     ) -> anyhow::Result<Vec<RunResult>> {
-        (self.run)(input, output)
+        self.0.run(input, output)
     }
 }
 
@@ -79,7 +116,7 @@ impl Benchmark for Kernel {
 
     fn try_match(&self, from: &MultiVectorOp, context: &MatchContext) -> Score {
         let mut score = match_isa(from.isa.into(), context);
-        (self.match_element)(from.element_type, &mut score);
+        self.0.match_element(from.element_type, &mut score);
         score
     }
 
@@ -93,7 +130,7 @@ impl Benchmark for Kernel {
     }
 
     fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "- Element Type: {}", self.element_type)
+        writeln!(f, "- Element Type: {}", self.0.element_type())
     }
 }
 
