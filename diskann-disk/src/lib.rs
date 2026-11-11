@@ -14,11 +14,9 @@ pub(crate) mod test_utils;
 pub mod error;
 
 pub mod build;
-#[cfg(feature = "pipnn")]
-pub use build::PiPNNParameters;
 pub use build::{
-    BuildAlgorithm, DiskIndexBuildParameters, QuantizationType, SphericalBits,
-    disk_index_build_parameter, filter_parameter,
+    DiskIndexBuildParameters, QuantizationType, SphericalBits, disk_index_build_parameter,
+    filter_parameter,
 };
 
 pub mod data_model;

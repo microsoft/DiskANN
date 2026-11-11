@@ -9,7 +9,6 @@ use super::{StorageReadProvider, StorageWriteProvider};
 use byteorder::{LittleEndian, ReadBytesExt};
 use diskann::{
     ANNError, ANNResult,
-    graph::AdjacencyList,
     utils::{IntoUsize, VectorRepr},
 };
 use diskann_utils::io::Metadata;
@@ -378,105 +377,4 @@ where
     out.write_all(&max_degree.to_le_bytes())?;
     out.flush()?;
     Ok(index_size.into_usize())
-}
-
-/// Save `graph` in the canonical graph layout at `path`.
-///
-/// Row `i` of `graph` lists the out-neighbors of point `i`. The header records
-/// `start_point`, `max_degree` and no additional points. The caller must pass a
-/// `start_point` and neighbor IDs below `graph.len()`, and rows of at most
-/// `max_degree` neighbors; otherwise the file does not describe a valid graph.
-pub fn save_adjacency_graph<P>(
-    graph: &[AdjacencyList<u32>],
-    max_degree: u32,
-    provider: &P,
-    start_point: u32,
-    path: &str,
-) -> ANNResult<usize>
-where
-    P: StorageWriteProvider,
-{
-    save_graph(
-        &AdjacencyGraph { graph, max_degree },
-        provider,
-        start_point,
-        path,
-    )
-}
-
-/// Hook [`save_adjacency_graph`] into [`save_graph`].
-struct AdjacencyGraph<'a> {
-    graph: &'a [AdjacencyList<u32>],
-    max_degree: u32,
-}
-
-impl GetAdjacencyList for AdjacencyGraph<'_> {
-    type Element = u32;
-    type Item<'a>
-        = &'a [u32]
-    where
-        Self: 'a;
-
-    fn get_adjacency_list(&self, i: usize) -> ANNResult<Self::Item<'_>> {
-        Ok(&self.graph[i])
-    }
-
-    fn total(&self) -> usize {
-        self.graph.len()
-    }
-
-    fn additional_points(&self) -> u64 {
-        0
-    }
-
-    fn max_degree(&self) -> Option<u32> {
-        Some(self.max_degree)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::storage::VirtualStorageProvider;
-    use vfs::MemoryFS;
-
-    #[derive(Debug)]
-    struct LoadedGraph {
-        rows: Vec<Vec<u32>>,
-        max_degree: usize,
-        start_points: usize,
-    }
-
-    impl SetAdjacencyList for LoadedGraph {
-        type Item = u32;
-
-        fn set_adjacency_list(&mut self, index: usize, neighbors: &[u32]) -> ANNResult<()> {
-            self.rows[index].extend_from_slice(neighbors);
-            Ok(())
-        }
-    }
-
-    #[test]
-    fn adjacency_graph_roundtrips_through_the_canonical_loader() {
-        let storage = VirtualStorageProvider::<MemoryFS>::new_memory();
-        let rows: [&[u32]; 3] = [&[1, 2], &[0], &[]];
-        let graph: Vec<_> = rows
-            .iter()
-            .map(|row| AdjacencyList::from_iter_untrusted(row.iter().copied()))
-            .collect();
-
-        save_adjacency_graph(&graph, 3, &storage, 1, "/graph").unwrap();
-        let actual = load_graph(&storage, "/graph", |points, max_degree, start_points| {
-            Ok(LoadedGraph {
-                rows: vec![Vec::new(); points],
-                max_degree,
-                start_points,
-            })
-        })
-        .unwrap();
-
-        assert_eq!(actual.rows, rows);
-        assert_eq!(actual.max_degree, 3);
-        assert_eq!(actual.start_points, 0);
-    }
 }

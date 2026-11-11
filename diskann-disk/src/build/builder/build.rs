@@ -10,7 +10,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use crate::data_model::{BuildVector, GraphDataType};
+use crate::data_model::GraphDataType;
 use diskann::{
     ANNResult,
     utils::{ONE, VectorRepr, async_tools},
@@ -31,9 +31,6 @@ use tokio::task::JoinSet;
 #[cfg(debug_assertions)]
 use tracing::debug;
 use tracing::info;
-
-#[cfg(feature = "pipnn")]
-mod pipnn;
 
 use crate::{
     DiskIndexBuildParameters,
@@ -64,16 +61,13 @@ where
     index_configuration: IndexConfiguration,
     storage_provider: &'a StorageProvider,
     build_quantizer: BuildQuantizer,
-    /// The PiPNN configuration, if PiPNN builds the graph.
-    #[cfg(feature = "pipnn")]
-    pipnn: Option<diskann::graph::pipnn::Config>,
     _phantom: PhantomData<Data>,
 }
 
 impl<'a, Data, StorageProvider> DiskIndexBuilder<'a, Data, StorageProvider>
 where
     Data: GraphDataType<VectorIdType = u32>,
-    Data::VectorDataType: BuildVector,
+    Data::VectorDataType: VectorRepr,
     StorageProvider: StorageReadProvider + StorageWriteProvider + 'static,
     <StorageProvider as StorageReadProvider>::Reader: std::marker::Send,
 {
@@ -83,17 +77,6 @@ where
         index_configuration: IndexConfiguration,
         index_writer: DiskIndexWriter,
     ) -> ANNResult<Self> {
-        // Parse the PiPNN parameters before the quantizer is trained.
-        #[cfg(feature = "pipnn")]
-        let pipnn = match disk_build_param.build_algorithm() {
-            crate::BuildAlgorithm::Vamana => None,
-            crate::BuildAlgorithm::PiPNN(parameters) => Some(pipnn::config(
-                parameters,
-                &index_configuration,
-                disk_build_param.build_quantization(),
-            )?),
-        };
-
         let pq_storage = PQStorage::new(
             &(index_writer.get_index_path_prefix() + "_pq_pivots.bin"),
             &(index_writer.get_index_path_prefix() + "_pq_compressed.bin"),
@@ -119,21 +102,12 @@ where
             storage_provider,
             pq_storage,
             build_quantizer,
-            #[cfg(feature = "pipnn")]
-            pipnn,
             _phantom: PhantomData,
         })
     }
 
     pub fn build(&mut self) -> ANNResult<()> {
         let runtime = create_runtime(self.index_configuration.num_threads)?;
-        runtime.block_on(self.build_internal())
-    }
-
-    async fn build_internal(&mut self) -> ANNResult<()> {
-        let mut logger = PerfLogger::new_disk_index_build_logger();
-
-        let pool = create_thread_pool(self.index_configuration.num_threads)?;
 
         info!(
             "Starting index build: R={} L={} Indexing RAM budget={} T={}",
@@ -143,10 +117,24 @@ where
             self.index_configuration.num_threads
         );
 
+        self.build_with(|builder, pool| runtime.block_on(builder.build_inmem_index(pool)))
+    }
+
+    /// Run the build steps around `build_graph`: PQ compression before it and
+    /// the disk layout after it. `build_graph` writes the in-memory index file
+    /// that the disk layout step reads.
+    fn build_with(
+        &mut self,
+        build_graph: impl FnOnce(&mut Self, RayonThreadPoolRef<'_>) -> ANNResult<()>,
+    ) -> ANNResult<()> {
+        let mut logger = PerfLogger::new_disk_index_build_logger();
+
+        let pool = create_thread_pool(self.index_configuration.num_threads)?;
+
         self.generate_compressed_data(pool.as_ref())?;
         logger.log_checkpoint(DiskIndexBuildCheckpoint::PqConstruction);
 
-        self.build_inmem_index(pool.as_ref()).await?;
+        build_graph(self, pool.as_ref())?;
         logger.log_checkpoint(DiskIndexBuildCheckpoint::InmemIndexBuild);
 
         // Use physical file to pass the memory index to the disk writer
@@ -196,18 +184,6 @@ where
     }
 
     async fn build_inmem_index(&mut self, pool: RayonThreadPoolRef<'_>) -> ANNResult<()> {
-        #[cfg(feature = "pipnn")]
-        if let Some(config) = &self.pipnn {
-            return pipnn::build_inmem_index::<Data::VectorDataType, _>(
-                &self.index_configuration,
-                config,
-                &self.index_writer.get_dataset_file(),
-                &self.index_writer.get_mem_index_file(),
-                self.storage_provider,
-                pool,
-            );
-        }
-
         match determine_build_strategy::<Data>(
             &self.index_configuration,
             self.disk_build_param.build_memory_limit().in_bytes() as f64,
@@ -244,6 +220,54 @@ where
             .index_build_cleanup(self.storage_provider)?;
 
         Ok(())
+    }
+}
+
+#[cfg(feature = "pipnn")]
+impl<Data, StorageProvider> DiskIndexBuilder<'_, Data, StorageProvider>
+where
+    Data: GraphDataType<VectorIdType = u32>,
+    Data::VectorDataType: diskann::graph::pipnn::Element,
+    StorageProvider: StorageReadProvider + StorageWriteProvider + 'static,
+    <StorageProvider as StorageReadProvider>::Reader: std::marker::Send,
+{
+    /// Build the disk index with a PiPNN graph instead of a Vamana graph.
+    ///
+    /// PiPNN replaces only the graph step. PQ compression and the disk layout
+    /// do not change. The graph takes its degree, alpha and seed from `config`,
+    /// and [`Builder::from_graph`](diskann::graph::pipnn::Builder::from_graph)
+    /// copies the degree and alpha from the index configuration. PiPNN reads
+    /// the full-precision rows and does not use the build memory limit.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error before any build step if the build quantization is not
+    /// [`QuantizationType::FP`](crate::QuantizationType::FP).
+    pub fn build_with_pipnn(&mut self, config: &diskann::graph::pipnn::Config) -> ANNResult<()> {
+        let quantization = self.disk_build_param.build_quantization();
+        if !matches!(quantization, crate::QuantizationType::FP) {
+            return Err(diskann_error!(
+                ErrorKind::IndexConfigError("build_quantization"),
+                "PiPNN reads full-precision rows and needs FP build quantization, not {quantization}"
+            ));
+        }
+
+        info!(
+            "Starting PiPNN index build: R={} T={}",
+            config.degree(),
+            self.index_configuration.num_threads
+        );
+
+        self.build_with(|builder, pool| {
+            super::pipnn::build_inmem_index::<Data::VectorDataType, _>(
+                &builder.index_configuration,
+                config,
+                &builder.index_writer.get_dataset_file(),
+                &builder.index_writer.get_mem_index_file(),
+                builder.storage_provider,
+                pool,
+            )
+        })
     }
 }
 
@@ -339,7 +363,7 @@ fn u32_try_from(value: usize) -> ANNResult<u32> {
         .map_err(|_| diskann_error!(ErrorKind::IndexError, "id {value} exceeds u32::MAX"))
 }
 
-fn start_point_from_medoid<T, StorageReader>(
+pub(super) fn start_point_from_medoid<T, StorageReader>(
     path: &str,
     random_seed: Option<u64>,
     reader: &StorageReader,
