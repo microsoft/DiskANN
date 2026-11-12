@@ -433,6 +433,13 @@ macro_rules! double_mask {
                 let hi = <$repr>::keep_first(arch, i.saturating_sub({ $N / 2 }));
                 Self(lo, hi)
             }
+
+            #[inline(always)]
+            fn first(&self) -> Option<usize> {
+                self.0
+                    .first()
+                    .or_else(|| self.1.first().map(|index| index + { $N / 2 }))
+            }
         }
 
         impl From<$crate::doubled::Doubled<$repr>>
