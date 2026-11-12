@@ -670,6 +670,50 @@ pub(crate) mod disk_index_builder_tests {
             T: GraphDataType<VectorIdType = u32>,
             StorageProvider::Reader: std::marker::Send + Read,
         {
+            let mut disk_index = self.disk_index_builder::<T>()?;
+
+            let timer = Instant::now();
+            disk_index.build()?;
+            println!("Indexing time: {} seconds", timer.elapsed().as_secs_f64());
+
+            Ok(())
+        }
+
+        /// Build with PiPNN. `configure` sets the PiPNN parameters on top of
+        /// the graph configuration of the test.
+        #[cfg(feature = "pipnn")]
+        pub fn build_with_pipnn<T>(
+            &self,
+            configure: impl FnOnce(diskann::graph::pipnn::Builder) -> diskann::graph::pipnn::Builder,
+        ) -> ANNResult<()>
+        where
+            T: GraphDataType<VectorIdType = u32>,
+            T::VectorDataType: diskann::graph::pipnn::Element,
+            StorageProvider::Reader: std::marker::Send + Read,
+        {
+            let graph = self.graph_config()?;
+            let config = configure(diskann::graph::pipnn::Builder::from_graph(&graph)).build()?;
+            self.disk_index_builder::<T>()?.build_with_pipnn(&config)
+        }
+
+        fn graph_config(&self) -> ANNResult<config::Config> {
+            Ok(config::Builder::new_with(
+                self.params.max_degree.into_usize(),
+                config::MaxDegree::default_slack(),
+                self.params.l_build.into_usize(),
+                self.params.metric.into(),
+                |b| {
+                    b.saturate_after_prune(true);
+                },
+            )
+            .build()?)
+        }
+
+        fn disk_index_builder<T>(&self) -> ANNResult<DiskIndexBuilder<'_, T, StorageProvider>>
+        where
+            T: GraphDataType<VectorIdType = u32>,
+            StorageProvider::Reader: std::marker::Send + Read,
+        {
             // Create disk index build parameters
             let mut disk_index_build_parameters = DiskIndexBuildParameters::new(
                 MemoryBudget::try_from_gb(self.params.index_build_ram_gb)?,
@@ -681,16 +725,7 @@ pub(crate) mod disk_index_builder_tests {
                     .with_data_compression_chunk_vector_count(chunk_vector_count);
             }
 
-            let config = config::Builder::new_with(
-                self.params.max_degree.into_usize(),
-                config::MaxDegree::default_slack(),
-                self.params.l_build.into_usize(),
-                self.params.metric.into(),
-                |b| {
-                    b.saturate_after_prune(true);
-                },
-            )
-            .build()?;
+            let config = self.graph_config()?;
 
             let metadata =
                 load_metadata_from_file(self.storage_provider.as_ref(), &self.params.data_path)
@@ -721,18 +756,12 @@ pub(crate) mod disk_index_builder_tests {
                 self.params.block_size,
             )?;
 
-            let mut disk_index = DiskIndexBuilder::<T, _>::new(
+            DiskIndexBuilder::<T, _>::new(
                 self.storage_provider.as_ref(),
                 disk_index_build_parameters,
                 config,
                 disk_index_writer,
-            )?;
-
-            let timer = Instant::now();
-            disk_index.build()?;
-            println!("Indexing time: {} seconds", timer.elapsed().as_secs_f64());
-
-            Ok(())
+            )
         }
 
         pub fn compare_pq_compressed_files(&self) {

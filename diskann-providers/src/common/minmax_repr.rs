@@ -161,6 +161,34 @@ where
     T::evaluate(xref, yref).unwrap()
 }
 
+/// MinMax rows reach PiPNN through the default gather: each row is decoded
+/// from its own metadata, and distances are computed on the codes, as a
+/// search over a MinMax index does.
+#[cfg(feature = "pipnn")]
+impl<const NBITS: usize> diskann::graph::pipnn::Element for MinMaxElement<NBITS>
+where
+    InnerProduct: for<'a, 'b> PureDistanceFunction<
+            BitSlice<'a, NBITS, Unsigned>,
+            BitSlice<'b, NBITS, Unsigned>,
+            diskann_quantization::distances::MathematicalResult<u32>,
+        >,
+    Unsigned: Representation<NBITS>,
+{
+    type Distance = FnPtr<Self>;
+
+    fn dimensions(row: &[Self]) -> diskann::ANNResult<usize> {
+        Ok(Self::extract_dimension(row)?)
+    }
+
+    fn convert(row: &[Self], output: &mut [f32]) -> diskann::ANNResult<()> {
+        Ok(<Self as VectorRepr>::as_f32_into(row, output)?)
+    }
+
+    fn distance(metric: Metric, _ncols: usize) -> Self::Distance {
+        FnPtr::new(Self::distance_comparer(metric))
+    }
+}
+
 //////////////////
 /// VectorRepr ///
 /////////////////
