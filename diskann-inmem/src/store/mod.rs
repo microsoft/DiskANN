@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-//! Concurrency configuration.
+//! Concurrency and backing-memory configuration.
 
 mod internal_docs {
     //! A concurrent in-memory data store for driving [`slots::Slots`].
@@ -63,13 +63,14 @@ mod internal_docs {
 use std::{
     mem::ManuallyDrop,
     num::{NonZeroU32, NonZeroUsize},
-    sync::atomic::Ordering,
+    sync::{Arc, atomic::Ordering},
 };
 
 use diskann::{ANNError, utils::IntoUsize};
 use thiserror::Error;
 
 use crate::{
+    allocator::Allocator,
     buffer::BufferError,
     epoch::{self, Registry},
     freelist::{self, Freelist},
@@ -126,6 +127,8 @@ pub struct Config {
 
     /// The capacity of the fast free list.
     freelist_recycle_capacity: NonZeroU32,
+
+    allocator: Option<Arc<dyn Allocator>>,
 }
 
 impl Config {
@@ -135,6 +138,7 @@ impl Config {
         Self {
             epoch_guard_slots: Registry::default_guard_slots(),
             freelist_recycle_capacity: DEFAULT_FREELIST_RECYCLE_CAPACITY,
+            allocator: None,
         }
     }
 
@@ -159,7 +163,7 @@ impl Config {
         self
     }
 
-    /// An exhaustive constructor initializing every element.
+    /// Initialize every concurrency parameter, using the system allocator.
     ///
     /// This is exposed under "integration-test" since it will change to reflect the state
     /// of the underlying data structure, potentially causing more churn for users if it were
@@ -173,7 +177,17 @@ impl Config {
         Self {
             epoch_guard_slots,
             freelist_recycle_capacity,
+            allocator: None,
         }
+    }
+
+    /// Select the allocator for vector and adjacency-list backing buffers.
+    ///
+    /// `None` selects [`crate::allocator::DefaultAllocator`]. Tags, locks, ID mappings,
+    /// and other auxiliary allocations continue to use their existing allocators.
+    pub fn allocator(&mut self, allocator: Option<Arc<dyn Allocator>>) -> &mut Self {
+        self.allocator = allocator;
+        self
     }
 }
 
@@ -261,6 +275,7 @@ where
         let Config {
             epoch_guard_slots,
             freelist_recycle_capacity,
+            allocator,
         } = config;
 
         let max_degree: u32 = max_degree
@@ -272,8 +287,10 @@ where
         let tags = tag::Authoritative::new(id_limit);
 
         // SAFETY: `registry.handle()` and `tags` belong to store containing the returned `slots`.
-        let slots = unsafe { slots::SlotsConfig::build(slots, registry.handle(), &tags) }
-            .map_err(StoreError::slots)?;
+        let slots = unsafe {
+            slots::SlotsConfig::build(slots, registry.handle(), &tags, allocator.clone())
+        }
+        .map_err(StoreError::slots)?;
 
         let slots_id_limit = slots.id_limit();
         if slots_id_limit != id_limit {
@@ -285,7 +302,10 @@ where
             tags,
             freelist: Freelist::new(id_limit, freelist_recycle_capacity),
             registry,
-            neighbors: Neighbors::new(id_limit, max_degree)?,
+            neighbors: match allocator {
+                Some(allocator) => Neighbors::new_with_allocator(id_limit, max_degree, allocator),
+                None => Neighbors::new(id_limit, max_degree),
+            }?,
         };
 
         Ok(me)
@@ -750,6 +770,7 @@ mod tests {
             self,
             handle: epoch::RegistryHandle,
             tags: &tag::Authoritative,
+            _allocator: Option<Arc<dyn Allocator>>,
         ) -> Result<Checked, diskann::error::Infallible> {
             let faulty = tags.id_limit().value().checked_sub(1).unwrap_or(1);
             Ok(Checked::new(handle, IdLimit::new(faulty)))
@@ -782,6 +803,19 @@ mod tests {
     //------------------------//
     // Constructor validation //
     //------------------------//
+
+    #[test]
+    fn config_allocator_defaults_and_resets() {
+        let mut config = Config::new();
+        assert!(config.allocator.is_none());
+
+        let allocator: Arc<dyn Allocator> = Arc::new(crate::allocator::DefaultAllocator);
+        config.allocator(Some(allocator.clone()));
+        assert!(Arc::ptr_eq(config.allocator.as_ref().unwrap(), &allocator));
+
+        config.allocator(None);
+        assert!(config.allocator.is_none());
+    }
 
     #[test]
     fn new_rejects_too_many_neighbors() {

@@ -6,10 +6,13 @@
 //! A [`slots::Slots`] that does not maintain any additional metadata, instead using a
 //! [`tag::ReadOnly`] of its authoritative tags for concurrency.
 
+use std::sync::Arc;
+
 use diskann::utils::IntoUsize;
 use thiserror::Error;
 
 use crate::{
+    allocator::Allocator,
     buffer::{Buffer, BufferError, RawSlice},
     epoch,
     num::{Align, Bytes, IdLimit},
@@ -39,11 +42,12 @@ impl slots::SlotsConfig for Config {
         self,
         handle: epoch::RegistryHandle,
         tags: &tag::Authoritative,
+        allocator: Option<Arc<dyn Allocator>>,
     ) -> Result<Simple, SimpleError> {
         let Self { bytes } = self;
 
         // SAFETY: Inherited from caller.
-        unsafe { Simple::new(bytes, handle, tags.read_only()) }
+        unsafe { Simple::new(bytes, handle, tags.read_only(), allocator) }
     }
 }
 
@@ -84,15 +88,22 @@ impl Simple {
         bytes: Bytes,
         handle: epoch::RegistryHandle,
         tags: tag::ReadOnly,
+        allocator: Option<Arc<dyn Allocator>>,
     ) -> Result<Self, SimpleError> {
         let Some(padded) = bytes.checked_next_multiple_of(Bytes::CACHELINE) else {
             return Err(SimpleError::bytes_overflowed());
         };
 
-        let buffer = match Buffer::new(tags.id_limit().as_usize(), padded, Align::_128) {
-            Ok(buffer) => buffer,
-            Err(err) => return Err(SimpleError::buffer_error(err)),
-        };
+        let buffer = match allocator {
+            Some(allocator) => Buffer::new_with_allocator(
+                tags.id_limit().as_usize(),
+                padded,
+                Align::_128,
+                allocator,
+            ),
+            None => Buffer::new(tags.id_limit().as_usize(), padded, Align::_128),
+        }
+        .map_err(SimpleError::buffer_error)?;
 
         Ok(Self {
             buffer,

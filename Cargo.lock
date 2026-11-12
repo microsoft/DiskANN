@@ -655,6 +655,7 @@ dependencies = [
  "diskann-wide",
  "half",
  "hashbrown 0.16.1",
+ "libc",
  "parking_lot",
  "rand",
  "serde",

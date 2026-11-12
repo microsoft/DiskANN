@@ -36,12 +36,13 @@
 //! The unsafe [`slots::Slots`] methods additionally rely on [`crate::store::Store`] to
 //! satisfy their documented state and exclusivity preconditions.
 
-use std::sync::atomic::Ordering;
+use std::sync::{Arc, atomic::Ordering};
 
 use diskann::utils::IntoUsize;
 use thiserror::Error;
 
 use crate::{
+    allocator::Allocator,
     buffer::{Buffer, BufferError, RawSlice},
     epoch,
     num::{Align, Bytes, IdLimit},
@@ -71,11 +72,12 @@ impl slots::SlotsConfig for Config {
         self,
         handle: epoch::RegistryHandle,
         tags: &tag::Authoritative,
+        allocator: Option<Arc<dyn Allocator>>,
     ) -> Result<Intrusive, IntrusiveError> {
         let Self { bytes } = self;
 
         // SAFETY: Inherited from caller.
-        unsafe { Intrusive::new(bytes, handle, tags.id_limit()) }
+        unsafe { Intrusive::new(bytes, handle, tags.id_limit(), allocator) }
     }
 }
 
@@ -111,6 +113,7 @@ impl Intrusive {
         bytes: Bytes,
         handle: epoch::RegistryHandle,
         id_limit: IdLimit,
+        allocator: Option<Arc<dyn Allocator>>,
     ) -> Result<Self, IntrusiveError> {
         let Some(unpadded) = bytes.checked_add(AtomicTag::SIZE) else {
             return Err(IntrusiveError::bytes_overflowed());
@@ -119,10 +122,16 @@ impl Intrusive {
             return Err(IntrusiveError::bytes_overflowed());
         };
 
-        let buffer = match Buffer::new(id_limit.as_usize(), padded_bytes, Align::_128) {
-            Ok(buffer) => buffer,
-            Err(err) => return Err(IntrusiveError::buffer_error(err)),
-        };
+        let buffer = match allocator {
+            Some(allocator) => Buffer::new_with_allocator(
+                id_limit.as_usize(),
+                padded_bytes,
+                Align::_128,
+                allocator,
+            ),
+            None => Buffer::new(id_limit.as_usize(), padded_bytes, Align::_128),
+        }
+        .map_err(IntrusiveError::buffer_error)?;
 
         Ok(Self {
             buffer,
