@@ -113,8 +113,8 @@ impl IVFIndex {
         &self.config
     }
 
-    /// Insert a batch as one build operation. 
-    /// 
+    /// Insert a batch as one build operation.
+    ///
     /// After routing and inserting points, split each touched list with more than
     /// [`Config::split_threshold`] members once, then reassign if
     /// [`Config::reassign_count`] is [`ReassignCount::Count`].

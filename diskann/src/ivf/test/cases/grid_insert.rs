@@ -3,10 +3,12 @@
  * Licensed under the MIT license.
  */
 
-//! Regression baselines for batched grid insertion followed by limited/full-probe search.
+//! Representative grid-insertion baselines followed by limited/full-probe search.
 //!
-//! Every run records the complete layout, member order, and provider call counts.
-//! A fresh Rayon build must match the Sequential baseline exactly.
+//! Every run records list sizes and provider call counts. Full layouts are opt-in via
+//! [`super::DUMP_IVF_STATE`]. A fresh Rayon build must match the Sequential baseline exactly.
+
+use std::collections::BTreeSet;
 
 use diskann_quantization::Parallelism;
 use diskann_utils::views::rowmajor::Matrix;
@@ -24,11 +26,13 @@ use crate::{
         },
     },
     test::{
-        TestRoot,
+        TestFormat, TestRoot,
         cmp::{assert_eq_verbose, verbose_eq},
-        get_or_save_test_results,
+        get_or_save_test_results_with_format,
     },
 };
+
+use super::DUMP_IVF_STATE;
 
 const SIZE: usize = 100;
 
@@ -100,7 +104,8 @@ struct GridInsertBaseline {
     insert_metrics: Metrics,
     list_sizes: Vec<(u32, usize)>,
     searches: Vec<GridSearch>,
-    lists: Vec<ListState>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    lists: Option<Vec<ListState>>,
 }
 
 verbose_eq!(GridInsertBaseline {
@@ -155,10 +160,11 @@ async fn run_searches(
 ) -> Vec<GridSearch> {
     let k = 10;
     let all = snapshot.lists().len();
+    let probes: BTreeSet<_> = [1, 2, all].map(|n| n.min(all)).into_iter().collect();
     let mut searches = Vec::new();
     for coordinate in [-1.0, SIZE as f32] {
         let query = vec![coordinate; snapshot.dim()];
-        for nprobe in [1, 2, all] {
+        for &nprobe in &probes {
             let candidates = if nprobe >= all {
                 brute_force(snapshot, &query)
             } else {
@@ -212,15 +218,17 @@ async fn run_grid(
         .iter()
         .map(|(&id, list)| (id, list.members().len()))
         .collect();
-    let lists = snapshot
-        .lists()
-        .iter()
-        .map(|(&id, list)| ListState {
-            id,
-            centroid: list.centroid().to_vec(),
-            members: list.members().to_vec(),
-        })
-        .collect();
+    let lists = DUMP_IVF_STATE.then(|| {
+        snapshot
+            .lists()
+            .iter()
+            .map(|(&id, list)| ListState {
+                id,
+                centroid: list.centroid().to_vec(),
+                members: list.members().to_vec(),
+            })
+            .collect()
+    });
 
     GridInsertBaseline {
         description: format!(
@@ -248,27 +256,29 @@ async fn run_grid(
     }
 }
 
-async fn grid_insert_impl(batch_size: usize) {
-    for split_k in [2, 4] {
-        for neighbors in [0, 2] {
-            let config = config(8, split_k, neighbors);
-            let baseline = run_grid(batch_size, config, Parallelism::Sequential).await;
-            let reassign = if neighbors == 0 {
-                "none".to_string()
-            } else {
-                neighbors.to_string()
-            };
-            let name = format!(
-                "insert_{}_{}_batch_{batch_size}/k_{split_k}_reassign_{reassign}",
-                baseline.parameters.grid_dims, baseline.parameters.grid_size,
-            );
-            let mut root = TestRoot::new("ivf/test/cases/grid_insert");
-            let expected = get_or_save_test_results(&root.path().push(&name), &baseline);
-            assert_eq_verbose!(expected, baseline, "{name}");
+async fn grid_insert_impl(batch_size: usize, configurations: &[(usize, usize)]) {
+    for &(split_k, neighbors) in configurations {
+        let config = config(8, split_k, neighbors);
+        let baseline = run_grid(batch_size, config, Parallelism::Sequential).await;
+        let reassign = if neighbors == 0 {
+            "none".to_string()
+        } else {
+            neighbors.to_string()
+        };
+        let name = format!(
+            "insert_{}_{}_batch_{batch_size}/k_{split_k}_reassign_{reassign}",
+            baseline.parameters.grid_dims, baseline.parameters.grid_size,
+        );
+        let mut root = TestRoot::new("ivf/test/cases/grid_insert");
+        let expected = get_or_save_test_results_with_format(
+            &root.path().push(&name),
+            &baseline,
+            TestFormat::InlineNumericPairs,
+        );
+        assert_eq_verbose!(expected, baseline, "{name}");
 
-            let rayon = run_grid(batch_size, config, Parallelism::Rayon).await;
-            assert_eq_verbose!(baseline, rayon, "{name}");
-        }
+        let rayon = run_grid(batch_size, config, Parallelism::Rayon).await;
+        assert_eq_verbose!(baseline, rayon, "{name}");
     }
 }
 
@@ -278,15 +288,33 @@ async fn grid_insert_impl(batch_size: usize) {
 
 #[tokio::test]
 async fn single_1d_100() {
-    grid_insert_impl(1).await;
+    grid_insert_impl(1, &[(4, 0), (4, 2)]).await;
 }
 
 #[tokio::test]
 async fn batch_10_1d_100() {
-    grid_insert_impl(10).await;
+    grid_insert_impl(10, &[(2, 0), (2, 2), (4, 2)]).await;
 }
 
 #[tokio::test]
 async fn batch_all_1d_100() {
-    grid_insert_impl(SIZE).await;
+    grid_insert_impl(SIZE, &[(4, 0)]).await;
+}
+
+#[tokio::test]
+async fn grid_searches_use_distinct_available_probe_counts() {
+    let lists: &[(f32, &[f32])] = &[(0.0, &[0.0]), (10.0, &[10.0]), (20.0, &[20.0])];
+    let cases: [(usize, &[usize]); 3] = [(1, &[1]), (2, &[1, 2]), (3, &[1, 2, 3])];
+    let index = IVFIndex::new(config(8, 2, 0)).unwrap();
+    for (count, probes) in cases {
+        let provider = line(&lists[..count]).await;
+        let snapshot = provider.snapshot();
+        let searches = run_searches(&index, &provider, &snapshot).await;
+        let actual: Vec<_> = searches.into_iter().map(|s| (s.query, s.nprobe)).collect();
+        let expected: Vec<_> = [-1.0, SIZE as f32]
+            .into_iter()
+            .flat_map(|x| probes.iter().map(move |&n| (vec![x], n)))
+            .collect();
+        assert_eq!(actual, expected, "{count} lists");
+    }
 }

@@ -6,6 +6,8 @@
 pub(crate) mod tokio;
 
 mod cache;
+#[cfg(feature = "ivf")]
+pub(crate) use cache::{TestFormat, get_or_save_test_results_with_format};
 pub(crate) use cache::{TestPath, TestRoot, get_or_save_test_results};
 
 pub(crate) mod cmp;

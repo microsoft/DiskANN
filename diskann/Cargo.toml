@@ -22,6 +22,7 @@ half = { workspace = true, features = ["bytemuck", "num-traits"] }
 hashbrown = { version = "0.16.0", default-features = false, features = ["default-hasher"] }
 num-traits.workspace = true
 rand.workspace = true
+rayon = { workspace = true, optional = true }
 thiserror.workspace = true
 tokio = { workspace = true, features = ["rt", "rt-multi-thread"] }
 tracing = { workspace = true, optional = true }
@@ -32,7 +33,6 @@ diskann-wide = { workspace = true }
 dashmap = { workspace = true, optional = true }
 diskann-linalg = { workspace = true, optional = true }
 diskann-quantization = { workspace = true, optional = true }
-rayon = { workspace = true, optional = true }
 
 [dev-dependencies]
 diskann-utils = { workspace = true, features = ["testing"] }
@@ -42,7 +42,7 @@ rand.workspace = true
 relative-path = "2.0.1"
 rstest.workspace = true
 serde = { workspace = true, features = ["derive"] }
-serde_json = { workspace = true }
+serde_json = { workspace = true, features = ["raw_value"] }
 tokio = { workspace = true, features = ["macros", "sync"] }
 dashmap = { workspace = true }
 
