@@ -225,7 +225,7 @@ mod disk_index_build_tests {
         .unwrap();
     }
 
-    ///////////////////////////////
+    //////////////////////////////
     // MinMax Integration Tests //
     //////////////////////////////
 
@@ -263,7 +263,10 @@ mod disk_index_build_tests {
             max_degree,
             index_path_prefix: index_path_prefix.clone(),
             index_build_ram_gb: get_index_build_ram_gb(use_sharded_build),
-            build_quantization_type: QuantizationType::FP,
+            build_quantization_type: QuantizationType::SQ {
+                nbits: 1,
+                standard_deviation: None,
+            },
             ..params
         };
 
