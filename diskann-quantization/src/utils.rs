@@ -105,6 +105,16 @@ where
 #[error("data cannot be empty")]
 pub(crate) struct CannotBeEmpty;
 
+/// Compute the mean of each column without normalizing the input rows.
+///
+/// Returns an error if `data` has no rows.
+pub(crate) fn compute_means<T>(data: rowmajor::Ref<T>) -> Result<Vec<f64>, CannotBeEmpty>
+where
+    T: Into<f64> + Copy,
+{
+    compute_means_impl::<T, false>(data)
+}
+
 /// Compute the mean of each column in `data` as well as the average norm.
 pub(crate) fn compute_means_and_average_norm<T>(data: rowmajor::Ref<T>) -> (Vec<f64>, f64)
 where
@@ -140,8 +150,19 @@ where
     (means, mean_norm)
 }
 
-/// Compute the mean of each column in `data` as well as the average norm.
+/// Compute the mean of each column after normalizing each input row.
+///
+/// Returns an error if `data` has no rows.
 pub(crate) fn compute_normalized_means<T>(data: rowmajor::Ref<T>) -> Result<Vec<f64>, CannotBeEmpty>
+where
+    T: Into<f64> + Copy,
+{
+    compute_means_impl::<T, true>(data)
+}
+
+fn compute_means_impl<T, const NORMALIZE: bool>(
+    data: rowmajor::Ref<T>,
+) -> Result<Vec<f64>, CannotBeEmpty>
 where
     T: Into<f64> + Copy,
 {
@@ -152,8 +173,6 @@ where
         return Ok(Vec::new());
     }
 
-    // Compute the centroid of the dataset as well as the sums of the norms of every
-    // element in the dataset.
     let mut means: Vec<f64> = vec![0.0; data.ncols()];
 
     let square = |x: &T| -> f64 {
@@ -162,8 +181,12 @@ where
     };
 
     data.rows().for_each(|row| {
-        let norm = row.iter().map(square).sum::<f64>().sqrt();
-        let inv_norm = if norm == 0.0 { 1.0 } else { 1.0 / norm };
+        let inv_norm = if NORMALIZE {
+            let norm = row.iter().map(square).sum::<f64>().sqrt();
+            if norm == 0.0 { 1.0 } else { 1.0 / norm }
+        } else {
+            1.0
+        };
 
         // Accumulate this row into the means.
         std::iter::zip(means.iter_mut(), row.iter()).for_each(|(m, r)| {
@@ -224,6 +247,7 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(seed);
         let test_problem = create_test_problem(nrows, ncols, &mut rng);
         let (means, mean_norm) = compute_means_and_average_norm(test_problem.data.as_view());
+        assert_eq!(compute_means(test_problem.data.as_view()).unwrap(), means);
 
         for (i, (&expected, &got)) in
             std::iter::zip(test_problem.means.iter(), means.iter()).enumerate()
@@ -315,15 +339,20 @@ mod tests {
     }
 
     #[test]
-    fn test_normalized_means_corner_cases() {
-        // If the input data has no columns, the returned vector should be empty.
-        let data = rowmajor::Owned::from_element(10, 0, 1.0f32);
-        let means = compute_normalized_means(data.as_view()).unwrap();
-        assert!(means.is_empty());
+    fn test_means_corner_cases() {
+        for compute in [compute_means::<f32>, compute_normalized_means::<f32>] {
+            // If the input data has no columns, the returned vector should be empty.
+            let data = rowmajor::Owned::from_element(10, 0, 1.0f32);
+            assert!(compute(data.as_view()).unwrap().is_empty());
 
-        // If the data has no rows, an error should be returned.
-        let data = rowmajor::Owned::from_element(0, 10, 1.0f32);
-        let _: CannotBeEmpty = compute_normalized_means(data.as_view()).unwrap_err();
+            // If the data has no rows, an error should be returned.
+            let data = rowmajor::Owned::from_element(0, 10, 1.0f32);
+            let _: CannotBeEmpty = compute(data.as_view()).unwrap_err();
+
+            // Zero vectors should remain zero, including when normalization is enabled.
+            let data = rowmajor::Owned::from_element(2, 3, 0.0f32);
+            assert_eq!(compute(data.as_view()).unwrap(), vec![0.0; 3]);
+        }
     }
 
     #[test]

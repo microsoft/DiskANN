@@ -53,7 +53,6 @@ use crate::{
 convert_error!(Bridge<QueryComputerError>);
 convert_error!(Bridge<spherical::CompressionError>);
 convert_error!(Bridge<spherical::iface::QueryDistanceError>);
-convert_error!(Bridge<spherical::UnsupportedMetric>);
 
 /// An allocator error scoped to the spherical store.
 #[derive(Debug, Clone, Copy, Error)]
@@ -192,10 +191,10 @@ impl SphericalStore {
         let qf32 = T::as_f32(query)
             .map_err(|e| QueryComputerError::FullPrecisionConversionErr(Box::new(e)))?;
 
-        let computer = self.plan.fused_query_computer(
+        let computer = self.plan.fused_query_computer_with_hints(
             qf32.as_ref(),
             layout,
-            allow_rescale,
+            spherical::InputHints::new().with_maybe_out_of_distribution(allow_rescale),
             GlobalAllocator,
             ScopedAllocator::global(),
         )?;
@@ -753,7 +752,7 @@ mod tests {
     fn test_dim() {
         let mut rng = StdRng::seed_from_u64(0x721e3de995bc908c);
         let data = test_dataset();
-        let store = make_store::<1>(data.as_view(), Metric::L2.try_into().unwrap(), &mut rng);
+        let store = make_store::<1>(data.as_view(), Metric::L2.into(), &mut rng);
 
         assert_eq!(store.input_dim(), data.ncols());
     }

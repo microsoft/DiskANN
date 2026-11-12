@@ -6,37 +6,53 @@
 use diskann::{ANNError, ANNResult};
 use diskann_quantization::{
     alloc::{Allocator, GlobalAllocator, ScopedAllocator},
-    spherical::iface,
+    spherical::{InputHints, iface},
 };
 
 use crate::{num::Bytes, repr::quantized};
 
 /// A new-type wrapper around [`iface::Quantizer`] for implementing [`quantized::Quantizer`].
 #[derive(Debug)]
-pub struct Spherical<T>(T);
+pub struct Spherical<T> {
+    inner: T,
+    data_hints: InputHints,
+    query_hints: InputHints,
+}
 
 impl<T> Spherical<T> {
     /// Construct a new [`Spherical`] new-type wrapper around `quantizer`.
     pub fn new(quantizer: T) -> Self {
-        Self(quantizer)
+        Self {
+            inner: quantizer,
+            data_hints: InputHints::new(),
+            query_hints: InputHints::new().with_maybe_out_of_distribution(true),
+        }
+    }
+
+    /// Configure properties of stored data and queries independently. Callers must ensure
+    /// normalized hints remain valid after any conversion into the f32 input representation.
+    pub fn with_input_hints(mut self, data: InputHints, query: InputHints) -> Self {
+        self.data_hints = data;
+        self.query_hints = query;
+        self
     }
 
     /// Return the wrapped quantizer.
     pub fn into_inner(self) -> T {
-        self.0
+        self.inner
     }
 }
 
 impl<T> std::ops::Deref for Spherical<T> {
     type Target = T;
     fn deref(&self) -> &T {
-        &self.0
+        &self.inner
     }
 }
 
 impl<T> std::ops::DerefMut for Spherical<T> {
     fn deref_mut(&mut self) -> &mut T {
-        &mut self.0
+        &mut self.inner
     }
 }
 
@@ -53,9 +69,10 @@ where
     }
 
     fn quantize(&self, quantized: &mut [u8], data: &[f32]) -> ANNResult<()> {
-        iface::Quantizer::compress(
+        iface::Quantizer::compress_with_hints(
             &**self,
             data,
+            self.data_hints,
             iface::OpaqueMut::new(quantized),
             ScopedAllocator::global(),
         )
@@ -73,11 +90,11 @@ where
     where
         V: quantized::QueryDistanceVisitor<'a>,
     {
-        let query_computer = iface::Quantizer::fused_query_computer(
+        let query_computer = iface::Quantizer::fused_query_computer_with_hints(
             &**self,
             query,
             iface::QueryLayout::SameAsData,
-            false,
+            self.data_hints.with_maybe_out_of_distribution(false),
             GlobalAllocator,
             ScopedAllocator::global(),
         )
@@ -90,11 +107,11 @@ where
     where
         V: quantized::QueryDistanceVisitor<'a>,
     {
-        let query_computer = iface::Quantizer::fused_query_computer(
+        let query_computer = iface::Quantizer::fused_query_computer_with_hints(
             &**self,
             query,
             iface::QueryLayout::FullPrecision,
-            true,
+            self.query_hints,
             GlobalAllocator,
             ScopedAllocator::global(),
         )
@@ -146,6 +163,30 @@ mod tests {
 
     const DIM: usize = 5;
     const TRIALS: usize = 10;
+
+    #[test]
+    fn normalized_data_with_independent_query_hints() {
+        let data = rowmajor::Owned::from_fn(2, 4, |rc| if rc.row == rc.col { 1.0 } else { 0.0 });
+        let normalized = InputHints::new().with_normalized(true);
+        let make = || train_quantizer::<4>(data.as_view(), SupportedMetric::Cosine);
+        let raw_query = Spherical::new(make()).with_input_hints(normalized, InputHints::new());
+        let normalized_query = Spherical::new(make()).with_input_hints(normalized, normalized);
+        let mut code = vec![0; raw_query.bytes().value()];
+        raw_query
+            .quantize(&mut code, &[1.0, 0.0, 0.0, 0.0])
+            .unwrap();
+        let raw = raw_query.query_distance(&[3.0, 4.0, 0.0, 0.0]).unwrap();
+        let unit = normalized_query
+            .query_distance(&[0.6, 0.8, 0.0, 0.0])
+            .unwrap();
+        let raw = raw.eval(&code).unwrap();
+        assert!((raw - 0.4).abs() < 1e-4);
+        assert!((raw - unit.eval(&code).unwrap()).abs() < 1e-4);
+        let insert = normalized_query
+            .insert_distance(&[0.6, 0.8, 0.0, 0.0])
+            .unwrap();
+        assert!((insert.eval(&code).unwrap() - 0.4).abs() < 0.1);
+    }
 
     fn train_quantizer<const N: usize>(
         data: rowmajor::Ref<'_, f32>,

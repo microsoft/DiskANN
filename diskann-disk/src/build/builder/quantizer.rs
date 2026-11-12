@@ -130,8 +130,7 @@ impl BuildQuantizer {
                 Ok(Self::Scalar1Bit(WithBits::<1>::new(quantizer)))
             }
             QuantizationType::Spherical(SphericalBits::One) => {
-                let metric: SupportedMetric =
-                    index_configuration.dist_metric.try_into().bridge_err()?;
+                let metric: SupportedMetric = index_configuration.dist_metric.into();
                 let rng = diskann_providers::utils::create_rnd_provider_from_optional_seed(
                     index_configuration.random_seed,
                 );

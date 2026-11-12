@@ -1888,14 +1888,24 @@ mod tests {
 
     #[test]
     fn spherical_lifecycle_all_types() {
-        for metric in [Metric::L2, Metric::Cosine, Metric::InnerProduct] {
+        for metric in [
+            Metric::L2,
+            Metric::Cosine,
+            Metric::CosineNormalized,
+            Metric::InnerProduct,
+        ] {
             for quant_type in [
                 VectorQuantType::Bin,
                 VectorQuantType::XSpherical2,
                 VectorQuantType::XSpherical4,
             ] {
                 check_spherical_lifecycle(quant_type, metric, |id| {
-                    [(id % 127) as f32 - 63.5, ((id * 47) % 127) as f32 - 63.5]
+                    let mut vector = [(id % 127) as f32 - 63.5, ((id * 47) % 127) as f32 - 63.5];
+                    if metric == Metric::CosineNormalized {
+                        let norm = (vector[0] * vector[0] + vector[1] * vector[1]).sqrt();
+                        vector.iter_mut().for_each(|v| *v /= norm);
+                    }
+                    vector
                 });
             }
             for quant_type in [
@@ -1916,26 +1926,6 @@ mod tests {
                     [(id % 127) as u8 + 128, ((id * 47) % 127) as u8 + 1]
                 });
             }
-        }
-    }
-
-    #[test]
-    fn spherical_rejects_unsupported_metric() {
-        for quant_type in [
-            VectorQuantType::Bin,
-            VectorQuantType::XBinI8,
-            VectorQuantType::XBinU8,
-            VectorQuantType::XSpherical2,
-            VectorQuantType::XSpherical2I8,
-            VectorQuantType::XSpherical2U8,
-            VectorQuantType::XSpherical4,
-            VectorQuantType::XSpherical4I8,
-            VectorQuantType::XSpherical4U8,
-        ] {
-            let store = Store::new();
-            let (index_ptr, _) =
-                create_test_index_with_metric(&store, quant_type, Metric::CosineNormalized as i32);
-            assert!(index_ptr.is_null());
         }
     }
 

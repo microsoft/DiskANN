@@ -126,7 +126,7 @@ impl Benchmark for BfTreeSpherical {
         let quantizer = diskann_quantization::spherical::SphericalQuantizer::train(
             data.as_view(),
             (input.transform_kind()).into(),
-            m.try_into()?,
+            m.into(),
             pre_scale,
             &mut rand::rngs::StdRng::seed_from_u64(input.seed()),
             GlobalAllocator,
