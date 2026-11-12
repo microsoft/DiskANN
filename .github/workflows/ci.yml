@@ -346,7 +346,11 @@ jobs:
   baseline:
     needs: basics
     name: sde-baseline-tests
-    runs-on: ubuntu-latest
+    # `ubuntu-latest` targets `ubuntu-26.04 (or higher, depending on when you are reading this).
+    # This image drops support for pre-AVX hardware.
+    #
+    # Pin to `ubuntu-24.04` for this job for compatibility.
+    runs-on: ubuntu-24.04
     env:
       # Compile for the x86-64 baseline — no AVX, no AVX2.
       RUSTFLAGS: "-Dwarnings -Ctarget-cpu=x86-64"
