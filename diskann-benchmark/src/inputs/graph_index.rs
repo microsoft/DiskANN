@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use std::num::{NonZero, NonZeroU32, NonZeroUsize};
+use std::num::{NonZeroU32, NonZeroUsize};
 
 use anyhow::{anyhow, Context};
 use diskann::{
@@ -23,7 +23,10 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
-    inputs::{self, as_input, save_and_load, write_field, Example, PRINT_WIDTH},
+    inputs::{
+        self, as_input, build_algorithm::BuildAlgorithm, save_and_load, write_field, Example,
+        PRINT_WIDTH,
+    },
     utils::SimilarityMeasure,
 };
 
@@ -722,6 +725,18 @@ pub(crate) struct IndexBuild {
     num_threads: usize,
     multi_insert: Option<MultiInsert>,
     save_path: Option<String>,
+    #[serde(default)]
+    build_algorithm: BuildAlgorithm,
+}
+
+fn validate_dynamic_build_algorithm(build_algorithm: &BuildAlgorithm) -> Result<(), anyhow::Error> {
+    match build_algorithm {
+        BuildAlgorithm::Vamana => Ok(()),
+        #[cfg(feature = "pipnn")]
+        BuildAlgorithm::PiPNN(_) => Err(anyhow!(
+            "PiPNN is a batch builder and is not supported by graph-index-dynamic-run"
+        )),
+    }
 }
 
 impl IndexBuild {
@@ -787,9 +802,12 @@ impl IndexBuild {
         num_points: usize,
         dim: usize,
     ) -> DefaultProviderParameters {
+        let frozen_points =
+            NonZeroUsize::new(self.start_point_strategy.count()).unwrap_or(NonZeroUsize::MIN);
+
         DefaultProviderParameters {
             max_points: num_points,
-            frozen_points: NonZero::new(self.start_point_strategy.count()).unwrap(),
+            frozen_points,
             metric: self.distance.into(),
             dim,
             max_degree: self.exact_max_degree() as u32,
@@ -855,7 +873,11 @@ impl IndexBuild {
         self.num_threads
     }
 
-    #[cfg(any(feature = "spherical-quantization", feature = "bftree"))]
+    #[cfg(any(
+        feature = "spherical-quantization",
+        feature = "bftree",
+        feature = "pipnn"
+    ))]
     pub(crate) fn distance(&self) -> SimilarityMeasure {
         self.distance
     }
@@ -875,6 +897,10 @@ impl IndexBuild {
     pub(crate) fn save_path(&self) -> Option<&str> {
         self.save_path.as_deref()
     }
+
+    pub(crate) fn build_algorithm(&self) -> &BuildAlgorithm {
+        &self.build_algorithm
+    }
 }
 
 impl Example for IndexBuild {
@@ -892,6 +918,7 @@ impl Example for IndexBuild {
             insert_retry: None,
             start_point_strategy: StartPointStrategy::Medoid,
             save_path: None,
+            build_algorithm: BuildAlgorithm::Vamana,
         }
     }
 }
@@ -910,7 +937,7 @@ impl std::fmt::Display for IndexBuild {
 #[serde(tag = "index-source")] // Use tagged enums for JSON
 pub enum IndexSource {
     Load(IndexLoad),
-    Build(IndexBuild),
+    Build(Box<IndexBuild>),
 }
 
 impl IndexSource {
@@ -958,7 +985,7 @@ impl IndexOperation {
 impl Example for IndexOperation {
     fn example() -> Self {
         Self {
-            source: IndexSource::Build(IndexBuild::example()),
+            source: IndexSource::Build(Box::new(IndexBuild::example())),
             search_phase: SearchPhase::Topk(TopkSearchPhase::example()),
         }
     }
@@ -1435,6 +1462,8 @@ impl DynamicIndexRun {
     }
 
     pub(crate) fn validate(&mut self, checker: &mut Checker) -> anyhow::Result<()> {
+        validate_dynamic_build_algorithm(self.build.build_algorithm())?;
+
         self.build.validate(checker)?;
         self.runbook_params.validate(checker)?;
         self.search_phase.validate(checker)?;
@@ -1480,5 +1509,20 @@ impl std::fmt::Display for DynamicIndexRun {
         self.build.summarize_fields(f)?;
 
         Ok(())
+    }
+}
+
+#[cfg(all(test, feature = "pipnn"))]
+mod dynamic_pipnn_tests {
+    use super::*;
+    use crate::inputs::build_algorithm::PiPNNParameters;
+
+    #[test]
+    fn dynamic_run_rejects_the_batch_only_pipnn_algorithm() {
+        let error =
+            validate_dynamic_build_algorithm(&BuildAlgorithm::PiPNN(PiPNNParameters::default()))
+                .unwrap_err();
+        assert!(error.to_string().contains("not supported"));
+        validate_dynamic_build_algorithm(&BuildAlgorithm::Vamana).unwrap();
     }
 }
