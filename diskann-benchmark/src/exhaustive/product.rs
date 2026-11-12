@@ -555,7 +555,6 @@ mod imp {
             let compressor = Compressor::new(table.clone(), style)?;
 
             // Compress the data.
-            #[expect(clippy::disallowed_methods)]
             data.par_rows_mut().zip(input.par_rows()).try_for_each(
                 |(d, i)| -> anyhow::Result<()> {
                     compressor.compress(d, i)?;

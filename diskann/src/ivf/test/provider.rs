@@ -393,8 +393,9 @@ impl StoredList {
 
 /// An exclusive build with unpublished copy-on-write edits.
 ///
-/// [`traits::BuildAccessor::finish`] publishes all edits; dropping the build abandons them
-/// and releases the lease. Publication reuses the snapshot unless another reader holds it.
+/// [`traits::BuildAccessor::finish`] publishes all edits while retaining the lease in its
+/// returned future. Dropping the build or the future abandons unpublished edits and
+/// releases the lease. Publication reuses the snapshot unless another reader holds it.
 #[derive(Debug)]
 pub struct Build<'p> {
     provider: &'p Provider,
@@ -484,6 +485,7 @@ impl<'p, 'b, 'v> traits::BuildAccessor<&'b [(u32, &'v [f32])]> for Build<'p> {
 
     fn finish(self) -> impl SendFuture<ANNResult<()>> {
         async move {
+            let _lease = self._lease;
             self.provider.enter(Call::Finish)?;
             self.provider.publish(self.overlay.into_changes());
             Ok(())
@@ -1483,7 +1485,9 @@ mod tests {
         );
 
         // Finishing a build ends it, even if finishing fails...
-        assert_fails(build.finish().await, "injected Finish failure");
+        let finish = build.finish();
+        assert_fails(Build::new(&provider), "another build is live");
+        assert_fails(finish.await, "injected Finish failure");
 
         // ... and so does dropping it.
         drop(Build::new(&provider).unwrap());
@@ -1506,6 +1510,20 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn build_finish_dropped_without_polling_publishes_nothing() {
+        let provider = provider().await;
+        let before = provider.snapshot();
+
+        let mut build = Build::new(&provider).unwrap();
+        route(&mut build, &[(3, 4.0)]).await.unwrap();
+        let finish = build.finish();
+        assert_fails(Build::new(&provider), "another build is live");
+        drop(finish);
+
+        assert_abandoned(&provider, &before);
+    }
+
+    #[tokio::test]
     async fn build_finish_publishes_in_place_unless_the_snapshot_is_held() {
         let provider = provider().await;
         let mut expected = layout(&provider.snapshot());
@@ -1514,7 +1532,9 @@ mod tests {
         let address = Arc::as_ptr(&provider.snapshot());
         let mut build = Build::new(&provider).unwrap();
         route(&mut build, &[(3, 4.0)]).await.unwrap();
-        build.finish().await.unwrap();
+        let finish = build.finish();
+        assert_fails(Build::new(&provider), "another build is live");
+        finish.await.unwrap();
         expected[0].2.push(4.0);
         assert_eq!(
             Arc::as_ptr(&provider.snapshot()),
