@@ -29,7 +29,7 @@ use crate::{
 /// This search extends standard graph search by expanding through non-matching
 /// nodes to find matching neighbors. More efficient than flat search when the
 /// matching subset is reasonably large.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MultihopFilterSearch {
     /// Base graph search parameters.
     pub inner: Knn,
