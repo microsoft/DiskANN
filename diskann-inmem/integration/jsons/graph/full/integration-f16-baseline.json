@@ -12,7 +12,7 @@
         "data": {
           "data": "/yfcc/yfcc_10k.fbin",
           "data_type": "f32",
-          "groundtruth": "/yfcc/groundtruth.bin",
+          "labels": "/yfcc/yfcc_metadata.json",
           "metric": "l2",
           "preprocess": [],
           "queries": "/yfcc/yfcc_query_100.fbin"
@@ -23,23 +23,68 @@
           }
         },
         "search": {
-          "knn": [
-            {
-              "beam_width": 1,
-              "knn": 10,
-              "search_l": 50
-            },
-            {
-              "beam_width": 3,
-              "knn": 10,
-              "search_l": 50
-            },
-            {
-              "beam_width": 3,
-              "knn": 10,
-              "search_l": 100
-            }
-          ]
+          "inline_filter": {
+            "groundtruth": "/yfcc/groundtruth_filtered.rangeres",
+            "predicates": "/yfcc/yfcc_query_filters.json",
+            "searches": [
+              {
+                "adaptive_l": null,
+                "beam_width": 1,
+                "knn": 10,
+                "search_l": 50
+              },
+              {
+                "adaptive_l": {
+                  "sample_count": 100,
+                  "scale_factor": 16.0
+                },
+                "beam_width": 1,
+                "knn": 10,
+                "search_l": 50
+              }
+            ]
+          },
+          "knn": {
+            "groundtruth": "/yfcc/groundtruth.bin",
+            "searches": [
+              {
+                "beam_width": 1,
+                "knn": 10,
+                "search_l": 50
+              },
+              {
+                "beam_width": 3,
+                "knn": 10,
+                "search_l": 50
+              },
+              {
+                "beam_width": 3,
+                "knn": 10,
+                "search_l": 100
+              }
+            ]
+          },
+          "multihop_filter": {
+            "groundtruth": "/yfcc/groundtruth_filtered.rangeres",
+            "predicates": "/yfcc/yfcc_query_filters.json",
+            "searches": [
+              {
+                "beam_width": 1,
+                "knn": 10,
+                "search_l": 50
+              },
+              {
+                "beam_width": 3,
+                "knn": 10,
+                "search_l": 50
+              },
+              {
+                "beam_width": 3,
+                "knn": 10,
+                "search_l": 100
+              }
+            ]
+          }
         }
       },
       "type": "integration-test"
@@ -54,6 +99,50 @@
         "set_neighbors": 23599,
         "set_vector": 10000
       },
+      "inline_filter": [
+        {
+          "counters": {
+            "append_neighbors": 0,
+            "distance": 0,
+            "get_neighbors": 5441,
+            "get_vector": 44988,
+            "query_distance": 44988,
+            "set_neighbors": 0,
+            "set_vector": 0
+          },
+          "misc": {
+            "cmps": 44888,
+            "hops": 5441
+          },
+          "recall": {
+            "average": 0.4666666666666667,
+            "num_queries": 100,
+            "recall_k": 10,
+            "recall_n": 10
+          }
+        },
+        {
+          "counters": {
+            "append_neighbors": 0,
+            "distance": 0,
+            "get_neighbors": 24350,
+            "get_vector": 131072,
+            "query_distance": 131072,
+            "set_neighbors": 0,
+            "set_vector": 0
+          },
+          "misc": {
+            "cmps": 130972,
+            "hops": 24350
+          },
+          "recall": {
+            "average": 0.6382456140350877,
+            "num_queries": 100,
+            "recall_k": 10,
+            "recall_n": 10
+          }
+        }
+      ],
       "knn": [
         {
           "counters": {
@@ -113,6 +202,71 @@
           },
           "recall": {
             "average": 0.992,
+            "num_queries": 100,
+            "recall_k": 10,
+            "recall_n": 10
+          }
+        }
+      ],
+      "multihop_filter": [
+        {
+          "counters": {
+            "append_neighbors": 0,
+            "distance": 0,
+            "get_neighbors": 25427,
+            "get_vector": 42211,
+            "query_distance": 42211,
+            "set_neighbors": 0,
+            "set_vector": 0
+          },
+          "misc": {
+            "cmps": 42111,
+            "hops": 25427
+          },
+          "recall": {
+            "average": 0.5140350877192983,
+            "num_queries": 100,
+            "recall_k": 10,
+            "recall_n": 10
+          }
+        },
+        {
+          "counters": {
+            "append_neighbors": 0,
+            "distance": 0,
+            "get_neighbors": 11799,
+            "get_vector": 34147,
+            "query_distance": 34147,
+            "set_neighbors": 0,
+            "set_vector": 0
+          },
+          "misc": {
+            "cmps": 34047,
+            "hops": 11799
+          },
+          "recall": {
+            "average": 0.4498245614035088,
+            "num_queries": 100,
+            "recall_k": 10,
+            "recall_n": 10
+          }
+        },
+        {
+          "counters": {
+            "append_neighbors": 0,
+            "distance": 0,
+            "get_neighbors": 20596,
+            "get_vector": 56342,
+            "query_distance": 56342,
+            "set_neighbors": 0,
+            "set_vector": 0
+          },
+          "misc": {
+            "cmps": 56242,
+            "hops": 20596
+          },
+          "recall": {
+            "average": 0.4656140350877193,
             "num_queries": 100,
             "recall_k": 10,
             "recall_n": 10
