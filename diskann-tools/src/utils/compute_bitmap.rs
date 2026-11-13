@@ -428,7 +428,6 @@ pub fn compute_query_bitmaps(
     let global_label_set = compute_global_label_set(&flattened_base_label_hashmaps)?;
 
     // Compute the accelerators for each label in the global set
-    #[expect(clippy::disallowed_methods)]
     let query_accelerators: HashMap<String, Box<dyn QueryAccelerator>> = global_label_set
         .par_iter()
         .map(|(key, value)| {
@@ -438,7 +437,6 @@ pub fn compute_query_bitmaps(
         .collect::<Result<_, _>>()?;
 
     // Evaluate each query using the precomputed accelerators
-    #[expect(clippy::disallowed_methods)]
     let query_bitmaps: Result<Vec<BitSet>, anyhow::Error> = query_labels
         .par_iter()
         .map(|(_query_id, query_expr)| {

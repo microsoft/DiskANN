@@ -421,7 +421,6 @@ mod imp {
             let mut data = rowmajor::Owned::try_from_element(input.nrows(), bytes, 0)?;
 
             // Compress the data.
-            #[expect(clippy::disallowed_methods)]
             data.par_rows_mut().zip(input.par_rows()).try_for_each(
                 |(d, i)| -> anyhow::Result<()> {
                     let c =

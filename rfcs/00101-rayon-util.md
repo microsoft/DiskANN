@@ -143,7 +143,7 @@ The following `_in_pool` methods provide pool-specific alternatives to commonly 
 ### Enforcing `_in_pool` Methods with Clippy
 To standardize the use of `_in_pool` methods, we configure Clippy to disallow traditional Rayon parallel iterator methods, recommending `_in_pool` variants instead.
 
-Add the following configuration to `clippy.toml` file to enforce `_in_pool` method usage:
+Add the following configuration to [diskann-providers/.clippy.toml](../diskann-providers/.clippy.toml) to enforce `_in_pool` method usage:
 ```toml
 # Disallow methods that consume the iterator, enforcing execution in a specified pool
 disallowed-methods = [

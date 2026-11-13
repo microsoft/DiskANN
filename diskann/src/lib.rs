@@ -17,6 +17,8 @@ pub(crate) mod internal;
 // Index Implementations
 pub mod flat;
 pub mod graph;
+#[cfg(feature = "ivf")]
+pub mod ivf;
 
 // Top level exports.
 pub use error::ann_error::{ANNError, ANNResult};
