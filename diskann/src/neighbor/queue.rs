@@ -34,6 +34,14 @@ pub trait NeighborQueue<I: NeighborPriorityQueueIdType>: Debug + Send + Sync {
     /// Insert a neighbor into the priority queue.
     fn insert(&mut self, nbr: Neighbor<I>);
 
+    /// Insert unique neighbors into the priority queue, clearing the buffer without
+    /// changing its capacity.
+    fn batch_insert(&mut self, neighbors: &mut Vec<Neighbor<I>>) {
+        for neighbor in neighbors.drain(..) {
+            self.insert(neighbor);
+        }
+    }
+
     /// Get the neighbor at the specified index.
     fn get(&self, index: usize) -> Neighbor<I>;
 
@@ -169,6 +177,117 @@ impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
         if insert_idx < self.cursor {
             self.cursor = insert_idx;
         }
+    }
+
+    /// Insert unique neighbors into the priority queue, clearing the buffer without
+    /// changing its capacity.
+    ///
+    /// As with [`Self::insert`], IDs must be unique; NaN distances are ignored.
+    pub fn batch_insert(&mut self, neighbors: &mut Vec<Neighbor<I>>) {
+        if self.auto_resizable {
+            for neighbor in neighbors.drain(..) {
+                self.insert(neighbor);
+            }
+            return;
+        }
+
+        if self.capacity == 0 {
+            neighbors.clear();
+            return;
+        }
+
+        #[cfg(debug_assertions)]
+        for (i, neighbor) in neighbors.iter().enumerate() {
+            if !neighbor.distance.is_nan() {
+                self.dbgassert_unique_insert(neighbor.id);
+                debug_assert!(
+                    neighbors[..i]
+                        .iter()
+                        .all(|other| other.distance.is_nan() || other.id != neighbor.id),
+                    "Neighbor with ID {} occurs more than once in the batch",
+                    neighbor.id
+                );
+            }
+        }
+
+        let worst = (self.size == self.capacity).then(|| self.distances[self.size - 1]);
+        neighbors.retain(|neighbor| {
+            !neighbor.distance.is_nan()
+                && worst.is_none_or(|distance| neighbor.distance <= distance)
+        });
+        if neighbors.is_empty() {
+            return;
+        }
+
+        // Later equal-distance candidates must precede earlier ones.
+        neighbors.reverse();
+        neighbors.sort_by(super::ord::fast_distance);
+
+        self.merge_sorted(neighbors);
+        neighbors.clear();
+    }
+
+    /// Merge a nonempty, NaN-free batch sorted by ascending distance.
+    /// Candidates precede old entries on ties; ties within the batch keep its order.
+    fn merge_sorted(&mut self, neighbors: &[Neighbor<I>]) {
+        let candidate_count = neighbors.len();
+        let first = neighbors[0];
+        let prefix_len = self.get_lower_bound(&first);
+        let mut cursor = self.cursor.min(prefix_len);
+        // Cursor-resetting operations may leave it pointing at a visited entry.
+        // The unchanged prefix retains its visited flags; the first new entry is unvisited.
+        while cursor < prefix_len && self.id_visiteds[cursor].1 {
+            cursor += 1;
+        }
+
+        let merged_size = self.capacity.min(self.size + candidate_count);
+        // Partition the combined top-L so neither discarded tail needs to be merged.
+        let mut min_old = prefix_len.max(merged_size.saturating_sub(candidate_count));
+        let mut max_old = self.size.min(merged_size);
+        while min_old < max_old {
+            let old_count = min_old + (max_old - min_old) / 2;
+            let new_count = merged_size - old_count;
+            if old_count < self.size
+                && new_count > 0
+                && self.distances[old_count] < neighbors[new_count - 1].distance
+            {
+                min_old = old_count + 1;
+            } else {
+                max_old = old_count;
+            }
+        }
+        let (mut old_remaining, mut new_remaining) = (min_old, merged_size - min_old);
+
+        self.id_visiteds.truncate(old_remaining);
+        self.distances.truncate(old_remaining);
+        self.id_visiteds.resize(merged_size, (first.id, false));
+        self.distances.resize(merged_size, 0.0);
+        // Merge backwards without overwriting unread old entries.
+        // On ties, write the old entry to the higher slot so new entries stay first.
+        while new_remaining > 1 {
+            let destination = old_remaining + new_remaining - 1;
+            let neighbor = neighbors[new_remaining - 1];
+            if old_remaining > 0 && self.distances[old_remaining - 1] >= neighbor.distance {
+                old_remaining -= 1;
+                self.id_visiteds[destination] = self.id_visiteds[old_remaining];
+                self.distances[destination] = self.distances[old_remaining];
+            } else {
+                new_remaining -= 1;
+                self.id_visiteds[destination] = (neighbor.id, false);
+                self.distances[destination] = neighbor.distance;
+            }
+        }
+        if new_remaining == 1 {
+            // Only the first candidate remains; shift the old suffix in one move.
+            self.id_visiteds
+                .copy_within(prefix_len..old_remaining, prefix_len + 1);
+            self.distances
+                .copy_within(prefix_len..old_remaining, prefix_len + 1);
+            self.id_visiteds[prefix_len] = (first.id, false);
+            self.distances[prefix_len] = first.distance;
+        }
+        self.size = merged_size;
+        self.cursor = cursor;
     }
 
     /// Drain candidates from the front, signaling that they have been consumed.
@@ -503,6 +622,10 @@ impl<I: NeighborPriorityQueueIdType> NeighborQueue<I> for NeighborPriorityQueue<
         self.insert(nbr)
     }
 
+    fn batch_insert(&mut self, neighbors: &mut Vec<Neighbor<I>>) {
+        self.batch_insert(neighbors)
+    }
+
     fn get(&self, index: usize) -> Neighbor<I> {
         self.get(index)
     }
@@ -620,6 +743,124 @@ mod neighbor_priority_queue_test {
     use rand::{Rng, SeedableRng};
 
     use super::*;
+
+    #[track_caller]
+    fn assert_same_queue<I: NeighborPriorityQueueIdType>(
+        actual: &NeighborPriorityQueue<I>,
+        expected: &NeighborPriorityQueue<I>,
+    ) {
+        assert_eq!(actual.size, expected.size);
+        assert_eq!(actual.cursor, expected.cursor);
+        assert_eq!(actual.id_visiteds, expected.id_visiteds);
+        assert!(
+            actual
+                .distances
+                .iter()
+                .map(|d| d.to_bits())
+                .eq(expected.distances.iter().map(|d| d.to_bits())),
+            "distance bit patterns differ"
+        );
+    }
+
+    #[test]
+    fn batch_insert_matches_sequential_insertion() {
+        let cases: &[(usize, usize, usize, &[f32])] = &[
+            (16, 0, 0, &[2.0, 1.0]),
+            (16, 7, 3, &[4.5, 1.5, 8.0]),
+            (4, 4, 2, &[3.5, -1.0, 1.5, 8.0, 2.5]),
+            (4, 4, 1, &[0.0, -0.0, 1.0, 1.0]),
+            (16, 16, 16, &[f32::NAN, 7.5]),
+            (
+                16,
+                3,
+                2,
+                &[f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -0.0],
+            ),
+            (128, 128, 3, &[63.5, -1.0, 200.0]),
+        ];
+        for resizable in [false, true] {
+            for &(capacity, initial, visited, distances) in cases {
+                let mut reference = if resizable {
+                    NeighborPriorityQueue::auto_resizable_with_search_param_l(capacity)
+                } else {
+                    NeighborPriorityQueue::new(capacity)
+                };
+                for id in 0..initial {
+                    reference.insert(Neighbor::new(id, id as f32));
+                }
+                for _ in 0..visited {
+                    reference.closest_notvisited();
+                }
+                let mut actual = reference.clone();
+                let mut candidates: Vec<_> = distances
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &distance)| Neighbor::new(initial + i, distance))
+                    .collect();
+                for &candidate in &candidates {
+                    reference.insert(candidate);
+                }
+                let buffer_capacity = candidates.capacity();
+                let allocation = candidates.as_ptr();
+                actual.batch_insert(&mut candidates);
+                assert!(candidates.is_empty());
+                assert_eq!(candidates.capacity(), buffer_capacity);
+                assert_eq!(candidates.as_ptr(), allocation);
+                assert_same_queue(&actual, &reference);
+            }
+        }
+    }
+
+    #[test]
+    fn batch_insert_handles_empty_and_filtered_batches() {
+        let cases: &[(usize, &[f32])] = &[
+            (0, &[]),
+            (0, &[f32::NEG_INFINITY, f32::NAN]),
+            (4, &[]),
+            (4, &[f32::NAN]),
+            (4, &[2.0]),
+        ];
+        for &(capacity, distances) in cases {
+            let mut queue = NeighborPriorityQueue::new(capacity);
+            for id in 0..capacity {
+                queue.insert(Neighbor::new(id, 1.0));
+            }
+            let reference = queue.clone();
+            let mut candidates: Vec<_> = distances
+                .iter()
+                .enumerate()
+                .map(|(i, &distance)| Neighbor::new(capacity + i, distance))
+                .collect();
+            let buffer_capacity = candidates.capacity();
+            let allocation = candidates.as_ptr();
+            NeighborQueue::batch_insert(&mut queue, &mut candidates);
+            assert!(candidates.is_empty());
+            assert_eq!(candidates.capacity(), buffer_capacity);
+            assert_eq!(candidates.as_ptr(), allocation);
+            assert_eq!(queue.capacity(), capacity);
+            assert_same_queue(&queue, &reference);
+        }
+    }
+
+    #[test]
+    fn batch_insert_normalizes_cursor_after_drain() {
+        let mut queue = NeighborPriorityQueue::new(8);
+        for id in 0..6 {
+            queue.insert(Neighbor::new(id, id as f32));
+        }
+        for _ in 0..6 {
+            queue.closest_notvisited();
+        }
+        queue.drain_best(2);
+        queue.batch_insert(&mut vec![Neighbor::new(6, 10.0)]);
+
+        assert_eq!(queue.cursor, 4);
+        assert_eq!(
+            queue.closest_notvisited().map(Neighbor::as_tuple),
+            Some((6, 10.0))
+        );
+        assert!(!queue.has_notvisited_node());
+    }
 
     #[test]
     fn test_reconfigure() {
