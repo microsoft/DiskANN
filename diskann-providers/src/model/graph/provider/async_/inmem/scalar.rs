@@ -1076,7 +1076,6 @@ mod tests {
             num_frozen_points: ONE,
             metric: Metric::InnerProduct,
             prefetch_lookahead: None,
-            is_disk_index: false,
             prefetch_cache_line_level: None,
         };
 

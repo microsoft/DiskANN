@@ -5,7 +5,7 @@
 
 mod storage_provider;
 pub use storage_provider::{
-    DynWriteProvider, StorageReadProvider, StorageWriteProvider, WriteProviderWrapper, WriteSeek,
+    DynWriteProvider, StorageReadProvider, StorageWriteProvider, WriteSeek,
 };
 
 #[cfg(any(test, feature = "virtual_storage"))]
@@ -14,7 +14,7 @@ mod virtual_storage_provider;
 pub use virtual_storage_provider::VirtualStorageProvider;
 
 mod api;
-pub use api::{AsyncIndexMetadata, AsyncQuantLoadContext, DiskGraphOnly, LoadWith, SaveWith};
+pub use api::{AsyncIndexMetadata, AsyncQuantLoadContext, LoadWith, SaveWith};
 
 pub(crate) mod bin;
 
@@ -34,8 +34,7 @@ pub mod protos;
 pub mod path_utility;
 pub use path_utility::{
     get_compressed_pq_file, get_disk_index_compressed_pq_file, get_disk_index_file,
-    get_disk_index_pq_pivot_file, get_label_file, get_label_medoids_file, get_mem_index_data_file,
-    get_mem_index_file, get_pq_pivot_file, get_universal_label_file,
+    get_disk_index_pq_pivot_file, get_mem_index_data_file, get_mem_index_file, get_pq_pivot_file,
 };
 
 pub mod index_storage;

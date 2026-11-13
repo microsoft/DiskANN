@@ -29,9 +29,7 @@ mod vector_data_iterator;
 pub use vector_data_iterator::VectorDataIterator;
 
 mod storage_utils;
-pub use storage_utils::{
-    load_vector_ids, read_bin_from, save_bytes, save_data_in_base_dimensions, write_bin_from,
-};
+pub use storage_utils::{read_bin_from, save_bytes, write_bin_from};
 
 mod sampling;
 pub use sampling::{SampleVectorReader, SamplingDensity, gen_random_slice};
