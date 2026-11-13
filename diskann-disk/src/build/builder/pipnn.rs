@@ -196,7 +196,6 @@ mod tests {
     use diskann_providers::{storage::VirtualStorageProvider, utils::create_thread_pool};
     use diskann_utils::{io::write_bin, views::rowmajor};
     use diskann_vector::distance::Metric;
-    use rstest::rstest;
     use vfs::MemoryFS;
 
     use super::*;
@@ -254,20 +253,16 @@ mod tests {
         )
     }
 
-    #[rstest]
-    #[case::point_count(3, 8)]
-    #[case::stored_dimensions(2, 4)]
-    fn build_rejects_a_dataset_that_does_not_match_the_configuration(
-        #[case] configured_points: usize,
-        #[case] configured_dimensions: usize,
-    ) {
-        let storage = storage_with_data(2, 8);
-        let config = common_configuration(configured_points, configured_dimensions);
-
-        let error = build(&storage, &config).unwrap_err();
-
-        assert!(error.to_string().contains("has 2 points of 8"), "{error}");
-        assert!(!storage.exists(GRAPH));
+    #[test]
+    fn build_rejects_a_dataset_that_does_not_match_the_configuration() {
+        let (points, dimensions) = (2, 8);
+        for (configured_points, configured_dimensions) in [(3, dimensions), (points, 4)] {
+            let storage = storage_with_data(points, dimensions);
+            let config = common_configuration(configured_points, configured_dimensions);
+            let error = build(&storage, &config).unwrap_err();
+            assert!(error.to_string().contains("has 2 points of 8"), "{error}");
+            assert!(!storage.exists(GRAPH));
+        }
     }
 
     #[test]

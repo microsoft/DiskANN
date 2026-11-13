@@ -5,7 +5,6 @@
 
 //! Shared disk pipeline and configuration-selected graph construction.
 use std::{
-    fmt,
     marker::PhantomData,
     num::NonZeroUsize,
     sync::{Arc, Mutex},
@@ -73,24 +72,10 @@ where
     _phantom: PhantomData<Data>,
 }
 
-impl<Data, StorageProvider> fmt::Debug for DiskIndexBuilder<'_, Data, StorageProvider>
-where
-    Data: GraphDataType<VectorIdType = u32>,
-    StorageProvider: StorageReadProvider + StorageWriteProvider,
-{
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("DiskIndexBuilder")
-            .field("parameters", &self.parameters)
-            .finish_non_exhaustive()
-    }
-}
-
 impl<'a, Data, StorageProvider> DiskIndexBuilder<'a, Data, StorageProvider>
 where
-    Data: GraphDataType<VectorIdType = u32>,
-    Data::VectorDataType: VectorRepr + BuildElement,
-    StorageProvider: StorageReadProvider + StorageWriteProvider + 'static,
-    StorageProvider::Reader: Send,
+    Data: GraphDataType<VectorIdType = u32, VectorDataType: BuildElement>,
+    StorageProvider: StorageReadProvider<Reader: Send> + StorageWriteProvider + 'static,
 {
     /// Creates a disk builder with one selected graph configuration.
     ///
