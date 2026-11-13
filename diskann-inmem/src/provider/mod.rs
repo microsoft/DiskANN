@@ -24,9 +24,6 @@
 //!
 //! * Failed insert rollback: again, this needs some upstream changes to full support.
 //!
-//! * Quantization + reranking: The current version of this index targets just a single
-//!   data-store and is planned to be addressed in the near future.
-//!
 //! * Lack of save/load support: The index is currently ephemeral, but there are plans to
 //!   address this gap.
 
@@ -35,19 +32,22 @@ use std::hash::Hash;
 use diskann::{
     ANNError, ANNResult,
     graph::{
-        AdjacencyList, SearchOutputBuffer,
+        AdjacencyList, DiskANNIndex as Index, SearchOutputBuffer,
         glue::{self, HybridPredicate},
         workingset,
     },
     neighbor::Neighbor,
     provider,
 };
+use parking_lot::Mutex;
 
 use crate::{
+    bitvector::BitVector,
     counters::{Counters, LocalCounters},
+    epoch,
     ids::IdMap,
     neighbors::Neighbors,
-    num::{IdLimit, MaxDegree, Range},
+    num::{Capacity, IdLimit, MaxDegree, Range},
     repr,
 };
 
@@ -114,9 +114,147 @@ where
         })
     }
 
+    /// Return the [`Capacity`] of the index.
+    pub fn capacity(&self) -> Capacity {
+        self.representation.capacity()
+    }
+
     /// Return the maximum number of neighbors that can be stored in the provider's graph.
     pub fn max_degree(&self) -> MaxDegree {
         self.representation.max_degree()
+    }
+
+    /// Return the [`IdLimit`] for `self`.
+    ///
+    /// Keep private since it relates to the internal ID space.
+    fn id_limit(&self) -> IdLimit {
+        self.representation.id_limit()
+    }
+}
+
+////////////
+// Scoped //
+////////////
+
+/// Construct a [`Scoped`] view of `index`.
+///
+/// Items deleted in `index` while the [`Scoped`] is held will be prevented from reclamation.
+/// This allows operations that require some amount of pre-processing (like [`Filtered`])
+/// to maintain a coherent view of the `index` by prevent ABA style bugs that would be allowed.
+///
+/// # Warning
+///
+/// This function is intended to be temporary pending architectural reworking of `diskann`.
+#[doc(hidden)]
+pub fn scoped<R, M>(index: &Index<Provider<R, M>>) -> ANNResult<Scoped<'_, R, M>>
+where
+    R: repr::Representation,
+    M: Id,
+{
+    let guard =
+        <_ as repr::Representation>::read_guard(&index.provider().representation)?.into_inner();
+    Ok(Scoped::new(index, guard))
+}
+
+/// A scoped view of [`Provider`], preventing id receclamation while held.
+///
+/// See: [`scope`].
+#[doc(hidden)]
+#[derive(Debug)]
+pub struct Scoped<'a, R, M>
+where
+    R: repr::Representation,
+    M: Id,
+{
+    index: &'a Index<Provider<R, M>>,
+    guard: epoch::Guard<'a>,
+}
+
+impl<'a, R, M> Scoped<'a, R, M>
+where
+    R: repr::Representation,
+    M: Id,
+{
+    fn new(index: &'a Index<Provider<R, M>>, guard: epoch::Guard<'a>) -> Self {
+        Self { index, guard }
+    }
+
+    /// Evaluate the `predicate` on all current external-ids.
+    ///
+    /// Return a [`BitVector`] of length [`Provider::id_limit`] with entries set to 1 if ane
+    /// only if the associated external-id satisfies `predicate`.
+    fn evaluate<F>(&self, mut predicate: F) -> BitVector
+    where
+        F: FnMut(&M) -> bool,
+    {
+        let provider = self.index.provider();
+        let mut bitvec = BitVector::new(<R as repr::Representation>::id_limit(
+            &provider.representation,
+        ));
+
+        // We need to protect against the case where a predicate also tries to insert and
+        // delete items, which would acquire the ID translation locks.
+        //
+        // If we were holding these locks when that happened, this would deadlock.
+        //
+        // Instead, we acquire and release locks for each item.
+        //
+        // FIXME: This is slow and can be fixed by moving internal-to-external ID translation
+        // behind the epoch boundary, then we can read through it without locks.
+        for internal in 0..self.index.provider().id_limit().value() {
+            if let Some(external) = provider.mapping.to_external(internal)
+                && predicate(&external)
+            {
+                bitvec.set_true(internal);
+            }
+        }
+
+        bitvec
+    }
+
+    /// Construct a [`Filtered`] with `query` and a pre-processed `predicate`.
+    ///
+    /// The returned [`Filtered`] can be used for multiple filtered searches with the same
+    /// `query`/`predicate` pair.
+    ///
+    /// The `predicate` will be called at most once for each ID currently registered with
+    /// the parent [`Provider`].
+    ///
+    /// # Note
+    ///
+    /// While the [`Filtered`] is held, it prevents id reclamation of its parent [`Provider`].
+    /// It should only be held as long as necessary, or in situations where it is known the
+    /// parent [`Provider`] is not undergoing rapid inserts and deletes.
+    ///
+    /// In addition, items inserted into the [`Provider`] after the [`Filtered`] is
+    /// constructed will not be returned from searches.
+    ///
+    /// # Warning
+    ///
+    /// This is likely temporary function pending architectural changes to `diskann`.
+    pub fn filtered<'x, F>(
+        &'x self,
+        query: <R as repr::Search>::Query<'x>,
+        predicate: F,
+    ) -> ANNResult<Filtered<'x, R, M>>
+    where
+        R: repr::Search,
+        F: FnMut(&M) -> bool,
+    {
+        let provider = self.index.provider();
+        let search = <R as repr::Search>::search_accessor(
+            &provider.representation,
+            query,
+            provider,
+            Some(repr::ReadGuard::new(self.guard.share())),
+            provider.local_counters(),
+        )?;
+
+        let filter = self.evaluate(predicate);
+        Ok(Filtered {
+            index: self.index,
+            accessor: FilteredAccessor { search, filter },
+        })
     }
 }
 
@@ -310,6 +448,138 @@ impl<'a> SearchAccessor<'a> {
         }
     }
 
+    fn distances_to<Itr, F>(&mut self, itr: Itr, mut f: F) -> ANNResult<()>
+    where
+        Itr: IntoIterator<Item = u32>,
+        F: FnMut(u32, f32),
+    {
+        for p in itr {
+            match self.expand_beam.evaluate(p)? {
+                Some(distance) => {
+                    // Counters are no-ops without `integration-test`.
+                    self.counters.get_vector(1);
+                    self.counters.query_distance(1);
+                    f(p, distance);
+                }
+                None => {
+                    return Err(ANNError::message("could not retrieve start point"));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn expand_beam<Itr, P, F>(
+        &mut self,
+        ids: Itr,
+        mut filter: P,
+        mut on_neighbors: F,
+    ) -> ANNResult<()>
+    where
+        Itr: IntoIterator<Item = u32>,
+        P: FnMut(&u32) -> bool,
+        F: FnMut(u32, f32),
+    {
+        // Post-processing code that reuses `buffer` could leave it too small.
+        //
+        // This restores the buffer size.
+        if self.buffer.len() < self.neighbors.max_degree().value() {
+            self.resize_buffer();
+        }
+
+        for i in ids {
+            self.neighbors.get(i, &mut self.ids)?;
+            self.counters.get_neighbors(1);
+
+            // Filter out unvisited IDs and ensure that all the IDs we are about
+            self.ids
+                .retain(|i| filter(i) && self.id_limit.is_in_bounds(*i));
+
+            // This should always hold, but let's double check.
+            assert!(self.buffer.len() >= self.ids.len());
+
+            // SAFETY:
+            //
+            // 1. We've verified that each entry in `self.ids` is in-bounds using
+            //   the `IdLimit` derived from this `ExpandBeam` object (enforced in the
+            //   constructor).
+            //
+            // 2. `self.buffer` is long enough to hold all the IDs.
+            let processed = unsafe { self.expand_beam.expand_beam(&self.ids, &mut self.buffer) }?;
+
+            self.counters.get_vector(processed as u64);
+            self.counters.query_distance(processed as u64);
+
+            self.buffer
+                .iter()
+                .take(processed)
+                .for_each(|neighbor| on_neighbors(*neighbor.id(), *neighbor.distance()));
+        }
+
+        Ok(())
+    }
+
+    // Resize the internal buffer if needed.
+    #[cold]
+    fn resize_buffer(&mut self) {
+        self.buffer
+            .resize_with(self.neighbors.max_degree().value(), Default::default)
+    }
+
+    fn post_process_as<R, M>(
+        &mut self,
+        itr: impl IntoIterator<Item = Neighbor<u32>>,
+        output: &mut (impl SearchOutputBuffer<M> + ?Sized),
+    ) -> ANNResult<usize>
+    where
+        R: 'static,
+        M: Id,
+    {
+        // By construction - the downcast should succeed. Otherwise, this is a program bug.
+        let provider = match self.provider.downcast_ref::<Provider<R, M>>() {
+            Some(provider) => provider,
+            None => return Err(ANNError::message("bad any cast")),
+        };
+
+        let mut count = 0;
+        let mut push = |neighbor: Neighbor<u32>| -> bool {
+            if let Some(ext) = provider.mapping.to_external(*neighbor.id()) {
+                if output
+                    .push(Neighbor::new(ext, *neighbor.distance()))
+                    .is_available()
+                {
+                    count += 1;
+                    true
+                } else {
+                    false
+                }
+            } else {
+                true
+            }
+        };
+
+        // If there is a registered post-process step, run that first.
+        if let Some(post_process) = &mut self.post_process {
+            self.buffer.clear();
+            Extend::extend(&mut self.buffer, itr);
+            post_process.post_process(&mut self.buffer)?;
+
+            for neighbor in self.buffer.iter() {
+                if !push(*neighbor) {
+                    break;
+                }
+            }
+        } else {
+            for neighbor in itr {
+                if !push(neighbor) {
+                    break;
+                }
+            }
+        }
+
+        Ok(count)
+    }
+
     #[cfg(test)]
     pub(crate) fn get_expand_beam(&self) -> &dyn repr::ExpandBeam {
         &*self.expand_beam
@@ -334,77 +604,26 @@ impl glue::SearchAccessor for SearchAccessor<'_> {
 
     fn start_point_distances<F>(
         &mut self,
-        mut f: F,
+        f: F,
     ) -> impl std::future::Future<Output = ANNResult<()>> + Send
     where
         F: FnMut(Self::Id, f32) + Send,
     {
-        let work = move || {
-            for p in self.start_points {
-                match self.expand_beam.evaluate(p)? {
-                    Some(distance) => {
-                        // Counters are no-ops without `integration-test`.
-                        self.counters.get_vector(1);
-                        self.counters.query_distance(1);
-                        f(p, distance);
-                    }
-                    None => {
-                        return Err(ANNError::message("could not retrieve start point"));
-                    }
-                }
-            }
-            Ok(())
-        };
-
-        ready(work)
+        ready(move || self.distances_to(self.start_points, f))
     }
 
     fn expand_beam<Itr, P, F>(
         &mut self,
         ids: Itr,
         mut pred: P,
-        mut on_neighbors: F,
+        on_neighbors: F,
     ) -> impl std::future::Future<Output = ANNResult<()>> + Send
     where
         Itr: Iterator<Item = Self::Id> + Send,
         P: HybridPredicate<Self::Id> + Send + Sync,
         F: FnMut(Self::Id, f32) + Send,
     {
-        let work = move || -> ANNResult<()> {
-            for i in ids {
-                self.neighbors.get(i, &mut self.ids)?;
-                self.counters.get_neighbors(1);
-
-                // Filter out unvisited IDs and ensure that all the IDs we are about
-                self.ids
-                    .retain(|i| pred.eval_mut(i) && self.id_limit.is_in_bounds(*i));
-
-                // This should always hold, but let's double check.
-                assert!(self.buffer.len() >= self.ids.len());
-
-                // SAFETY:
-                //
-                // 1. We've verified that each entry in `self.ids` is in-bounds using
-                //   the `IdLimit` derived from this `ExpandBeam` object (enforced in the
-                //   constructor).
-                //
-                // 2. `self.buffer` is long enough to hold all the IDs.
-                let processed =
-                    unsafe { self.expand_beam.expand_beam(&self.ids, &mut self.buffer) }?;
-
-                self.counters.get_vector(processed as u64);
-                self.counters.query_distance(processed as u64);
-
-                self.buffer
-                    .iter()
-                    .take(processed)
-                    .for_each(|neighbor| on_neighbors(*neighbor.id(), *neighbor.distance()));
-            }
-
-            Ok(())
-        };
-
-        ready(work)
+        ready(move || self.expand_beam(ids, |i| pred.eval_mut(i), on_neighbors))
     }
 }
 
@@ -606,6 +825,7 @@ where
             &provider.representation,
             query,
             provider,
+            None,
             provider.local_counters(),
         )
     }
@@ -649,53 +869,7 @@ where
         I: Iterator<Item = Neighbor<u32>> + Send,
         B: SearchOutputBuffer<M> + Send + ?Sized,
     {
-        let work = move || {
-            // By construction - the downcast should succeed. Otherwise, this is a program bug.
-            let provider = match accessor.provider.downcast_ref::<Provider<R, M>>() {
-                Some(provider) => provider,
-                None => return Err(ANNError::message("bad any cast")),
-            };
-
-            let mut count = 0;
-            let mut push = |neighbor: Neighbor<u32>| -> bool {
-                if let Some(ext) = provider.mapping.to_external(*neighbor.id()) {
-                    if output
-                        .push(Neighbor::new(ext, *neighbor.distance()))
-                        .is_available()
-                    {
-                        count += 1;
-                        true
-                    } else {
-                        false
-                    }
-                } else {
-                    true
-                }
-            };
-
-            // If there is a registered post-process step, run that first.
-            if let Some(post_process) = &mut accessor.post_process {
-                accessor.buffer.clear();
-                Extend::extend(&mut accessor.buffer, candidates);
-                post_process.post_process(&mut accessor.buffer)?;
-
-                for neighbor in accessor.buffer.iter() {
-                    if !push(*neighbor) {
-                        break;
-                    }
-                }
-            } else {
-                for neighbor in candidates {
-                    if !push(neighbor) {
-                        break;
-                    }
-                }
-            }
-
-            Ok(count)
-        };
-
-        ready(work)
+        ready(move || accessor.post_process_as::<R, M>(candidates, output))
     }
 }
 
@@ -744,6 +918,7 @@ where
             &provider.representation,
             vector,
             provider,
+            None,
             provider.local_counters(),
         )
     }
@@ -822,7 +997,232 @@ where
         id: u32,
     ) -> impl Future<Output = Result<Self::DeleteElementGuard, Self::DeleteElementError>> + Send
     {
-        let work = move || provider.representation.get(id);
+        ready(move || provider.representation.get(id))
+    }
+}
+
+//---------//
+// Filters //
+//---------//
+
+/// A scoped view of a [`Provider`] with a pre-evaluate query and filter predicate.
+///
+/// See: [`Scoped::filtered`].
+#[derive(Debug)]
+pub struct Filtered<'a, R, M>
+where
+    R: repr::Representation,
+    M: Id,
+{
+    // FIXME: `accessor` has everything we need. We don't need `index` except that `diskann`
+    // requires it!
+    index: &'a Index<Provider<R, M>>,
+    accessor: FilteredAccessor<'a>,
+}
+
+impl<R, M> Filtered<'_, R, M>
+where
+    R: repr::Representation,
+    M: Id,
+{
+    /// Run [`diskann::graph::search::InlineFilterSearch`] and store the results in `output`.
+    pub fn inline_filtered<O>(
+        &mut self,
+        params: diskann::graph::search::InlineFilterSearch,
+        output: &mut O,
+    ) -> ANNResult<diskann::graph::index::SearchStats>
+    where
+        O: diskann::graph::SearchOutputBuffer<M> + Send,
+    {
+        let strategy = Smuggle::new(&mut self.accessor);
+        let fut = self.index.search(params, &strategy, &Context, (), output);
+        crate::poll(fut)
+    }
+
+    /// Run [`diskann::graph::search::MultihopFilterSearch`] and store the results in `output`.
+    pub fn multihop_filtered<O>(
+        &mut self,
+        params: diskann::graph::search::MultihopFilterSearch,
+        output: &mut O,
+    ) -> ANNResult<diskann::graph::index::SearchStats>
+    where
+        O: diskann::graph::SearchOutputBuffer<M> + Send,
+    {
+        let strategy = Smuggle::new(&mut self.accessor);
+        let fut = self.index.search(params, &strategy, &Context, (), output);
+        crate::poll(fut)
+    }
+}
+
+//~~~~~~~~~~~~~~~~~//
+// HERE BE DRAGONS //
+//~~~~~~~~~~~~~~~~~//
+
+// Yes - that is right.
+//
+// Our strategy embeds the accessor it's going to use directly in the `Strategy` in a
+// single use way. The `diskann` API doesn't allow us (yet) to just do the right thing and
+// use the accesor directly, so we're forced to do slightly cursed workarounds like this
+// until we can fix core `diskann`.
+//
+// The main planned architectural change to `diskann` is to make all the search/insert/delete
+// methods receive accessors only without a `DiskANNIndex` or any strategies.
+//
+// Then we will be able to avoid this horrible hack and simplify `Scoped`/`Filtered`.
+#[derive(Debug)]
+struct Smuggle<'borrow, 'data>(Mutex<Option<FilteredAccessorRef<'borrow, 'data>>>);
+
+impl<'borrow, 'data> Smuggle<'borrow, 'data> {
+    fn new(accessor: &'borrow mut FilteredAccessor<'data>) -> Self {
+        Self(Mutex::new(Some(FilteredAccessorRef(accessor))))
+    }
+}
+
+#[expect(
+    clippy::unwrap_used,
+    reason = "this is a private type - we ensure the mutex is uncontended and used just once"
+)]
+impl<'call, 'borrow, 'data, R, M> glue::SearchStrategy<'call, Provider<R, M>, ()>
+    for Smuggle<'borrow, 'data>
+where
+    R: repr::Representation,
+    M: Id,
+{
+    type SearchAccessorError = diskann::error::Infallible;
+    type SearchAccessor = FilteredAccessorRef<'borrow, 'data>;
+
+    fn search_accessor(
+        &'call self,
+        _provider: &'call Provider<R, M>,
+        _context: &'call Context,
+        _query: (),
+    ) -> Result<Self::SearchAccessor, diskann::error::Infallible> {
+        Ok(self.0.try_lock().unwrap().take().unwrap())
+    }
+}
+
+impl<'call, 'borrow, 'data, R, M> glue::DefaultPostProcessor<'call, Provider<R, M>, (), M>
+    for Smuggle<'borrow, 'data>
+where
+    R: repr::Representation,
+    M: Id,
+{
+    diskann::default_post_processor!(Translate<R, M>);
+}
+
+impl<R, M> glue::SearchPostProcess<FilteredAccessorRef<'_, '_>, (), M> for Translate<R, M>
+where
+    R: repr::Representation,
+    M: Id,
+{
+    type Error = ANNError;
+
+    fn post_process<I, B>(
+        &self,
+        accessor: &mut FilteredAccessorRef<'_, '_>,
+        _query: (),
+        candidates: I,
+        output: &mut B,
+    ) -> impl std::future::Future<Output = Result<usize, Self::Error>> + Send
+    where
+        I: Iterator<Item = Neighbor<u32>> + Send,
+        B: SearchOutputBuffer<M> + Send + ?Sized,
+    {
+        ready(move || {
+            accessor
+                .0
+                .search
+                .post_process_as::<R, M>(candidates, output)
+        })
+    }
+}
+
+/// The actual [`glue::FilteredAccessor`] for filtered search.
+///
+/// See: [`Filtered`].
+#[derive(Debug)]
+struct FilteredAccessor<'a> {
+    search: SearchAccessor<'a>,
+    filter: BitVector,
+}
+
+/// A temporary wrapper for [`FilteredAccessor`] to inject it directly into the `diskann`
+/// search methods.
+///
+/// This should become unnecessary in the future.
+#[derive(Debug)]
+struct FilteredAccessorRef<'borrow, 'data>(&'borrow mut FilteredAccessor<'data>);
+
+impl diskann::provider::HasId for FilteredAccessorRef<'_, '_> {
+    type Id = u32;
+}
+
+impl glue::FilteredAccessor for FilteredAccessorRef<'_, '_> {
+    fn num_starting_points(&self) -> impl std::future::Future<Output = ANNResult<usize>> + Send {
+        std::future::ready(Ok(self.0.search.start_points.len()))
+    }
+
+    fn start_point_distances<F>(
+        &mut self,
+        mut f: F,
+    ) -> impl std::future::Future<Output = ANNResult<()>> + Send
+    where
+        F: FnMut(glue::Decision<Self::Id>, f32) + Send,
+    {
+        let work = move || {
+            self.0
+                .search
+                .distances_to(self.0.search.start_points, |id, distance| {
+                    f(glue::Decision::new(self.0.filter.get(id), id), distance)
+                })
+        };
+
+        ready(work)
+    }
+
+    fn expand_beam_filtered<Itr, P, F>(
+        &mut self,
+        ids: Itr,
+        mut pred: P,
+        mut on_neighbors: F,
+    ) -> impl std::future::Future<Output = ANNResult<()>> + Send
+    where
+        Itr: Iterator<Item = Self::Id> + Send,
+        P: HybridPredicate<Self::Id> + Send + Sync,
+        F: FnMut(glue::Decision<Self::Id>, f32) + Send,
+    {
+        let work = move || {
+            self.0.search.expand_beam(
+                ids,
+                |i| pred.eval_mut(i),
+                |id, distance| {
+                    on_neighbors(glue::Decision::new(self.0.filter.get(id), id), distance)
+                },
+            )
+        };
+
+        ready(work)
+    }
+
+    fn expand_beam_accept_only<Itr, P, F>(
+        &mut self,
+        ids: Itr,
+        mut pred: P,
+        mut on_neighbors: F,
+    ) -> impl std::future::Future<Output = ANNResult<()>> + Send
+    where
+        Itr: Iterator<Item = Self::Id> + Send,
+        P: glue::Predicate<Self::Id> + glue::PredicateMut<glue::Accept<Self::Id>> + Send + Sync,
+        F: FnMut(glue::Accept<Self::Id>, f32) + Send,
+    {
+        let work = move || {
+            self.0.search.expand_beam(
+                ids,
+                |i| self.0.filter.get(*i) && pred.eval_mut(&glue::Accept::new(*i)),
+                |id, distance| on_neighbors(glue::Accept::new(id), distance),
+            )
+        };
+
         ready(work)
     }
 }
@@ -836,14 +1236,21 @@ mod tests {
     use super::*;
 
     use diskann::{
-        graph::{DiskANNIndex, InplaceDeleteMethod, search::Knn, test::synthetic::Grid},
+        graph::{
+            DiskANNIndex, InplaceDeleteMethod,
+            search::{InlineFilterSearch, Knn, MultihopFilterSearch},
+            test::synthetic::Grid,
+        },
         neighbor::Neighbor,
         provider::{DataProvider, Delete},
     };
-    use diskann_utils::views::rowmajor::{self, Matrix};
+    use diskann_utils::{
+        assert_contains,
+        views::rowmajor::{self, Matrix},
+    };
     use diskann_vector::distance::Metric;
 
-    use crate::num::Capacity;
+    use crate::{num::Capacity, poll::poll};
 
     /// The true tests live in the integration tests for this repo.
     ///
@@ -881,6 +1288,7 @@ mod tests {
 
         let provider = Provider::<_, u64>::new(config).unwrap();
         assert_eq!(provider.max_degree(), MaxDegree::new(degree));
+        assert_eq!(provider.capacity(), Capacity::new(grid.num_points(size)));
 
         let config = diskann::graph::config::Builder::new(
             2 * (grid.dim() as usize),
@@ -945,6 +1353,52 @@ mod tests {
         assert_eq!(neighbors[2].as_tuple(), (51, 1.0));
         assert_eq!(neighbors[3].as_tuple(), (61, 2.0));
 
+        // Filtered searches work.
+        //
+        // What we do here is create a `Scoped` then a `Filtered`.
+        //
+        // We then hold onto these to ensure that algorithms like inplace delete can still
+        // run but that IDs cannot be reclaimed until both to away.
+        //
+        // The filter excludes IDs where the 10s digit is odd.
+        let scoped = scoped(&index).unwrap();
+        let mut filtered = scoped
+            .filtered(&[0.0, 0.0], |i| (*i / 10).is_multiple_of(2))
+            .unwrap();
+
+        {
+            let mut neighbors = Vec::<Neighbor<u64>>::new();
+            let ifs = InlineFilterSearch::new(knn, None);
+            filtered
+                .inline_filtered(ifs.clone(), &mut neighbors)
+                .unwrap();
+
+            // We should not observe entries with odd 10s digits.
+            assert_eq!(neighbors[0].as_tuple(), (1, 0.0));
+            assert_eq!(neighbors[1].as_tuple(), (61, 2.0));
+            assert_eq!(neighbors[2].as_tuple(), (21, 4.0)); // This can be swapped with 3
+            assert_eq!(neighbors[3].as_tuple(), (101, 4.0));
+
+            // This is a bit sneaky.
+            //
+            // We mimic the case where a rerank style post-processing routine clears the
+            // internal buffer and leaves it that way.
+            //
+            // The `expand_beam` should handle this case properly.
+            filtered.accessor.search.buffer.clear();
+
+            // Try again, this time with mulit-hop filter.
+            neighbors.clear();
+            let mfs = MultihopFilterSearch::new(knn);
+            filtered.multihop_filtered(mfs, &mut neighbors).unwrap();
+
+            // We should not observe entries with odd 10s digits.
+            assert_eq!(neighbors[0].as_tuple(), (1, 0.0));
+            assert_eq!(neighbors[1].as_tuple(), (61, 2.0));
+            assert_eq!(neighbors[2].as_tuple(), (21, 4.0)); // This can be swapped with 3
+            assert_eq!(neighbors[3].as_tuple(), (101, 4.0));
+        }
+
         // If we run inplace delete on point 61, it longer be present.
         index
             .inplace_delete(
@@ -998,21 +1452,41 @@ mod tests {
         assert_eq!(neighbors[2].as_tuple(), (11, 1.0));
         assert_eq!(neighbors[3].as_tuple(), (101, 4.0)); // we can also accept "21"
 
-        // We can't insert an existing ID.
-        assert!(
+        // This insert fails because even though there is an empty slot, it cannot be
+        // reclaimed until the `scoped` is dropped.
+        //
+        // After this check, we free up these resources.
+        assert_contains!(
             index
                 .insert(&Strategy, &Context, &1, &[10.0, 10.0])
                 .await
-                .is_err()
+                .unwrap_err()
+                .to_string(),
+            "could not allocate a new slot",
+        );
+
+        drop(filtered);
+        drop(scoped);
+
+        // We can't insert an existing ID.
+        assert_contains!(
+            index
+                .insert(&Strategy, &Context, &1, &[10.0, 10.0])
+                .await
+                .unwrap_err()
+                .to_string(),
+            "external id is already mapped",
         );
 
         // If we insert a new ID but the query vector is too long - make sure we leave the
         // provider untouched.
-        assert!(
+        assert_contains!(
             index
                 .insert(&Strategy, &Context, &2, &[10.0, 10.0, 10.0])
                 .await
-                .is_err()
+                .unwrap_err()
+                .to_string(),
+            "expected slice of length 2",
         );
 
         // Check that we can reinsert the same point with a different ID and have it be
@@ -1042,5 +1516,13 @@ mod tests {
         assert_eq!(neighbors[1].as_tuple(), (11, 1.0)); // this can be swapped with 2
         assert_eq!(neighbors[2].as_tuple(), (51, 1.0));
         assert_eq!(neighbors[3].as_tuple(), (62, 2.0));
+
+        // Finally - test that we can create a crazy predicate for filtering that deletes
+        // all the external IDs as they are evaluated.
+        let scoped = super::scoped(&index).unwrap();
+        let _ = scoped.filtered(&[0.0, 0.0], |i| {
+            poll(index.provider().delete(&Context, i)).unwrap();
+            true
+        });
     }
 }

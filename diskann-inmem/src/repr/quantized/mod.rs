@@ -16,6 +16,7 @@ use thiserror::Error;
 
 use crate::{
     counters::LocalCounters,
+    epoch,
     num::{Bytes, Capacity, IdLimit, MaxDegree, Range},
     repr,
     store::{
@@ -591,10 +592,16 @@ impl Quantized {
         Ok(())
     }
 
+    /// Create the [`crate::provider::SearchAccessor`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if [`repr::ReadGuard`] is provided and wasn't obtained from `self.store`.
     fn create_accessor<'a>(
         &'a self,
         query: &'a [f32],
         provider: &'a (dyn std::any::Any + Send + Sync),
+        guard: Option<repr::ReadGuard<'a>>,
         counters: LocalCounters<'a>,
         args: AccessorArgs,
     ) -> ANNResult<crate::provider::SearchAccessor<'a>> {
@@ -614,7 +621,9 @@ impl Quantized {
             )));
         }
 
-        let (expand_beam, post_process) = self.store.guard(|cons, guard| -> ANNResult<_> {
+        let make_objects = |cons: &'a Cons<Intrusive, Optional<Simple>>,
+                            guard: epoch::Guard<'a>|
+         -> ANNResult<_> {
             // This will result in some wasted work if `expand_beam` errors, but that should
             // be a relatively rare occurrence.
             let rerank_if_enabled = !insert;
@@ -639,7 +648,13 @@ impl Quantized {
             )?;
 
             Ok((expand_beam, post_process))
-        })??;
+        };
+
+        // Use the provided guard if present.
+        let (expand_beam, post_process) = match guard {
+            Some(guard) => make_objects(self.store.slots(), guard.into_inner())?,
+            None => self.store.guard(make_objects)??,
+        };
 
         Ok(crate::provider::SearchAccessor::new(
             self.store.neighbors(),
@@ -697,9 +712,16 @@ impl repr::Search for Quantized {
         &'a self,
         query: &'a [f32],
         provider: &'a (dyn std::any::Any + Send + Sync),
+        guard: Option<repr::ReadGuard<'a>>,
         counters: LocalCounters<'a>,
     ) -> ANNResult<crate::provider::SearchAccessor<'a>> {
-        self.create_accessor(query, provider, counters, AccessorArgs { insert: false })
+        self.create_accessor(
+            query,
+            provider,
+            guard,
+            counters,
+            AccessorArgs { insert: false },
+        )
     }
 }
 
@@ -708,9 +730,16 @@ impl repr::Insert for Quantized {
         &'a self,
         query: Self::Query<'a>,
         provider: &'a (dyn std::any::Any + Send + Sync),
+        guard: Option<repr::ReadGuard<'a>>,
         counters: LocalCounters<'a>,
     ) -> ANNResult<crate::provider::SearchAccessor<'a>> {
-        self.create_accessor(query, provider, counters, AccessorArgs { insert: true })
+        self.create_accessor(
+            query,
+            provider,
+            guard,
+            counters,
+            AccessorArgs { insert: true },
+        )
     }
 
     fn prune_accessor<'a>(
@@ -1372,6 +1401,7 @@ mod tests {
                 quantized,
                 insert_vector.as_slice(),
                 &(),
+                None,
                 counters.local(),
             )
             .unwrap();
@@ -1398,6 +1428,7 @@ mod tests {
                 quantized,
                 query_vector.as_slice(),
                 &(),
+                None,
                 counters.local(),
             )
             .unwrap();
@@ -1639,8 +1670,8 @@ mod tests {
         let (quantized, _) = make_test_repr(Metric::SquaredL2, Rerank::None, false);
 
         let counters = Counters::new();
-        let err =
-            repr::Search::search_accessor(&quantized, &[1.0], &(), counters.local()).unwrap_err();
+        let err = repr::Search::search_accessor(&quantized, &[1.0], &(), None, counters.local())
+            .unwrap_err();
 
         assert_contains!(
             err.to_string(),

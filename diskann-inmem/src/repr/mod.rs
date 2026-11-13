@@ -28,6 +28,7 @@ use diskann::{ANNResult, neighbor::Neighbor};
 
 use crate::{
     counters::LocalCounters,
+    epoch,
     num::{Capacity, IdLimit, MaxDegree},
 };
 
@@ -98,6 +99,27 @@ pub trait Representation: Send + Sync + 'static {
     /// Return `true` if internal ID `i` is currently readable, returning `None` if `i`
     /// is outside `0..self.id_limit()`.
     fn is_readable(&self, i: u32) -> Option<bool>;
+
+    /// Protect the [`Representation`] against recycling IDs.
+    ///
+    /// Holding onto the resulting [`ReadGuard`] prevents ID reuse in the parent and thus
+    /// should be held for as short a duration as possible.
+    fn read_guard(&self) -> ANNResult<ReadGuard<'_>>;
+}
+
+#[derive(Debug)]
+pub struct ReadGuard<'a> {
+    guard: epoch::Guard<'a>,
+}
+
+impl<'a> ReadGuard<'a> {
+    pub(crate) fn new(guard: epoch::Guard<'a>) -> Self {
+        Self { guard }
+    }
+
+    pub(crate) fn into_inner(self) -> epoch::Guard<'a> {
+        self.guard
+    }
 }
 
 /// Attempt to write data into a [`Representation`].
@@ -140,11 +162,16 @@ pub trait Search: Representation {
     type Query<'a>;
 
     /// Construct a [`crate::provider::SearchAccessor`] for the query.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `ReadGuard` did not come from `self`.
     #[doc(hidden)]
     fn search_accessor<'a>(
         &'a self,
         query: Self::Query<'a>,
         provider: &'a (dyn std::any::Any + Send + Sync),
+        guard: Option<ReadGuard<'a>>,
         counters: LocalCounters<'a>,
     ) -> ANNResult<crate::provider::SearchAccessor<'a>>;
 }
@@ -154,14 +181,18 @@ pub trait Search: Representation {
 /// Note that the bounds for this trait are unnecessarily complicated, but require changes
 /// to [`diskann`] to fully resolve.
 pub trait Insert: Search + for<'a> Set<Self::Query<'a>> {
+    /// # Panics
+    ///
+    /// Panics if `ReadGuard` did not come from `self`.
     #[doc(hidden)]
     fn insert_search_accessor<'a>(
         &'a self,
         query: Self::Query<'a>,
         provider: &'a (dyn std::any::Any + Send + Sync),
+        guard: Option<ReadGuard<'a>>,
         counters: LocalCounters<'a>,
     ) -> ANNResult<crate::provider::SearchAccessor<'a>> {
-        self.search_accessor(query, provider, counters)
+        self.search_accessor(query, provider, guard, counters)
     }
 
     #[doc(hidden)]

@@ -31,6 +31,10 @@ macro_rules! representation {
             fn capacity(&self) -> Capacity {
                 self.capacity
             }
+
+            fn read_guard(&self) -> ANNResult<$crate::repr::ReadGuard<'_>> {
+                Ok($crate::repr::ReadGuard::new(self.store.guard(|_, g| g)?))
+            }
         }
     };
 }
