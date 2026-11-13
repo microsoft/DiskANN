@@ -27,62 +27,6 @@ use crate::{
     error::{ErrorKind, diskann_error},
 };
 
-// The disk pipeline already uses VectorRepr for conversion and distances.
-#[derive(Debug)]
-struct InputRows<'a, T: VectorRepr> {
-    data: diskann_utils::views::rowmajor::Ref<'a, T>,
-    dimensions: usize,
-    metric: diskann_vector::distance::Metric,
-    distance: T::Distance,
-}
-
-impl<'a, T: VectorRepr> InputRows<'a, T> {
-    fn new(
-        data: diskann_utils::views::rowmajor::Ref<'a, T>,
-        metric: diskann_vector::distance::Metric,
-    ) -> ANNResult<Self> {
-        // Medoid selection has already rejected an empty dataset.
-        let dimensions = T::full_dimension(data.row(0)).map_err(Into::<diskann::ANNError>::into)?;
-        Ok(Self {
-            distance: T::distance(metric, Some(data.ncols())),
-            data,
-            dimensions,
-            metric,
-        })
-    }
-}
-
-impl<T: VectorRepr> pipnn::Dataset for InputRows<'_, T> {
-    fn nrows(&self) -> usize {
-        self.data.nrows()
-    }
-    fn dimensions(&self) -> usize {
-        self.dimensions
-    }
-    fn metric(&self) -> diskann_vector::distance::Metric {
-        self.metric
-    }
-    fn gather(
-        &self,
-        ids: &[u32],
-        mut output: diskann_utils::views::rowmajor::Mut<'_, f32>,
-    ) -> ANNResult<()> {
-        use diskann_utils::views::rowmajor::MatrixMut;
-        for (&id, destination) in ids.iter().zip(output.rows_mut()) {
-            T::as_f32_into(self.data.row(id as usize), destination)
-                .map_err(Into::<diskann::ANNError>::into)?;
-        }
-        Ok(())
-    }
-    fn distance(&self, source: u32, target: u32) -> f32 {
-        use diskann_vector::DistanceFunction;
-        self.distance.evaluate_similarity(
-            self.data.row(source as usize),
-            self.data.row(target as usize),
-        )
-    }
-}
-
 /// Build the PiPNN graph of the dataset at `data_path` and write it to
 /// `save_path` as an in-memory index file.
 ///
@@ -96,7 +40,7 @@ pub(super) fn build_inmem_index<T, StorageProvider>(
     pool: RayonThreadPoolRef<'_>,
 ) -> ANNResult<()>
 where
-    T: VectorRepr,
+    T: VectorRepr + pipnn::Element,
     StorageProvider: StorageReadProvider + StorageWriteProvider,
 {
     let start_point =
@@ -124,7 +68,7 @@ fn build_graph<T, StorageProvider>(
     pool: RayonThreadPoolRef<'_>,
 ) -> ANNResult<Vec<AdjacencyList<u32>>>
 where
-    T: VectorRepr,
+    T: VectorRepr + pipnn::Element,
     StorageProvider: StorageReadProvider,
 {
     let data = read_bin::<T>(&mut storage_provider.open_reader(data_path)?)?;
@@ -140,7 +84,7 @@ where
             index_configuration.dim
         ));
     }
-    let rows = InputRows::new(data.as_view(), index_configuration.metric)?;
+    let rows = pipnn::Rows::new(data.as_view(), index_configuration.metric)?;
     pool.install(|| pipnn::build_graph(&rows, config))
 }
 

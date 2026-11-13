@@ -167,25 +167,20 @@ where
 #[cfg(feature = "pipnn")]
 impl<const NBITS: usize> diskann::graph::pipnn::Element for MinMaxElement<NBITS>
 where
-    InnerProduct: for<'a, 'b> PureDistanceFunction<
-            BitSlice<'a, NBITS, Unsigned>,
-            BitSlice<'b, NBITS, Unsigned>,
-            diskann_quantization::distances::MathematicalResult<u32>,
-        >,
-    Unsigned: Representation<NBITS>,
+    Self: VectorRepr,
 {
-    type Distance = FnPtr<Self>;
+    type Distance = <Self as VectorRepr>::Distance;
 
     fn dimensions(row: &[Self]) -> diskann::ANNResult<usize> {
-        Ok(Self::extract_dimension(row)?)
+        Self::full_dimension(row).map_err(Into::into)
     }
 
     fn convert(row: &[Self], output: &mut [f32]) -> diskann::ANNResult<()> {
-        Ok(<Self as VectorRepr>::as_f32_into(row, output)?)
+        Self::as_f32_into(row, output).map_err(Into::into)
     }
 
-    fn distance(metric: Metric, _ncols: usize) -> Self::Distance {
-        FnPtr::new(Self::distance_comparer(metric))
+    fn distance(metric: Metric, ncols: usize) -> Self::Distance {
+        <Self as VectorRepr>::distance(metric, Some(ncols))
     }
 }
 
