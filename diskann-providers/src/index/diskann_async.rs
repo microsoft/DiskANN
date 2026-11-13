@@ -94,8 +94,6 @@ pub type QuantMemoryIndex<T, Q, D = NoDeletes> = Arc<DiskANNIndex<FullPrecisionP
 
 pub type PQMemoryIndex<T, D = NoDeletes> = QuantMemoryIndex<T, DefaultQuant, D>;
 
-pub type QuantOnlyIndex<Q, D = NoDeletes> = DiskANNIndex<DefaultProvider<NoStore, Q, D>>;
-
 pub fn new_index<T, D>(
     config: Config,
     params: DefaultProviderParameters,
@@ -129,22 +127,6 @@ where
     Ok(Arc::new(DiskANNIndex::new(config, data_provider, None)))
 }
 
-pub fn new_quant_only_index<Q, D>(
-    config: Config,
-    params: DefaultProviderParameters,
-    quant: Q,
-    deleter: D,
-) -> ANNResult<QuantOnlyIndex<Q::Target, D::Target>>
-where
-    Q: CreateVectorStore,
-    Q::Target: AsyncFriendly,
-    D: CreateDeleteProvider,
-    D::Target: AsyncFriendly,
-{
-    let data = DefaultProvider::new_empty(params, NoStore, quant, deleter)?;
-    Ok(DiskANNIndex::new(config, data, None))
-}
-
 ///////////
 // Tests //
 ///////////
@@ -158,7 +140,6 @@ pub(crate) mod tests {
     };
 
     use crate::storage::VirtualStorageProvider;
-    use approx::assert_abs_diff_eq;
     use diskann::graph::test::synthetic::Grid;
     use diskann::{
         graph::{
@@ -1398,7 +1379,6 @@ pub(crate) mod tests {
     }
 
     const SIFTSMALL: &str = "/sift/siftsmall_learn_256pts.fbin";
-    const SIFTSMALL_NORMALIZED: &str = "/sift/siftsmall_learn_256pts_normalized.fbin";
 
     #[rstest]
     #[tokio::test]
@@ -1754,95 +1734,6 @@ pub(crate) mod tests {
     scalar_quant_test!(test_sift_build_and_search_scalar_q_8bit, 8, 20);
     scalar_quant_test!(test_sift_build_and_search_scalar_q_7bit, 7, 20);
 
-    macro_rules! scalar_only_test {
-        ($name:ident, $nbits:literal) => {
-            #[tokio::test]
-            async fn $name() {
-                let ctx = &DefaultContext;
-                let parameters = InitParams {
-                    l_build: 64,
-                    max_degree: 16,
-                    metric: Metric::L2,
-                    batchsize: NonZeroUsize::new(1).unwrap(),
-                };
-
-                let create_fn = |data: Arc<rowmajor::Owned<f32>>, start_point: &[f32]| {
-                    let quantizer = ScalarQuantizationParameters::default().train(data.as_view());
-                    let (config, params) =
-                        parameters.materialize(data.nrows(), data.ncols()).unwrap();
-                    let index = Arc::new(
-                        new_quant_only_index(
-                            config,
-                            params,
-                            inmem::WithBits::<$nbits>::new(quantizer),
-                            NoDeletes,
-                        )
-                        .unwrap(),
-                    );
-                    index
-                        .provider()
-                        .set_start_points(std::iter::once(start_point))
-                        .unwrap();
-                    index
-                };
-                let (index, data) =
-                    init_and_build_index_from_file(SIFTSMALL, create_fn, build_using_single_insert)
-                        .await;
-
-                let neighbor_accessor = &mut index.provider().neighbors();
-                // There should be one more reachable node than points in the dataset to account for
-                // the start point.
-                assert_eq!(
-                    index
-                        .count_reachable_nodes(
-                            &index.provider().starting_points().unwrap(),
-                            neighbor_accessor
-                        )
-                        .await
-                        .unwrap(),
-                    data.nrows() + 1,
-                );
-
-                let top_k = 10;
-                let mut ids = vec![0; top_k];
-                let mut distances = vec![0.0; top_k];
-
-                // Here, we use elements of the dataset to search the dataset itself.
-                //
-                // We do this for each query, computing the expected ground truth and verifying
-                // that our simple graph search matches.
-                //
-                // Because this dataset is small, we can expect exact equality.
-                for (q, query) in data.rows().enumerate() {
-                    {
-                        let mut result_output_buffer =
-                            search_output_buffer::IdDistance::new(&mut ids, &mut distances);
-                        let graph_search = graph::search::Knn::new_default(top_k).unwrap();
-                        // Quantized Search
-                        index
-                            .search(
-                                graph_search,
-                                &Quantized,
-                                ctx,
-                                query,
-                                &mut result_output_buffer,
-                            )
-                            .await
-                            .unwrap();
-                    }
-
-                    // Easy assert as there is no reranking for this small(100) dim data.
-                    assert!(ids.contains(&(q as u32)));
-                }
-            }
-        };
-    }
-
-    scalar_only_test!(test_sift_quant_only_build_and_search_scalar_1bit, 1);
-    scalar_only_test!(test_sift_quant_only_build_and_search_scalar_4bit, 4);
-    scalar_only_test!(test_sift_quant_only_build_and_search_scalar_8bit, 8);
-    scalar_only_test!(test_sift_quant_only_build_and_search_scalar_7bit, 7);
-
     //////////////////////////////
     // Spherical Build & Search //
     //////////////////////////////
@@ -1961,199 +1852,6 @@ pub(crate) mod tests {
             accessor.computer().layout(),
             diskann_quantization::spherical::iface::QueryLayout::SameAsData
         );
-    }
-
-    ///////////////////////////////////
-    // Spherical only Build & Search //
-    ///////////////////////////////////
-
-    #[tokio::test]
-    async fn test_sift_spherical_only_build_and_search_() {
-        let ctx = &DefaultContext;
-        let rng = &mut create_rnd_from_seed_in_tests(0x56870bccb0c44b66);
-
-        let create_fn = |data: Arc<rowmajor::Owned<f32>>, start_points: &[f32]| {
-            let quantizer = diskann_quantization::spherical::SphericalQuantizer::train(
-                data.as_view(),
-                diskann_quantization::algorithms::transforms::TransformKind::PaddingHadamard {
-                    target_dim: diskann_quantization::algorithms::transforms::TargetDim::Natural,
-                },
-                Metric::L2.try_into().unwrap(),
-                diskann_quantization::spherical::PreScale::ReciprocalMeanNorm,
-                rng,
-                diskann_quantization::alloc::GlobalAllocator,
-            )
-            .unwrap();
-
-            let (config, params) =
-                simplified_builder(64, 16, Metric::L2, data.ncols(), data.nrows(), no_modify)
-                    .unwrap();
-
-            let index = new_quant_only_index(
-                config,
-                params,
-                diskann_quantization::spherical::iface::Impl::<1>::new(quantizer).unwrap(),
-                NoDeletes,
-            )
-            .unwrap();
-            index
-                .provider()
-                .set_start_points(std::iter::once(start_points))
-                .unwrap();
-            Arc::new(index)
-        };
-
-        let build_fn = async |index: Arc<DiskANNIndex<_>>, data: Arc<rowmajor::Owned<f32>>| {
-            let ctx = &DefaultContext;
-            let strategy = inmem::spherical::Quantized::build();
-            for (i, vector) in data.rows().enumerate() {
-                index
-                    .insert(&strategy, ctx, &(i as u32), vector)
-                    .await
-                    .unwrap()
-            }
-        };
-
-        let (index, data) = init_and_build_index_from_file(SIFTSMALL, create_fn, build_fn).await;
-
-        let neighbor_accessor = &mut index.provider().neighbors();
-        // There should be one more reachable node than points in the dataset to account for
-        // the start point.
-        assert_eq!(
-            index
-                .count_reachable_nodes(
-                    &index.provider().starting_points().unwrap(),
-                    neighbor_accessor
-                )
-                .await
-                .unwrap(),
-            data.nrows() + 1,
-        );
-
-        let top_k = 5;
-        let search_l = 80;
-        let mut ids = vec![0; top_k];
-        let mut distances = vec![0.0; top_k];
-
-        // Here, we use elements of the dataset to search the dataset itself.
-        //
-        // We do this for each query, computing the expected ground truth and verifying
-        // that our simple graph search matches.
-        //
-        // Because this dataset is small, we can expect exact equality.
-        for (q, query) in data.rows().enumerate() {
-            // Quantized Search
-            let mut output = search_output_buffer::IdDistance::new(&mut ids, &mut distances);
-            let strategy = inmem::spherical::Quantized::search(
-                diskann_quantization::spherical::iface::QueryLayout::FourBitTransposed,
-            );
-            let graph_search = graph::search::Knn::new_default(search_l).unwrap();
-
-            index
-                .search(graph_search, &strategy, ctx, query, &mut output)
-                .await
-                .unwrap();
-
-            // Easy assert as there is no reranking for this small(100) dim data.
-            assert!(ids.contains(&(q as u32)));
-        }
-
-        // Ensure that the query computer used for insertion uses the `SameAsData` layout.
-        let strategy = inmem::spherical::Quantized::build();
-        let accessor =
-            <inmem::spherical::Quantized as InsertStrategy<
-                DefaultProvider<NoStore, inmem::spherical::SphericalStore>,
-                &[f32],
-            >>::insert_search_accessor(&strategy, index.provider(), ctx, data.row(0))
-            .unwrap();
-        assert_eq!(
-            accessor.computer().layout(),
-            diskann_quantization::spherical::iface::QueryLayout::SameAsData
-        );
-    }
-
-    //////////////////////////////
-    /// PQ only Build & Search ///
-    //////////////////////////////
-
-    #[rstest]
-    #[case(Metric::L2, SIFTSMALL)]
-    #[case(Metric::CosineNormalized, SIFTSMALL_NORMALIZED)]
-    #[tokio::test]
-    async fn test_sift_pq_only_build_and_search(#[case] metric: Metric, #[case] file: &str) {
-        let ctx = &DefaultContext;
-        let create_fn = |data: Arc<rowmajor::Owned<f32>>, start_points: &[f32]| {
-            let pq_table = train_pq(
-                data.as_view(),
-                32,
-                &mut create_rnd_from_seed_in_tests(0xe3c52ef001bc7ade),
-                crate::utils::create_thread_pool(1).unwrap().as_ref(),
-            )
-            .unwrap();
-
-            let (config, parameters) =
-                simplified_builder(64, 16, metric, data.ncols(), data.nrows(), no_modify).unwrap();
-
-            let index =
-                Arc::new(new_quant_only_index(config, parameters, pq_table, NoDeletes).unwrap());
-            index
-                .provider()
-                .set_start_points(std::iter::once(start_points))
-                .unwrap();
-            index
-        };
-        let (index, data) =
-            init_and_build_index_from_file(file, create_fn, build_using_single_insert).await;
-
-        let neighbor_accessor = &mut index.provider().neighbors();
-        // There should be one more reachable node than points in the dataset to account for
-        // the start point.
-        assert_eq!(
-            index
-                .count_reachable_nodes(
-                    &index.provider().starting_points().unwrap(),
-                    neighbor_accessor
-                )
-                .await
-                .unwrap(),
-            data.nrows() + 1,
-        );
-
-        let top_k = 10;
-        let search_l = 32;
-        let mut ids = vec![0; top_k];
-        let mut distances = vec![0.0; top_k];
-
-        // Here, we use elements of the dataset to search the dataset itself.
-        //
-        // We do this for each query, computing the expected ground truth and verifying
-        // that our simple graph search matches.
-        //
-        // Because this dataset is small, we can expect exact equality.
-        for (q, query) in data.rows().enumerate() {
-            let gt = groundtruth(data.as_view(), query, |a, b| SquaredL2::evaluate(a, b));
-
-            let mut result_output_buffer =
-                search_output_buffer::IdDistance::new(&mut ids, &mut distances);
-            let graph_search = graph::search::Knn::new_default(search_l).unwrap();
-            // Full Precision Search.
-            index
-                .search(
-                    graph_search,
-                    &Quantized,
-                    ctx,
-                    query,
-                    &mut result_output_buffer,
-                )
-                .await
-                .unwrap();
-
-            for i in 0..top_k {
-                let expected = gt[gt.len() - 1 - i];
-                assert_eq!(*expected.id(), ids[i], "failed on query {q} for result {i}");
-                assert_abs_diff_eq!(*expected.distance(), distances[i], epsilon = 1.0e-5);
-            }
-        }
     }
 
     async fn check_graph_for_self_loops_or_duplicates<NA, Itr>(accessor: &mut NA, itr: Itr)

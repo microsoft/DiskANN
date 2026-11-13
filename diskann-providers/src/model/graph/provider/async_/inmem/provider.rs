@@ -26,7 +26,7 @@ use crate::{
             SetElementHelper, VectorStore,
         },
     },
-    storage::{AsyncIndexMetadata, AsyncQuantLoadContext, DiskGraphOnly, LoadWith, SaveWith},
+    storage::{AsyncIndexMetadata, AsyncQuantLoadContext, LoadWith, SaveWith},
 };
 
 /////////////////////
@@ -369,20 +369,6 @@ impl<U, V, Ctx> DefaultProvider<U, V, TableDeleteProviderAsync, Ctx> {
     }
 }
 
-impl<U, V, D, Ctx> DefaultProvider<U, V, D, Ctx>
-where
-    U: VectorStore,
-    V: VectorStore,
-{
-    /// Return the number of vector reads for base vector and aux vector stores respectively.
-    pub fn counts_for_get_vector(&self) -> (usize, usize) {
-        (
-            self.base_vectors.count_for_get_vector(),
-            self.aux_vectors.count_for_get_vector(),
-        )
-    }
-}
-
 pub trait SetStartPoints<T>
 where
     T: ?Sized + 'static,
@@ -448,31 +434,6 @@ where
     {
         self.base_vectors.save_with(provider, &auxiliary.1).await?;
         self.aux_vectors.save_with(provider, &auxiliary.1).await?;
-        self.neighbor_provider
-            .save_with(provider, auxiliary)
-            .await?;
-        Ok(())
-    }
-}
-
-impl<U, V, D, Ctx> SaveWith<(u32, u32, DiskGraphOnly)> for DefaultProvider<U, V, D, Ctx>
-where
-    U: AsyncFriendly,
-    V: AsyncFriendly,
-    D: AsyncFriendly,
-    Ctx: ExecutionContext,
-{
-    type Ok = ();
-    type Error = ANNError;
-
-    async fn save_with<P>(
-        &self,
-        provider: &P,
-        auxiliary: &(u32, u32, DiskGraphOnly),
-    ) -> Result<Self::Ok, Self::Error>
-    where
-        P: StorageWriteProvider,
-    {
         self.neighbor_provider
             .save_with(provider, auxiliary)
             .await?;

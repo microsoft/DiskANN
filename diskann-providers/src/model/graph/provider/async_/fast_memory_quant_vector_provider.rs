@@ -335,10 +335,7 @@ impl LoadWith<AsyncQuantLoadContext> for FastMemoryQuantVectorProviderAsync {
     where
         P: StorageReadProvider,
     {
-        let names = match ctx.is_disk_index {
-            true => PQPathNames::for_disk_index(ctx.metadata.prefix()),
-            false => PQPathNames::new(ctx.metadata.prefix()),
-        };
+        let names = PQPathNames::new(ctx.metadata.prefix());
         Self::load_direct(provider, &names.pivots, &names.compressed_data, ctx.metric)
     }
 }
@@ -589,7 +586,6 @@ mod tests {
             num_frozen_points: ONE, // Don't care for this vector store.
             metric: provider.metric,
             prefetch_lookahead: None,
-            is_disk_index: false,
             prefetch_cache_line_level: None,
         };
 

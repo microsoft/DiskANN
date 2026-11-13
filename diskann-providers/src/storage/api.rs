@@ -101,31 +101,6 @@ impl AsyncIndexMetadata {
     }
 }
 
-/// The file-path prefix for saving only graph data during disk index construction.
-///
-/// An auxiliary type for [`SaveWith`] to specify graph-only serialization.
-#[derive(Debug, Clone)]
-pub struct DiskGraphOnly {
-    prefix: String,
-}
-
-impl DiskGraphOnly {
-    /// Constructs a new `DiskGraphOnly` from a path-like object.
-    pub fn new<T>(pathlike: T) -> Self
-    where
-        String: From<T>,
-    {
-        Self {
-            prefix: pathlike.into(),
-        }
-    }
-
-    /// Return the file path contained in `self` as a `&str`.
-    pub fn prefix(&self) -> &str {
-        &self.prefix
-    }
-}
-
 /// Indicates that the canonical layout for a Quant index is expected for deserialization.
 ///
 /// For a file-path prefix `prefix`, this layout includes the following files:
@@ -152,9 +127,6 @@ pub struct AsyncQuantLoadContext {
     pub metric: Metric,
     /// The number of iterations to prefetch when performing bulk-retrievals.
     pub prefetch_lookahead: Option<usize>,
-    /// Temporary parameter to indicate if the index is a disk index to load right file names.
-    /// This can be removed once disk index uses same file names as async index.
-    pub is_disk_index: bool,
     /// controls the prefetch cache line level for the index.
     pub prefetch_cache_line_level: Option<PrefetchCacheLineLevel>,
 }

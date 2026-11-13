@@ -89,35 +89,3 @@ where
         self.delete(item_identifier)
     }
 }
-
-/// Adapter that exposes a `&dyn DynWriteProvider` as a `StorageWriteProvider`.
-///
-/// Useful when an API is generic over `StorageWriteProvider` but the caller only has a dynamic
-/// provider. The wrapper forwards all calls to the inner provider and returns boxed writers
-/// tied to the wrapper lifetime `'a`.
-pub struct WriteProviderWrapper<'a> {
-    inner: &'a dyn DynWriteProvider,
-}
-
-impl<'a> WriteProviderWrapper<'a> {
-    /// Construct a new wrapper around the given dynamic provider reference.
-    pub const fn new(inner: &'a dyn DynWriteProvider) -> Self {
-        Self { inner }
-    }
-}
-
-impl<'a> StorageWriteProvider for WriteProviderWrapper<'a> {
-    type Writer = Box<dyn WriteSeek + 'a>;
-
-    fn open_writer(&self, item_identifier: &str) -> std::io::Result<Self::Writer> {
-        self.inner.open_writer(item_identifier)
-    }
-
-    fn create_for_write(&self, item_identifier: &str) -> std::io::Result<Self::Writer> {
-        self.inner.create_for_write(item_identifier)
-    }
-
-    fn delete(&self, item_identifier: &str) -> std::io::Result<()> {
-        self.inner.delete(item_identifier)
-    }
-}

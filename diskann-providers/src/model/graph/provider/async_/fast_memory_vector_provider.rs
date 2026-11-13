@@ -496,7 +496,6 @@ mod tests {
             num_frozen_points: NonZeroUsize::new(5).unwrap(), // Don't care for this vector store.
             metric: Metric::L2,
             prefetch_lookahead: None,
-            is_disk_index: false,
             prefetch_cache_line_level: None,
         };
 
