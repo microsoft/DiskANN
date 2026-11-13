@@ -31,8 +31,9 @@ use crate::{
 /// Two-phase filtered graph search for an in-memory index.
 ///
 /// Until `L` matching results have been found, all direct neighbors can be
-/// scored and up to one graph degree of second-order adjacency entries are
-/// examined for matching points. Once the result heap is full, second-order
+/// scored and second-order expansion stops after a bounded number of filter
+/// matches. Every second-order neighbor examined before that limit is marked
+/// visited, including those that do not match. Once the result heap is full, second-order
 /// expansion stops. Direct neighbors of a rejected candidate are prefiltered;
 /// direct neighbors of an accepted candidate remain distance-first.
 ///
@@ -87,7 +88,11 @@ fn admit<I: VectorId>(
     candidates: &mut BinaryHeap<Reverse<Scored<I>>>,
     results: &mut BinaryHeap<Scored<I>>,
 ) {
-    if results.len() == l && point.distance >= results.peek().unwrap().distance {
+    if results.len() == l
+        && results
+            .peek()
+            .is_some_and(|worst| point.distance >= worst.distance)
+    {
         return;
     }
     candidates.push(Reverse(point));
@@ -104,6 +109,8 @@ fn admit<I: VectorId>(
 struct SelectedNotVisited<'a, I> {
     selected: &'a HashSet<I>,
     visited: &'a mut HashSet<I>,
+    matched: &'a mut Vec<I>,
+    limit: usize,
 }
 
 impl<I: VectorId> glue::Predicate<I> for SelectedNotVisited<'_, I> {
@@ -114,7 +121,11 @@ impl<I: VectorId> glue::Predicate<I> for SelectedNotVisited<'_, I> {
 
 impl<I: VectorId> glue::PredicateMut<glue::Accept<I>> for SelectedNotVisited<'_, I> {
     fn eval_mut(&mut self, id: &glue::Accept<I>) -> bool {
-        self.selected.contains(id.get()) && self.visited.insert(*id.get())
+        if !self.selected.contains(id.get()) || self.matched.len() >= self.limit {
+            return false;
+        }
+        self.matched.push(*id.get());
+        self.visited.insert(*id.get())
     }
 }
 
@@ -163,15 +174,21 @@ where
                 admit(point, l, &mut candidates, &mut results);
             }
             let budget = index.max_degree_with_slack();
+            let second_order_limit = (budget as f64).ln().round().max(1.0) as usize;
             let mut direct = AdjacencyList::with_capacity(budget);
             let mut second = AdjacencyList::with_capacity(budget);
             let mut scored = Vec::with_capacity(budget * 2);
+            let mut matched_second = Vec::with_capacity(second_order_limit);
 
             while let Some(Reverse(candidate)) = candidates.pop() {
                 if accessor.terminate_early() {
                     break;
                 }
-                if results.len() == l && candidate.distance > results.peek().unwrap().distance {
+                if results.len() == l
+                    && results
+                        .peek()
+                        .is_some_and(|worst| candidate.distance > worst.distance)
+                {
                     break;
                 }
                 let phase_two = results.len() == l;
@@ -218,7 +235,7 @@ where
                 }
 
                 if !phase_two {
-                    let mut remaining = budget;
+                    let mut remaining = second_order_limit;
                     for &parent in direct.iter() {
                         if remaining == 0 || accessor.terminate_early() {
                             break;
@@ -227,9 +244,8 @@ where
                             .data_provider
                             .pathseer_neighbors(parent, &mut second)?;
                         scratch.hops += 1;
-                        let count = remaining.min(second.len());
-                        remaining -= count;
-                        let selected: HashSet<_> = second.iter().take(count).copied().collect();
+                        let selected: HashSet<_> = second.iter().copied().collect();
+                        matched_second.clear();
                         scored.clear();
                         accessor
                             .expand_beam_accept_only(
@@ -237,6 +253,8 @@ where
                                 SelectedNotVisited {
                                     selected: &selected,
                                     visited: &mut scratch.visited,
+                                    matched: &mut matched_second,
+                                    limit: remaining,
                                 },
                                 |id, distance| {
                                     scored.push(Scored {
@@ -247,6 +265,20 @@ where
                                 },
                             )
                             .await?;
+                        // The accessor reports matching IDs only. Walk the same graph
+                        // order to mark rejected IDs up to the matching budget.
+                        let mut matched = matched_second.iter();
+                        let mut next_match = matched.next();
+                        for &id in second.iter() {
+                            scratch.visited.insert(id);
+                            if next_match == Some(&id) {
+                                remaining -= 1;
+                                next_match = matched.next();
+                                if remaining == 0 {
+                                    break;
+                                }
+                            }
+                        }
                         scratch.cmps += scored.len() as u32;
                         for point in scored.drain(..) {
                             admit(point, l, &mut candidates, &mut results);
