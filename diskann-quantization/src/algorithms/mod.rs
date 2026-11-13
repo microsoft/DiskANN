@@ -3,6 +3,7 @@
  * Licensed under the MIT license.
  */
 
+pub mod emeans;
 mod hadamard;
 pub mod heap;
 pub mod kmeans;
