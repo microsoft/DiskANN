@@ -12,6 +12,7 @@ mod flat;
 mod index;
 mod inputs;
 mod multi_vector;
+mod neighbor_queue;
 mod utils;
 
 use diskann_benchmark_runner as runner;
@@ -57,6 +58,7 @@ impl Cli {
         index::register_benchmarks(&mut registry)?;
         filters::register_benchmarks(&mut registry)?;
         multi_vector::register_benchmarks(&mut registry)?;
+        neighbor_queue::register_benchmarks(&mut registry)?;
 
         self.app.run(&registry, output)
     }
