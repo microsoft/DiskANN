@@ -1980,11 +1980,8 @@ where
                 //
                 // We insert into the priority queue outside of the expansion for
                 // code-locality purposes.
-                neighbors
-                    .iter()
-                    .for_each(|neighbor| scratch.best.insert(*neighbor));
-
                 scratch.cmps += neighbors.len() as u32;
+                scratch.best.batch_insert(&mut neighbors);
                 scratch.hops += scratch.beam_nodes.len() as u32;
             }
 
