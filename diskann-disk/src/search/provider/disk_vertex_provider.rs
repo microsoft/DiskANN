@@ -349,8 +349,7 @@ mod disk_vertex_provider_tests {
                 storage_provider,
                 DiskIndexBuildConfig::from((config, disk_index_build_parameters)),
                 disk_index_writer,
-            )
-            .unwrap();
+            );
 
         let mem_index_file_path = format!("{}_mem.index.data", index_path_prefix);
         let mem_index_associated_data_path =

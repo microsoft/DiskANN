@@ -310,7 +310,7 @@ mod disk_index_build_tests {
                     params.associated_data_path.clone(),
                     params.block_size,
                 )?;
-                DiskIndexBuilder::<GraphDataMinMaxVectorUnitData, _>::new(storage, config, writer)?
+                DiskIndexBuilder::<GraphDataMinMaxVectorUnitData, _>::new(storage, config, writer)
                     .build()
             },
         );

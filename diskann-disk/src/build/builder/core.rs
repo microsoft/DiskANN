@@ -726,7 +726,7 @@ pub(crate) mod disk_index_builder_tests {
                 self.storage_provider.as_ref(),
                 DiskIndexBuildConfig::from((config, disk_index_build_parameters)),
                 disk_index_writer,
-            )?;
+            );
 
             let timer = Instant::now();
             disk_index.build()?;
@@ -937,7 +937,8 @@ pub(crate) mod disk_index_builder_tests {
             128,  // num_pq_chunks
             &storage_provider,
             build_quantization_type,
-        );
+        )
+        .and_then(|mut builder| builder.build());
 
         let err = disk_index_builder.err().unwrap();
         assert!(err.to_string().contains(error_message));
@@ -1154,11 +1155,14 @@ pub(crate) mod disk_index_builder_tests {
             DEFAULT_DISK_SECTOR_LEN,
         )?;
 
-        DiskIndexBuilder::<GraphDataF32VectorUnitData, VirtualStorageProvider<OverlayFS>>::new(
+        Ok(DiskIndexBuilder::<
+            GraphDataF32VectorUnitData,
+            VirtualStorageProvider<OverlayFS>,
+        >::new(
             storage_provider,
             DiskIndexBuildConfig::from((index_configuration, build_parameters)),
             disk_index_writer,
-        )
+        ))
     }
 }
 

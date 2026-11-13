@@ -123,7 +123,7 @@ where
         storage_provider,
         DiskIndexBuildConfig::from((index_configuration, build_parameters)),
         disk_index_writer,
-    )?;
+    );
 
     let span = {
         let tracer = opentelemetry::global::tracer("benchmark");
