@@ -2,6 +2,10 @@
  * Copyright (c) Microsoft Corporation.
  * Licensed under the MIT license.
  */
+mod disk_index_build_config;
+pub(crate) use disk_index_build_config::BuildParameters;
+pub use disk_index_build_config::DiskIndexBuildConfig;
+
 pub mod disk_index_build_parameter;
 pub use disk_index_build_parameter::{DiskIndexBuildParameters, MemoryBudget, NumPQChunks};
 

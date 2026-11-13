@@ -282,7 +282,7 @@ mod disk_vertex_provider_tests {
 
     use crate::{
         QuantizationType,
-        build::builder::build::DiskIndexBuilder,
+        build::{builder::build::DiskIndexBuilder, configuration::DiskIndexBuildConfig},
         data_model::{CachingStrategy, GraphHeader},
         disk_index_build_parameter::{
             DISK_SECTOR_LEN, DiskIndexBuildParameters, MemoryBudget, NumPQChunks,
@@ -347,8 +347,10 @@ mod disk_vertex_provider_tests {
         let mut disk_index: DiskIndexBuilder<GraphDataF32VectorU32Data, StorageProviderType> =
             DiskIndexBuilder::<GraphDataF32VectorU32Data, StorageProviderType>::new(
                 storage_provider,
-                disk_index_build_parameters,
-                config,
+                DiskIndexBuildConfig::Vamana {
+                    index: config,
+                    parameters: disk_index_build_parameters,
+                },
                 disk_index_writer,
             )
             .unwrap();

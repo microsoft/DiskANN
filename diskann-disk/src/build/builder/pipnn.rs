@@ -16,21 +16,79 @@ use diskann::{
     utils::VectorRepr,
 };
 use diskann_providers::{
-    model::IndexConfiguration,
     storage::{StorageReadProvider, StorageWriteProvider},
     utils::RayonThreadPoolRef,
 };
 use diskann_utils::{io::read_bin, views::rowmajor::Matrix};
 
 use super::build::start_point_from_medoid;
-use crate::error::{ErrorKind, diskann_error};
+use crate::{
+    build::configuration::BuildParameters,
+    error::{ErrorKind, diskann_error},
+};
+
+// The disk pipeline already uses VectorRepr for conversion and distances.
+#[derive(Debug)]
+struct InputRows<'a, T: VectorRepr> {
+    data: diskann_utils::views::rowmajor::Ref<'a, T>,
+    dimensions: usize,
+    metric: diskann_vector::distance::Metric,
+    distance: T::Distance,
+}
+
+impl<'a, T: VectorRepr> InputRows<'a, T> {
+    fn new(
+        data: diskann_utils::views::rowmajor::Ref<'a, T>,
+        metric: diskann_vector::distance::Metric,
+    ) -> ANNResult<Self> {
+        // Medoid selection has already rejected an empty dataset.
+        let dimensions = T::full_dimension(data.row(0)).map_err(Into::<diskann::ANNError>::into)?;
+        Ok(Self {
+            distance: T::distance(metric, Some(data.ncols())),
+            data,
+            dimensions,
+            metric,
+        })
+    }
+}
+
+impl<T: VectorRepr> pipnn::Dataset for InputRows<'_, T> {
+    fn nrows(&self) -> usize {
+        self.data.nrows()
+    }
+    fn dimensions(&self) -> usize {
+        self.dimensions
+    }
+    fn metric(&self) -> diskann_vector::distance::Metric {
+        self.metric
+    }
+    fn gather(
+        &self,
+        ids: &[u32],
+        mut output: diskann_utils::views::rowmajor::Mut<'_, f32>,
+    ) -> ANNResult<()> {
+        use diskann_utils::views::rowmajor::MatrixMut;
+        for (&id, destination) in ids.iter().zip(output.rows_mut()) {
+            T::as_f32_into(self.data.row(id as usize), destination)
+                .map_err(Into::<diskann::ANNError>::into)?;
+        }
+        Ok(())
+    }
+    fn distance(&self, source: u32, target: u32) -> f32 {
+        use diskann_vector::DistanceFunction;
+        self.distance.evaluate_similarity(
+            self.data.row(source as usize),
+            self.data.row(target as usize),
+        )
+    }
+}
 
 /// Build the PiPNN graph of the dataset at `data_path` and write it to
 /// `save_path` as an in-memory index file.
 ///
 /// The start point is the medoid of a storage sample, as in the Vamana build.
 pub(super) fn build_inmem_index<T, StorageProvider>(
-    index_configuration: &IndexConfiguration,
+    index_configuration: &BuildParameters,
     config: &pipnn::Config,
     data_path: &str,
     save_path: &str,
@@ -38,15 +96,12 @@ pub(super) fn build_inmem_index<T, StorageProvider>(
     pool: RayonThreadPoolRef<'_>,
 ) -> ANNResult<()>
 where
-    T: VectorRepr + pipnn::Element,
+    T: VectorRepr,
     StorageProvider: StorageReadProvider + StorageWriteProvider,
 {
-    let start_point = start_point_from_medoid::<T, _>(
-        data_path,
-        index_configuration.random_seed,
-        storage_provider,
-    )?
-    .id();
+    let start_point =
+        start_point_from_medoid::<T, _>(data_path, index_configuration.seed, storage_provider)?
+            .id();
     let graph = build_graph::<T, _>(
         index_configuration,
         config,
@@ -62,30 +117,30 @@ where
 /// The dataset is dropped on return, so only the graph stays in memory while
 /// it is written.
 fn build_graph<T, StorageProvider>(
-    index_configuration: &IndexConfiguration,
+    index_configuration: &BuildParameters,
     config: &pipnn::Config,
     data_path: &str,
     storage_provider: &StorageProvider,
     pool: RayonThreadPoolRef<'_>,
 ) -> ANNResult<Vec<AdjacencyList<u32>>>
 where
-    T: VectorRepr + pipnn::Element,
+    T: VectorRepr,
     StorageProvider: StorageReadProvider,
 {
     let data = read_bin::<T>(&mut storage_provider.open_reader(data_path)?)?;
     // PiPNN builds one graph row for each dataset row. The other build steps
     // size their work by the index configuration, so the shapes must agree.
     let (points, dimensions) = (data.nrows(), data.ncols());
-    if (points, dimensions) != (index_configuration.max_points, index_configuration.dim) {
+    if (points, dimensions) != (index_configuration.num_points, index_configuration.dim) {
         return Err(diskann_error!(
             ErrorKind::IndexError,
             "the dataset has {points} points of {dimensions} dimensions, but the index \
              configuration has {} points of {} dimensions",
-            index_configuration.max_points,
+            index_configuration.num_points,
             index_configuration.dim
         ));
     }
-    let rows = pipnn::Rows::new(data.as_view(), index_configuration.dist_metric)?;
+    let rows = InputRows::new(data.as_view(), index_configuration.metric)?;
     pool.install(|| pipnn::build_graph(&rows, config))
 }
 
@@ -138,41 +193,34 @@ where
 
 #[cfg(test)]
 mod tests {
-    use diskann::{graph::config, utils::ONE};
     use diskann_providers::{storage::VirtualStorageProvider, utils::create_thread_pool};
     use diskann_utils::{io::write_bin, views::rowmajor};
     use diskann_vector::distance::Metric;
+    use rstest::rstest;
     use vfs::MemoryFS;
 
     use super::*;
-    use crate::{
-        DiskIndexBuildParameters, QuantizationType,
-        build::builder::build::DiskIndexBuilder,
-        data_model::AdHoc,
-        disk_index_build_parameter::{MemoryBudget, NumPQChunks},
-        storage::DiskIndexWriter,
-    };
+    use crate::build::configuration::NumPQChunks;
 
     const DATA: &str = "/data.fbin";
     const GRAPH: &str = "/graph";
     const DEGREE: usize = 32;
     const SEED: u64 = 42;
 
-    fn index_configuration(points: usize, dimensions: usize) -> IndexConfiguration {
-        let graph = config::Builder::new(
-            DEGREE,
-            config::MaxDegree::default_slack(),
-            50,
-            Metric::L2.into(),
-        )
-        .build()
-        .unwrap();
-        IndexConfiguration::new(Metric::L2, dimensions, points, ONE, 1, graph)
-            .with_pseudo_rng_from_seed(SEED)
+    fn common_configuration(points: usize, dimensions: usize) -> BuildParameters {
+        BuildParameters {
+            metric: Metric::L2,
+            dim: dimensions,
+            num_points: points,
+            num_threads: 1,
+            search_pq_chunks: NumPQChunks::new_with(1, dimensions).unwrap(),
+            compression_chunk_vector_count: 1,
+            seed: Some(SEED),
+        }
     }
 
-    fn pipnn_config(index_configuration: &IndexConfiguration) -> pipnn::Config {
-        pipnn::Builder::from_graph(&index_configuration.config)
+    fn pipnn_config() -> pipnn::Config {
+        pipnn::Config::builder(std::num::NonZeroUsize::new(DEGREE).unwrap())
             .seed(SEED)
             .build()
             .unwrap()
@@ -193,12 +241,12 @@ mod tests {
 
     fn build(
         storage: &VirtualStorageProvider<MemoryFS>,
-        index_configuration: &IndexConfiguration,
+        index_configuration: &BuildParameters,
     ) -> ANNResult<()> {
         let pool = create_thread_pool(1)?;
         build_inmem_index::<f32, _>(
             index_configuration,
-            &pipnn_config(index_configuration),
+            &pipnn_config(),
             DATA,
             GRAPH,
             storage,
@@ -206,18 +254,20 @@ mod tests {
         )
     }
 
-    #[test]
-    fn build_rejects_a_dataset_that_does_not_match_the_configuration() {
-        let (points, dimensions) = (2, 8);
-        for (configured_points, configured_dimensions) in [(3, dimensions), (points, 4)] {
-            let storage = storage_with_data(points, dimensions);
-            let index_configuration = index_configuration(configured_points, configured_dimensions);
+    #[rstest]
+    #[case::point_count(3, 8)]
+    #[case::stored_dimensions(2, 4)]
+    fn build_rejects_a_dataset_that_does_not_match_the_configuration(
+        #[case] configured_points: usize,
+        #[case] configured_dimensions: usize,
+    ) {
+        let storage = storage_with_data(2, 8);
+        let config = common_configuration(configured_points, configured_dimensions);
 
-            let error = build(&storage, &index_configuration).unwrap_err();
+        let error = build(&storage, &config).unwrap_err();
 
-            assert!(error.to_string().contains("has 2 points of 8"), "{error}");
-            assert!(!storage.exists(GRAPH));
-        }
+        assert!(error.to_string().contains("has 2 points of 8"), "{error}");
+        assert!(!storage.exists(GRAPH));
     }
 
     #[test]
@@ -225,7 +275,7 @@ mod tests {
         let (points, dimensions) = (256, 8);
         let storage = storage_with_data(points, dimensions);
 
-        build(&storage, &index_configuration(points, dimensions)).unwrap();
+        build(&storage, &common_configuration(points, dimensions)).unwrap();
 
         let mut file = Vec::new();
         std::io::Read::read_to_end(&mut storage.open_reader(GRAPH).unwrap(), &mut file).unwrap();
@@ -252,31 +302,5 @@ mod tests {
             index += 1 + len;
         }
         assert_eq!(4 * index, file.len());
-    }
-
-    #[test]
-    fn build_with_pipnn_rejects_build_quantization() {
-        let (points, dimensions) = (256, 8);
-        let storage = storage_with_data(points, dimensions);
-        let index_configuration = index_configuration(points, dimensions);
-        let pipnn_config = pipnn_config(&index_configuration);
-        let parameters = DiskIndexBuildParameters::new(
-            MemoryBudget::try_from_gb(1.0).unwrap(),
-            QuantizationType::PQ { num_chunks: 2 },
-            NumPQChunks::new_with(2, dimensions).unwrap(),
-        );
-        let writer = DiskIndexWriter::new(DATA.into(), "/index".into(), None, 4096).unwrap();
-        let mut builder = DiskIndexBuilder::<AdHoc<f32>, _>::new(
-            &storage,
-            parameters,
-            index_configuration,
-            writer,
-        )
-        .unwrap();
-
-        let error = builder.build_with_pipnn(&pipnn_config).unwrap_err();
-
-        assert!(error.to_string().contains("needs FP"), "{error}");
-        assert!(!storage.exists("/index_pq_compressed.bin"));
     }
 }

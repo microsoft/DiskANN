@@ -3,8 +3,9 @@
  * Licensed under the MIT license.
  */
 
-//! Async disk index builder implementation.
+//! Shared disk pipeline and configuration-selected graph construction.
 use std::{
+    fmt,
     marker::PhantomData,
     num::NonZeroUsize,
     sync::{Arc, Mutex},
@@ -40,6 +41,7 @@ use crate::{
         quantizer::BuildQuantizer,
         tokio::create_runtime,
     },
+    build::configuration::{BuildParameters, DiskIndexBuildConfig},
     error::{ErrorKind, diskann_error},
     storage::{
         DiskIndexWriter,
@@ -50,6 +52,17 @@ use crate::{
     utils::instrumentation::{DiskIndexBuildCheckpoint, PerfLogger},
 };
 
+enum GraphBuild {
+    Vamana {
+        index: IndexConfiguration,
+        parameters: DiskIndexBuildParameters,
+        quantizer: BuildQuantizer,
+    },
+    #[cfg(feature = "pipnn")]
+    Pipnn(diskann::graph::pipnn::Config),
+}
+
+/// Shared search-PQ, graph, disk-layout and cleanup pipeline.
 pub struct DiskIndexBuilder<'a, Data, StorageProvider>
 where
     Data: GraphDataType<VectorIdType = u32>,
@@ -57,11 +70,22 @@ where
 {
     index_writer: DiskIndexWriter,
     pq_storage: PQStorage,
-    disk_build_param: DiskIndexBuildParameters,
-    index_configuration: IndexConfiguration,
     storage_provider: &'a StorageProvider,
-    build_quantizer: BuildQuantizer,
+    parameters: BuildParameters,
+    graph: GraphBuild,
     _phantom: PhantomData<Data>,
+}
+
+impl<Data, StorageProvider> fmt::Debug for DiskIndexBuilder<'_, Data, StorageProvider>
+where
+    Data: GraphDataType<VectorIdType = u32>,
+    StorageProvider: StorageReadProvider + StorageWriteProvider,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DiskIndexBuilder")
+            .field("parameters", &self.parameters)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<'a, Data, StorageProvider> DiskIndexBuilder<'a, Data, StorageProvider>
@@ -69,91 +93,126 @@ where
     Data: GraphDataType<VectorIdType = u32>,
     Data::VectorDataType: VectorRepr,
     StorageProvider: StorageReadProvider + StorageWriteProvider + 'static,
-    <StorageProvider as StorageReadProvider>::Reader: std::marker::Send,
+    StorageProvider::Reader: Send,
 {
+    /// Creates a disk builder with one selected graph configuration.
+    ///
+    /// # Errors
+    /// Returns Vamana graph-quantizer training or storage errors.
     pub fn new(
         storage_provider: &'a StorageProvider,
-        disk_build_param: DiskIndexBuildParameters,
-        index_configuration: IndexConfiguration,
+        config: DiskIndexBuildConfig,
         index_writer: DiskIndexWriter,
     ) -> ANNResult<Self> {
+        let (parameters, graph) = match config {
+            DiskIndexBuildConfig::Vamana { index, parameters } => {
+                let common = BuildParameters::from((&index, &parameters));
+                let quantizer = BuildQuantizer::train::<Data, _>(
+                    parameters.build_quantization(),
+                    &index_writer.get_index_path_prefix(),
+                    &index,
+                    &index_writer.get_dataset_file(),
+                    storage_provider,
+                )?;
+                (
+                    common,
+                    GraphBuild::Vamana {
+                        index,
+                        parameters,
+                        quantizer,
+                    },
+                )
+            }
+            #[cfg(feature = "pipnn")]
+            DiskIndexBuildConfig::Pipnn {
+                graph,
+                metric,
+                dim,
+                num_points,
+                num_threads,
+                search_pq_chunks,
+                compression_chunk_vector_count,
+                seed,
+            } => (
+                BuildParameters {
+                    metric,
+                    dim,
+                    num_points,
+                    num_threads,
+                    search_pq_chunks,
+                    compression_chunk_vector_count,
+                    seed,
+                },
+                GraphBuild::Pipnn(graph),
+            ),
+        };
         let pq_storage = PQStorage::new(
             &(index_writer.get_index_path_prefix() + "_pq_pivots.bin"),
             &(index_writer.get_index_path_prefix() + "_pq_compressed.bin"),
             Some(&index_writer.get_dataset_file()),
         );
-
-        info!(
-            "Training quantizer for {} quantized builds.",
-            disk_build_param.build_quantization().to_string()
-        );
-        let build_quantizer = BuildQuantizer::train::<Data, _>(
-            disk_build_param.build_quantization(),
-            &index_writer.get_index_path_prefix(),
-            &index_configuration,
-            &index_writer.get_dataset_file(),
-            storage_provider,
-        )?;
-
         Ok(Self {
-            disk_build_param,
-            index_configuration,
             index_writer,
-            storage_provider,
             pq_storage,
-            build_quantizer,
+            storage_provider,
+            parameters,
+            graph,
             _phantom: PhantomData,
         })
     }
 
+    /// Builds search-PQ, the selected graph and the disk layout.
+    ///
+    /// # Errors
+    /// Returns compression, graph-construction or storage errors.
     pub fn build(&mut self) -> ANNResult<()> {
-        let runtime = create_runtime(self.index_configuration.num_threads)?;
-
-        info!(
-            "Starting index build: R={} L={} Indexing RAM budget={} T={}",
-            self.index_configuration.config.pruned_degree(),
-            self.index_configuration.config.l_build(),
-            self.disk_build_param.build_memory_limit().in_bytes(),
-            self.index_configuration.num_threads
-        );
-
-        self.build_with(|builder, pool| runtime.block_on(builder.build_inmem_index(pool)))
-    }
-
-    /// Run the build steps around `build_graph`: PQ compression before it and
-    /// the disk layout after it. `build_graph` writes the in-memory index file
-    /// that the disk layout step reads.
-    fn build_with(
-        &mut self,
-        build_graph: impl FnOnce(&mut Self, RayonThreadPoolRef<'_>) -> ANNResult<()>,
-    ) -> ANNResult<()> {
         let mut logger = PerfLogger::new_disk_index_build_logger();
-
-        let pool = create_thread_pool(self.index_configuration.num_threads)?;
-
+        let pool = create_thread_pool(self.parameters.num_threads)?;
         self.generate_compressed_data(pool.as_ref())?;
         logger.log_checkpoint(DiskIndexBuildCheckpoint::PqConstruction);
 
-        build_graph(self, pool.as_ref())?;
+        match &self.graph {
+            GraphBuild::Vamana {
+                index,
+                parameters,
+                quantizer,
+            } => {
+                create_runtime(index.num_threads)?.block_on(build_vamana_graph::<Data, _>(
+                    index,
+                    parameters,
+                    quantizer,
+                    &self.index_writer,
+                    self.storage_provider,
+                    pool.as_ref(),
+                ))?;
+            }
+            #[cfg(feature = "pipnn")]
+            GraphBuild::Pipnn(config) => {
+                super::pipnn::build_inmem_index::<Data::VectorDataType, _>(
+                    &self.parameters,
+                    config,
+                    &self.index_writer.get_dataset_file(),
+                    &self.index_writer.get_mem_index_file(),
+                    self.storage_provider,
+                    pool.as_ref(),
+                )?
+            }
+        }
         logger.log_checkpoint(DiskIndexBuildCheckpoint::InmemIndexBuild);
-
-        // Use physical file to pass the memory index to the disk writer
-        self.create_disk_layout()?;
+        self.index_writer
+            .create_disk_layout::<Data, StorageProvider>(self.storage_provider)?;
+        self.index_writer
+            .index_build_cleanup(self.storage_provider)?;
         logger.log_checkpoint(DiskIndexBuildCheckpoint::DiskLayout);
-
         Ok(())
     }
 
     fn generate_compressed_data(&mut self, pool: RayonThreadPoolRef<'_>) -> ANNResult<()> {
+        let parameters = &self.parameters;
         let data_path = self.index_writer.get_dataset_file();
-        let max_block_size = self.disk_build_param.data_compression_chunk_vector_count();
+        let max_block_size = parameters.compression_chunk_vector_count;
         validate_data_generation_input(self.storage_provider, &data_path, max_block_size)?;
-
-        let num_points = self.index_configuration.max_points;
-        let num_chunks = self.disk_build_param.search_pq_chunks();
-
-        let storage_provider = self.storage_provider;
-
+        let num_chunks = parameters.search_pq_chunks;
         info!(
             "Compressing data into {} bytes per vector for disk search",
             num_chunks.get()
@@ -164,14 +223,13 @@ where
             num_chunks: num_chunks.get(),
             max_kmeans_reps: NUM_KMEANS_REPS_PQ,
             num_centers: NUM_PQ_CENTROIDS,
-            seed: self.index_configuration.random_seed,
-            p_val: MAX_PQ_TRAINING_SET_SIZE / (num_points as f64),
-            storage_provider,
+            seed: parameters.seed,
+            p_val: MAX_PQ_TRAINING_SET_SIZE / (parameters.num_points as f64),
+            storage_provider: self.storage_provider,
             pool,
-            dim: self.index_configuration.dim,
-            metric: self.index_configuration.dist_metric,
+            dim: parameters.dim,
+            metric: parameters.metric,
         };
-
         let generator = QuantDataGenerator::<
             Data::VectorDataType,
             PQGeneration<Data::VectorDataType, StorageProvider>,
@@ -180,94 +238,44 @@ where
             self.pq_storage.get_compressed_data_path().into(),
             &quantizer_context,
         )?;
-        generator.generate_data(storage_provider, pool, max_block_size)
-    }
-
-    async fn build_inmem_index(&mut self, pool: RayonThreadPoolRef<'_>) -> ANNResult<()> {
-        match determine_build_strategy::<Data>(
-            &self.index_configuration,
-            self.disk_build_param.build_memory_limit().in_bytes() as f64,
-            self.disk_build_param.build_quantization(),
-        ) {
-            IndexBuildStrategy::Merged => {
-                MergedVamanaIndexBuilder::<Data, _>::new(
-                    &self.index_configuration,
-                    &self.disk_build_param,
-                    &self.index_writer,
-                    &self.build_quantizer,
-                    self.storage_provider,
-                )
-                .build(pool)
-                .await
-            }
-            IndexBuildStrategy::OneShot => {
-                build_inmem_index::<Data::VectorDataType, _>(
-                    self.index_configuration.clone(),
-                    &self.build_quantizer,
-                    &self.index_writer.get_dataset_file(),
-                    &self.index_writer.get_mem_index_file(),
-                    self.storage_provider,
-                )
-                .await
-            }
-        }
-    }
-
-    fn create_disk_layout(&mut self) -> ANNResult<()> {
-        self.index_writer
-            .create_disk_layout::<Data, StorageProvider>(self.storage_provider)?;
-        self.index_writer
-            .index_build_cleanup(self.storage_provider)?;
-
-        Ok(())
+        generator.generate_data(self.storage_provider, pool, max_block_size)
     }
 }
 
-#[cfg(feature = "pipnn")]
-impl<Data, StorageProvider> DiskIndexBuilder<'_, Data, StorageProvider>
+async fn build_vamana_graph<Data, StorageProvider>(
+    index: &IndexConfiguration,
+    parameters: &DiskIndexBuildParameters,
+    quantizer: &BuildQuantizer,
+    writer: &DiskIndexWriter,
+    storage: &StorageProvider,
+    pool: RayonThreadPoolRef<'_>,
+) -> ANNResult<()>
 where
     Data: GraphDataType<VectorIdType = u32>,
-    Data::VectorDataType: diskann::graph::pipnn::Element,
+    Data::VectorDataType: VectorRepr,
     StorageProvider: StorageReadProvider + StorageWriteProvider + 'static,
-    <StorageProvider as StorageReadProvider>::Reader: std::marker::Send,
+    StorageProvider::Reader: Send,
 {
-    /// Build the disk index with a PiPNN graph instead of a Vamana graph.
-    ///
-    /// PiPNN replaces only the graph step. PQ compression and the disk layout
-    /// do not change. The graph takes its degree, alpha and seed from `config`,
-    /// and [`Builder::from_graph`](diskann::graph::pipnn::Builder::from_graph)
-    /// copies the degree and alpha from the index configuration. PiPNN reads
-    /// the full-precision rows and does not use the build memory limit.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error before any build step if the build quantization is not
-    /// [`QuantizationType::FP`](crate::QuantizationType::FP).
-    pub fn build_with_pipnn(&mut self, config: &diskann::graph::pipnn::Config) -> ANNResult<()> {
-        let quantization = self.disk_build_param.build_quantization();
-        if !matches!(quantization, crate::QuantizationType::FP) {
-            return Err(diskann_error!(
-                ErrorKind::IndexConfigError("build_quantization"),
-                "PiPNN reads full-precision rows and needs FP build quantization, not {quantization}"
-            ));
+    match determine_build_strategy::<Data>(
+        index,
+        parameters.build_memory_limit().in_bytes() as f64,
+        parameters.build_quantization(),
+    ) {
+        IndexBuildStrategy::Merged => {
+            MergedVamanaIndexBuilder::<Data, _>::new(index, parameters, writer, quantizer, storage)
+                .build(pool)
+                .await
         }
-
-        info!(
-            "Starting PiPNN index build: R={} T={}",
-            config.degree(),
-            self.index_configuration.num_threads
-        );
-
-        self.build_with(|builder, pool| {
-            super::pipnn::build_inmem_index::<Data::VectorDataType, _>(
-                &builder.index_configuration,
-                config,
-                &builder.index_writer.get_dataset_file(),
-                &builder.index_writer.get_mem_index_file(),
-                builder.storage_provider,
-                pool,
+        IndexBuildStrategy::OneShot => {
+            build_inmem_index::<Data::VectorDataType, _>(
+                index.clone(),
+                quantizer,
+                &writer.get_dataset_file(),
+                &writer.get_mem_index_file(),
+                storage,
             )
-        })
+            .await
+        }
     }
 }
 

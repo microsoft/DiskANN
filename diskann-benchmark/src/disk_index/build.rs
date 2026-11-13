@@ -12,7 +12,7 @@ use diskann::{
 };
 use diskann_benchmark_runner::utils::MicroSeconds;
 use diskann_disk::{
-    build::builder::build::DiskIndexBuilder,
+    build::{builder::build::DiskIndexBuilder, configuration::DiskIndexBuildConfig},
     data_model::AdHoc,
     disk_index_build_parameter::{
         DiskIndexBuildParameters, MemoryBudget, NumPQChunks, DISK_SECTOR_LEN,
@@ -118,8 +118,10 @@ where
 
     let mut disk_index = DiskIndexBuilder::<AdHoc<T>, StorageProviderType>::new(
         storage_provider,
-        build_parameters,
-        index_configuration,
+        DiskIndexBuildConfig::Vamana {
+            index: index_configuration,
+            parameters: build_parameters,
+        },
         disk_index_writer,
     )?;
 

@@ -21,7 +21,7 @@ pub const BYTES_IN_GB: f64 = 1024_f64 * 1024_f64 * 1024_f64;
 /// smallest block size when reading/writing index data from/to disk.
 pub const DISK_SECTOR_LEN: usize = 4096;
 
-const DEFAULT_DATA_COMPRESSION_CHUNK_VECTOR_COUNT: usize = 25_000;
+pub(super) const DEFAULT_DATA_COMPRESSION_CHUNK_VECTOR_COUNT: usize = 25_000;
 
 /// Errors returned when validating PQ chunk parameters.
 #[derive(Debug, Error, PartialEq)]

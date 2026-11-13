@@ -565,7 +565,7 @@ pub(crate) mod disk_index_builder_tests {
 
     use super::*;
     use crate::{
-        build::builder::build::DiskIndexBuilder,
+        build::{builder::build::DiskIndexBuilder, configuration::DiskIndexBuildConfig},
         data_model::{CachingStrategy, GraphHeader},
         disk_index_build_parameter::{DiskIndexBuildParameters, MemoryBudget, NumPQChunks},
         search::provider::{
@@ -679,8 +679,7 @@ pub(crate) mod disk_index_builder_tests {
             Ok(())
         }
 
-        /// Build with PiPNN. `configure` sets the PiPNN parameters on top of
-        /// the graph configuration of the test.
+        /// Builds PiPNN through the same configured disk pipeline as Vamana.
         #[cfg(feature = "pipnn")]
         pub fn build_with_pipnn<T>(
             &self,
@@ -688,12 +687,32 @@ pub(crate) mod disk_index_builder_tests {
         ) -> ANNResult<()>
         where
             T: GraphDataType<VectorIdType = u32>,
-            T::VectorDataType: diskann::graph::pipnn::Element,
             StorageProvider::Reader: std::marker::Send + Read,
         {
-            let graph = self.graph_config()?;
-            let config = configure(diskann::graph::pipnn::Builder::from_graph(&graph)).build()?;
-            self.disk_index_builder::<T>()?.build_with_pipnn(&config)
+            let degree = std::num::NonZeroUsize::new(self.params.max_degree as usize)
+                .ok_or_else(|| diskann::ANNError::message("PiPNN degree must be nonzero"))?;
+            let graph = configure(diskann::graph::pipnn::Config::builder(degree)).build()?;
+            let metadata =
+                load_metadata_from_file(self.storage_provider.as_ref(), &self.params.data_path)?;
+            let mut config = DiskIndexBuildConfig::pipnn(
+                self.params.metric,
+                self.params.dim,
+                metadata.npoints(),
+                self.params.num_threads,
+                NumPQChunks::new_with(self.params.num_pq_chunks, self.params.full_dim)?,
+                graph,
+            )
+            .with_seed(100);
+            if let Some(count) = self.params.data_compression_chunk_vector_count {
+                config = config.with_data_compression_chunk_vector_count(count);
+            }
+            let writer = DiskIndexWriter::new(
+                self.params.data_path.clone(),
+                self.params.index_path_prefix.clone(),
+                self.params.associated_data_path.clone(),
+                self.params.block_size,
+            )?;
+            DiskIndexBuilder::<T, _>::new(self.storage_provider.as_ref(), config, writer)?.build()
         }
 
         fn graph_config(&self) -> ANNResult<config::Config> {
@@ -758,8 +777,10 @@ pub(crate) mod disk_index_builder_tests {
 
             DiskIndexBuilder::<T, _>::new(
                 self.storage_provider.as_ref(),
-                disk_index_build_parameters,
-                config,
+                DiskIndexBuildConfig::Vamana {
+                    index: config,
+                    parameters: disk_index_build_parameters,
+                },
                 disk_index_writer,
             )
         }
@@ -1185,8 +1206,10 @@ pub(crate) mod disk_index_builder_tests {
 
         DiskIndexBuilder::<GraphDataF32VectorUnitData, VirtualStorageProvider<OverlayFS>>::new(
             storage_provider,
-            build_parameters,
-            index_configuration,
+            DiskIndexBuildConfig::Vamana {
+                index: index_configuration,
+                parameters: build_parameters,
+            },
             disk_index_writer,
         )
     }
