@@ -288,11 +288,21 @@ where
     run_build(&index, dataset_iter, num_tasks).await?;
 
     #[cfg(debug_assertions)]
-    log_build_stats::<_>(Arc::get_mut(&mut index).expect("there should be no clones remaining"));
+    log_build_stats::<_>(Arc::get_mut(&mut index).ok_or_else(|| {
+        diskann_error!(
+            ErrorKind::IndexError,
+            "index references remain after insertion"
+        )
+    })?)?;
 
     run_final_prune(&index, num_tasks).await?;
 
-    let index = Arc::get_mut(&mut index).expect("there should be no clones remaining");
+    let index = Arc::get_mut(&mut index).ok_or_else(|| {
+        diskann_error!(
+            ErrorKind::IndexError,
+            "index references remain after final pruning"
+        )
+    })?;
     index.save_graph_mut(&mut storage_provider.create_for_write(save_path)?)?;
 
     Ok(())
@@ -300,14 +310,15 @@ where
 
 /// Log statistics about the build process
 #[cfg(debug_assertions)]
-fn log_build_stats<T: VectorRepr>(index: &mut dyn InmemIndexBuilder<T>) {
+fn log_build_stats<T: VectorRepr>(index: &mut dyn InmemIndexBuilder<T>) -> ANNResult<()> {
     // Hoisting out of the `debug!` macro forces evaluation of the reachable nodes regardless
     // of the log level.
     //
     // This is useful for the side-effects since `count_reachable_nodes` serves as an
     // extra check on the integrity of the graph.
-    let reachable = index.count_reachable_nodes();
+    let reachable = index.count_reachable_nodes()?;
     debug!("Number of points reachable in the graph: {}", reachable);
+    Ok(())
 }
 
 /// Convert a `usize` index into the `u32` internal id type, erroring if it does not fit.

@@ -21,6 +21,8 @@ use diskann_inmem::{
     provider::buildonly::Provider,
 };
 
+#[cfg(debug_assertions)]
+use crate::error::{ErrorKind, diskann_error};
 use diskann_utils::{
     future::SendFuture,
     views::rowmajor::{self, Matrix},
@@ -112,7 +114,7 @@ pub(super) trait InmemIndexBuilder<T: Sized>: Send + Sync {
     /// This function has a large memory footprint for large graphs and should not be called
     /// frequently. This is mainly for analysis and sanity tests.
     #[cfg(debug_assertions)]
-    fn count_reachable_nodes(&mut self) -> usize;
+    fn count_reachable_nodes(&mut self) -> ANNResult<usize>;
 }
 
 ////////////////////
@@ -222,7 +224,7 @@ where
     }
 
     #[cfg(debug_assertions)]
-    fn count_reachable_nodes(&mut self) -> usize {
+    fn count_reachable_nodes(&mut self) -> ANNResult<usize> {
         count_reachable_nodes(self.index.provider_mut().inspect_neighbors(), self.start_id)
     }
 }
@@ -351,7 +353,7 @@ where
     }
 
     #[cfg(debug_assertions)]
-    fn count_reachable_nodes(&mut self) -> usize {
+    fn count_reachable_nodes(&mut self) -> ANNResult<usize> {
         count_reachable_nodes(self.index.provider_mut().inspect_neighbors(), self.start_id)
     }
 }
@@ -402,22 +404,28 @@ where
 fn count_reachable_nodes(
     snapshot: diskann_inmem::repr::NeighborSnapshot<'_>,
     start_point: u32,
-) -> usize {
+) -> ANNResult<usize> {
     let mut seen = vec![false; snapshot.entries().into_usize()];
-    seen[start_point.into_usize()] = true;
+    *seen.get_mut(start_point.into_usize()).ok_or_else(|| {
+        diskann_error!(
+            ErrorKind::IndexError,
+            "graph start point {start_point} is out of bounds"
+        )
+    })? = true;
 
     let mut count = 1;
     let mut queue = vec![start_point];
     while let Some(current) = queue.pop() {
-        let Some(neighbors) = snapshot.get(current) else {
-            // Since this is compiled under debug-assertions, we can use this to assert
-            // that all elements explored are in-bounds.
-            panic!("graph construction yielded an out-of-bounds neighbor {current}");
-        };
-
+        let neighbors = snapshot.get(current).ok_or_else(|| {
+            diskann_error!(
+                ErrorKind::IndexError,
+                "graph adjacency {current} is out of bounds"
+            )
+        })?;
         for n in neighbors.iter() {
-            // Panic on out-of-bounds.
-            let seen = &mut seen[n.into_usize()];
+            let seen = seen.get_mut(n.into_usize()).ok_or_else(|| {
+                diskann_error!(ErrorKind::IndexError, "graph neighbor {n} is out of bounds")
+            })?;
             if !*seen {
                 *seen = true;
                 count += 1;
@@ -425,8 +433,7 @@ fn count_reachable_nodes(
             }
         }
     }
-
-    count
+    Ok(count)
 }
 
 /// Write packed adjacency lists in the disk builder's intermediate graph format.
