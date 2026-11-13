@@ -29,7 +29,7 @@ type VectorMut<'a, const N: usize> = scalar::MutCompensatedVectorRef<'a, N>;
 type Vector<const N: usize> = scalar::CompensatedVector<N>;
 
 /// A scalar quantizer specialized for `N` bit computation.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Scalar<const N: usize> {
     quantizer: scalar::ScalarQuantizer,
     metric: Metric,

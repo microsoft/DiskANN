@@ -10,7 +10,7 @@ use std::{
 
 use crate::data_model::GraphDataType;
 use byteorder::{LittleEndian, ReadBytesExt};
-use diskann::{ANNResult, utils::VectorRepr};
+use diskann::ANNResult;
 use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::{
     model::{GRAPH_SLACK_FACTOR, IndexConfiguration, MAX_PQ_TRAINING_SET_SIZE},
@@ -26,7 +26,7 @@ use tracing::info;
 
 use crate::{
     DiskIndexBuildParameters, QuantizationType, SphericalBits,
-    build::builder::{build::build_inmem_index, quantizer::BuildQuantizer},
+    build::builder::{backend::Backend, build::build_inmem_index},
     disk_index_build_parameter::BYTES_IN_GB,
     storage::DiskIndexWriter,
     utils::instrumentation::{BuildMergedVamanaIndexCheckpoint, PerfLogger},
@@ -76,7 +76,7 @@ where
     index_configuration: &'a IndexConfiguration,
     disk_build_param: &'a DiskIndexBuildParameters,
     index_writer: &'a DiskIndexWriter,
-    build_quantizer: &'a BuildQuantizer,
+    backend: &'a Backend<Data::VectorDataType>,
     storage_provider: &'a StorageProvider,
     rng: diskann_providers::utils::StandardRng,
     _phantom: PhantomData<Data>,
@@ -85,22 +85,20 @@ where
 impl<'a, Data, StorageProvider> MergedVamanaIndexBuilder<'a, Data, StorageProvider>
 where
     Data: GraphDataType<VectorIdType = u32>,
-    Data::VectorDataType: VectorRepr,
-    StorageProvider: StorageReadProvider + StorageWriteProvider + 'static,
-    <StorageProvider as StorageReadProvider>::Reader: Send,
+    StorageProvider: StorageReadProvider<Reader: Send> + StorageWriteProvider + 'static,
 {
     pub(super) fn new(
         index_configuration: &'a IndexConfiguration,
         disk_build_param: &'a DiskIndexBuildParameters,
         index_writer: &'a DiskIndexWriter,
-        build_quantizer: &'a BuildQuantizer,
+        backend: &'a Backend<Data::VectorDataType>,
         storage_provider: &'a StorageProvider,
     ) -> Self {
         Self {
             index_configuration,
             disk_build_param,
             index_writer,
-            build_quantizer,
+            backend,
             storage_provider,
             rng: diskann_providers::utils::create_rnd_from_optional_seed(
                 index_configuration.random_seed,
@@ -235,7 +233,7 @@ where
 
         build_inmem_index::<Data::VectorDataType, _>(
             index_config,
-            self.build_quantizer,
+            self.backend,
             &shard_base_file,
             &shard_index_file,
             self.storage_provider,
@@ -565,7 +563,10 @@ pub(crate) mod disk_index_builder_tests {
 
     use super::*;
     use crate::{
-        build::{builder::build::DiskIndexBuilder, configuration::DiskIndexBuildConfig},
+        build::{
+            builder::{backend::BuildElement, build::DiskIndexBuilder},
+            configuration::DiskIndexBuildConfig,
+        },
         data_model::{CachingStrategy, GraphHeader},
         disk_index_build_parameter::{DiskIndexBuildParameters, MemoryBudget, NumPQChunks},
         search::provider::{
@@ -667,8 +668,8 @@ pub(crate) mod disk_index_builder_tests {
 
         pub fn build<T>(&self) -> ANNResult<()>
         where
-            T: GraphDataType<VectorIdType = u32>,
-            StorageProvider::Reader: std::marker::Send + Read,
+            T: GraphDataType<VectorIdType = u32, VectorDataType: BuildElement>,
+            StorageProvider::Reader: Send,
         {
             let mut disk_index = self.disk_index_builder::<T>()?;
 
@@ -686,7 +687,7 @@ pub(crate) mod disk_index_builder_tests {
             configure: impl FnOnce(diskann::graph::pipnn::Builder) -> diskann::graph::pipnn::Builder,
         ) -> ANNResult<()>
         where
-            T: GraphDataType<VectorIdType = u32>,
+            T: GraphDataType<VectorIdType = u32, VectorDataType: BuildElement>,
             StorageProvider::Reader: std::marker::Send + Read,
         {
             let degree = std::num::NonZeroUsize::new(self.params.max_degree as usize)
@@ -730,7 +731,7 @@ pub(crate) mod disk_index_builder_tests {
 
         fn disk_index_builder<T>(&self) -> ANNResult<DiskIndexBuilder<'_, T, StorageProvider>>
         where
-            T: GraphDataType<VectorIdType = u32>,
+            T: GraphDataType<VectorIdType = u32, VectorDataType: BuildElement>,
             StorageProvider::Reader: std::marker::Send + Read,
         {
             // Create disk index build parameters

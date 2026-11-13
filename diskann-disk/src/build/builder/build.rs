@@ -14,15 +14,12 @@ use std::{
 use crate::data_model::GraphDataType;
 use diskann::{
     ANNResult,
-    utils::{ONE, VectorRepr, async_tools},
+    utils::{VectorRepr, async_tools},
 };
 use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::{
-    model::{
-        IndexConfiguration, MAX_PQ_TRAINING_SET_SIZE, NUM_KMEANS_REPS_PQ, NUM_PQ_CENTROIDS,
-        graph::provider::async_::inmem::DefaultProviderParameters,
-    },
-    storage::{DiskGraphOnly, PQStorage},
+    model::{IndexConfiguration, MAX_PQ_TRAINING_SET_SIZE, NUM_KMEANS_REPS_PQ, NUM_PQ_CENTROIDS},
+    storage::PQStorage,
     utils::{
         MAX_MEDOID_SAMPLE_SIZE, RayonThreadPoolRef, VectorDataIterator, create_thread_pool,
         find_medoid_with_sampling,
@@ -36,9 +33,9 @@ use tracing::info;
 use crate::{
     DiskIndexBuildParameters,
     build::builder::{
+        backend::{Backend, BuildElement},
         core::{IndexBuildStrategy, MergedVamanaIndexBuilder, determine_build_strategy},
-        inmem_builder::{InmemIndexBuilder, StartPoint, new_inmem_index_builder},
-        quantizer::BuildQuantizer,
+        inmem_builder::{self, InmemIndexBuilder, StartPoint},
         tokio::create_runtime,
     },
     build::configuration::{BuildParameters, DiskIndexBuildConfig},
@@ -52,11 +49,11 @@ use crate::{
     utils::instrumentation::{DiskIndexBuildCheckpoint, PerfLogger},
 };
 
-enum GraphBuild {
+enum GraphBuild<T> {
     Vamana {
         index: IndexConfiguration,
         parameters: DiskIndexBuildParameters,
-        quantizer: BuildQuantizer,
+        backend: Backend<T>,
     },
     #[cfg(feature = "pipnn")]
     Pipnn(diskann::graph::pipnn::Config),
@@ -72,7 +69,7 @@ where
     pq_storage: PQStorage,
     storage_provider: &'a StorageProvider,
     parameters: BuildParameters,
-    graph: GraphBuild,
+    graph: GraphBuild<Data::VectorDataType>,
     _phantom: PhantomData<Data>,
 }
 
@@ -91,14 +88,14 @@ where
 impl<'a, Data, StorageProvider> DiskIndexBuilder<'a, Data, StorageProvider>
 where
     Data: GraphDataType<VectorIdType = u32>,
-    Data::VectorDataType: VectorRepr,
+    Data::VectorDataType: VectorRepr + BuildElement,
     StorageProvider: StorageReadProvider + StorageWriteProvider + 'static,
     StorageProvider::Reader: Send,
 {
     /// Creates a disk builder with one selected graph configuration.
     ///
     /// # Errors
-    /// Returns Vamana graph-quantizer training or storage errors.
+    /// Returns Vamana graph-backend training or storage errors.
     pub fn new(
         storage_provider: &'a StorageProvider,
         config: DiskIndexBuildConfig,
@@ -107,7 +104,7 @@ where
         let (parameters, graph) = match config {
             DiskIndexBuildConfig::Vamana { index, parameters } => {
                 let common = BuildParameters::from((&index, &parameters));
-                let quantizer = BuildQuantizer::train::<Data, _>(
+                let backend = Backend::<Data::VectorDataType>::new(
                     parameters.build_quantization(),
                     &index_writer.get_index_path_prefix(),
                     &index,
@@ -119,7 +116,7 @@ where
                     GraphBuild::Vamana {
                         index,
                         parameters,
-                        quantizer,
+                        backend,
                     },
                 )
             }
@@ -175,12 +172,12 @@ where
             GraphBuild::Vamana {
                 index,
                 parameters,
-                quantizer,
+                backend,
             } => {
                 create_runtime(index.num_threads)?.block_on(build_vamana_graph::<Data, _>(
                     index,
                     parameters,
-                    quantizer,
+                    backend,
                     &self.index_writer,
                     self.storage_provider,
                     pool.as_ref(),
@@ -245,7 +242,7 @@ where
 async fn build_vamana_graph<Data, StorageProvider>(
     index: &IndexConfiguration,
     parameters: &DiskIndexBuildParameters,
-    quantizer: &BuildQuantizer,
+    backend: &Backend<Data::VectorDataType>,
     writer: &DiskIndexWriter,
     storage: &StorageProvider,
     pool: RayonThreadPoolRef<'_>,
@@ -262,14 +259,14 @@ where
         parameters.build_quantization(),
     ) {
         IndexBuildStrategy::Merged => {
-            MergedVamanaIndexBuilder::<Data, _>::new(index, parameters, writer, quantizer, storage)
+            MergedVamanaIndexBuilder::<Data, _>::new(index, parameters, writer, backend, storage)
                 .build(pool)
                 .await
         }
         IndexBuildStrategy::OneShot => {
             build_inmem_index::<Data::VectorDataType, _>(
                 index.clone(),
-                quantizer,
+                backend,
                 &writer.get_dataset_file(),
                 &writer.get_mem_index_file(),
                 storage,
@@ -281,7 +278,7 @@ where
 
 pub(super) async fn build_inmem_index<T, StorageProvider>(
     config: IndexConfiguration,
-    quantizer: &BuildQuantizer,
+    backend: &Backend<T>,
     data_path: &str,
     save_path: &str,
     storage_provider: &StorageProvider,
@@ -307,59 +304,49 @@ where
         iter.enumerate()
     }));
 
-    let index_config = config.config.clone();
-    let provider_parameters = DefaultProviderParameters {
-        max_points: config.max_points,
-        frozen_points: ONE,
-        metric: config.dist_metric,
-        dim: config.dim,
-        max_degree: index_config.max_degree_u32().get(),
-        prefetch_lookahead: config.prefetch_lookahead.map(|x| x.get()),
-        prefetch_cache_line_level: config.prefetch_cache_line_level,
+    let graph_config = config.config.clone();
+
+    let non_frozen_points = config.max_points.checked_sub(1).ok_or_else(|| {
+        diskann_error!(
+            ErrorKind::IndexError,
+            "expected `max_points` to be at least 1"
+        )
+    })?;
+
+    let provider_config = inmem_builder::Config {
+        non_frozen_points,
+        prefetch_lookahead: config.prefetch_lookahead,
+        num_threads: num_tasks,
     };
 
     let start_point =
         start_point_from_medoid::<T, _>(data_path, config.random_seed, storage_provider)?;
-    let start_point_id = start_point.id();
-    let index =
-        new_inmem_index_builder::<T>(index_config, provider_parameters, quantizer, start_point)?;
+
+    let mut index = backend.builder(graph_config, provider_config, start_point)?;
 
     run_build(&index, dataset_iter, num_tasks).await?;
 
     #[cfg(debug_assertions)]
-    log_build_stats::<_>(&index).await?;
+    log_build_stats::<_>(Arc::get_mut(&mut index).expect("there should be no clones remaining"));
 
     run_final_prune(&index, num_tasks).await?;
-    index
-        .save_graph(
-            storage_provider,
-            &(start_point_id, DiskGraphOnly::new(save_path)),
-        )
-        .await?;
+
+    let index = Arc::get_mut(&mut index).expect("there should be no clones remaining");
+    index.save_graph_mut(&mut storage_provider.create_for_write(save_path)?)?;
 
     Ok(())
 }
 
-#[cfg(debug_assertions)]
 /// Log statistics about the build process
-async fn log_build_stats<T: VectorRepr>(index: &Arc<dyn InmemIndexBuilder<T>>) -> ANNResult<()> {
-    debug!(
-        "Number of points reachable in the graph: {}",
-        index.count_reachable_nodes().await?
-    );
-
-    let (full_vector, quant_vector) = index.counts_for_get_vector();
-    let capacity = index.capacity();
-    debug!(
-        "Number of get vector calls per insert: {}",
-        full_vector as f32 / capacity as f32
-    );
-    debug!(
-        "Number of get quantized vector calls per insert: {}",
-        quant_vector as f32 / capacity as f32
-    );
-
-    Ok(())
+#[cfg(debug_assertions)]
+fn log_build_stats<T: VectorRepr>(index: &mut dyn InmemIndexBuilder<T>) {
+    // Hoisting out of the `debug!` macro forces evaluation of the reachable nodes regardless
+    // of the log level.
+    //
+    // This is useful for the side-effects since `count_reachable_nodes` serves as an
+    // extra check on the integrity of the graph.
+    let reachable = index.count_reachable_nodes();
+    debug!("Number of points reachable in the graph: {}", reachable);
 }
 
 /// Convert a `usize` index into the `u32` internal id type, erroring if it does not fit.
@@ -439,7 +426,7 @@ async fn run_final_prune<T: VectorRepr>(
     index: &Arc<dyn InmemIndexBuilder<T>>,
     num_tasks: NonZeroUsize,
 ) -> ANNResult<()> {
-    let partitions = async_tools::PartitionIter::new(index.total_points(), num_tasks);
+    let partitions = async_tools::PartitionIter::new(index.capacity(), num_tasks);
 
     let mut tasks = JoinSet::new();
 
