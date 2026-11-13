@@ -17,10 +17,10 @@
         "data": {
           "data": "yfcc_10k.fbin",
           "data_type": "f32",
-          "groundtruth": "groundtruth.bin",
           "metric": "l2",
           "queries": "yfcc_query_100.fbin",
-          "preprocess": []
+          "preprocess": [],
+          "labels": "yfcc_metadata.json"
         },
         "representation": {
           "product": {
@@ -29,23 +29,68 @@
           }
         },
         "search": {
-          "knn": [
-            {
-              "beam_width": null,
-              "knn": 10,
-              "search_l": 50
-            },
-            {
-              "beam_width": 3,
-              "knn": 10,
-              "search_l": 50
-            },
-            {
-              "beam_width": 3,
-              "knn": 10,
-              "search_l": 100
-            }
-          ]
+          "knn": {
+            "groundtruth": "groundtruth.bin",
+            "searches": [
+              {
+                "beam_width": null,
+                "knn": 10,
+                "search_l": 50
+              },
+              {
+                "beam_width": 3,
+                "knn": 10,
+                "search_l": 50
+              },
+              {
+                "beam_width": 3,
+                "knn": 10,
+                "search_l": 100
+              }
+            ]
+          },
+          "inline_filter": {
+            "groundtruth": "groundtruth_filtered.rangeres",
+            "predicates": "yfcc_query_filters.json",
+            "searches": [
+              {
+                "adaptive_l": null,
+                "beam_width": null,
+                "knn": 10,
+                "search_l": 50
+              },
+              {
+                "adaptive_l": {
+                  "sample_count": 100,
+                  "scale_factor": 16.0
+                },
+                "beam_width": null,
+                "knn": 10,
+                "search_l": 50
+              }
+            ]
+          },
+          "multihop_filter": {
+            "groundtruth": "groundtruth_filtered.rangeres",
+            "predicates": "yfcc_query_filters.json",
+            "searches": [
+              {
+                "beam_width": null,
+                "knn": 10,
+                "search_l": 50
+              },
+              {
+                "beam_width": 3,
+                "knn": 10,
+                "search_l": 50
+              },
+              {
+                "beam_width": 3,
+                "knn": 10,
+                "search_l": 100
+              }
+            ]
+          }
         }
       }
     },
@@ -62,10 +107,10 @@
         "data": {
           "data": "yfcc_10k.fbin",
           "data_type": "f32",
-          "groundtruth": "groundtruth.bin",
           "metric": "l2",
           "queries": "yfcc_query_100.fbin",
-          "preprocess": []
+          "preprocess": [],
+          "labels": "yfcc_metadata.json"
         },
         "representation": {
           "product": {
@@ -74,23 +119,68 @@
           }
         },
         "search": {
-          "knn": [
-            {
-              "beam_width": null,
-              "knn": 10,
-              "search_l": 50
-            },
-            {
-              "beam_width": 3,
-              "knn": 10,
-              "search_l": 50
-            },
-            {
-              "beam_width": 3,
-              "knn": 10,
-              "search_l": 100
-            }
-          ]
+          "knn": {
+            "groundtruth": "groundtruth.bin",
+            "searches": [
+              {
+                "beam_width": null,
+                "knn": 10,
+                "search_l": 50
+              },
+              {
+                "beam_width": 3,
+                "knn": 10,
+                "search_l": 50
+              },
+              {
+                "beam_width": 3,
+                "knn": 10,
+                "search_l": 100
+              }
+            ]
+          },
+          "inline_filter": {
+            "groundtruth": "groundtruth_filtered.rangeres",
+            "predicates": "yfcc_query_filters.json",
+            "searches": [
+              {
+                "adaptive_l": null,
+                "beam_width": null,
+                "knn": 10,
+                "search_l": 50
+              },
+              {
+                "adaptive_l": {
+                  "sample_count": 100,
+                  "scale_factor": 16.0
+                },
+                "beam_width": null,
+                "knn": 10,
+                "search_l": 50
+              }
+            ]
+          },
+          "multihop_filter": {
+            "groundtruth": "groundtruth_filtered.rangeres",
+            "predicates": "yfcc_query_filters.json",
+            "searches": [
+              {
+                "beam_width": null,
+                "knn": 10,
+                "search_l": 50
+              },
+              {
+                "beam_width": 3,
+                "knn": 10,
+                "search_l": 50
+              },
+              {
+                "beam_width": 3,
+                "knn": 10,
+                "search_l": 100
+              }
+            ]
+          }
         }
       }
     }

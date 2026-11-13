@@ -148,29 +148,13 @@ mod tests {
         assert!(output_file.exists(), "results file was not written");
     }
 
-    /// Options controlling the execution of the regression test.
-    #[derive(Debug, Default)]
-    struct Options {
-        /// If set to `true`, this test will not regenerate its baseline when running under
-        /// `DISKANN_TEST=overwrite`. Instead, it's meant to share the baseline for another
-        /// test that is the authoritative source.
-        read_only: bool,
-    }
-
     // Drive the named example through the runner, then run a regression check comparing the
     // freshly produced results against a committed baseline.
     //
     // By default this fails the test if the regression check reports a negative result. When
     // `DISKANN_TEST=overwrite` is set, the committed baseline is instead overwritten with the
     // freshly produced results (enabling future migrations) and no check is performed.
-    fn run_regression_example(
-        input_name: &str,
-        tolerances_name: &str,
-        baseline_name: &str,
-        options: Options,
-    ) {
-        let Options { read_only } = options;
-
+    fn run_regression_example(input_name: &str, tolerances_name: &str, baseline_name: &str) {
         let input_file = example_directory().join(input_name);
         let tolerances_file = example_directory().join(tolerances_name);
         let baseline_file = example_directory().join(baseline_name);
@@ -201,7 +185,7 @@ mod tests {
         assert!(output_file.exists(), "results file was not written");
 
         // In overwrite mode, replace the committed baseline and skip the check.
-        if !read_only && overwrite_baselines() {
+        if overwrite_baselines() {
             // When over-writing, we need to scrub the file paths of the test directory.
             //
             // Otherwise, we end up with absolute paths in the baselines.
@@ -213,17 +197,10 @@ mod tests {
         }
 
         if !baseline_file.exists() {
-            if !read_only {
-                panic!(
-                    "missing baseline {baseline_file:?}; \
-                     regenerate it with {DISKANN_TEST_ENV}=overwrite"
-                );
-            } else {
-                panic!(
-                    "missing baseline {baseline_file:?}; \
-                     this can likely be regenerated with {DISKANN_TEST_ENV}=overwrite"
-                );
-            }
+            panic!(
+                "missing baseline {baseline_file:?}; \
+                 this can likely be regenerated with {DISKANN_TEST_ENV}=overwrite"
+            );
         }
 
         // Run the regression check. A negative result (or any error) propagates here and
@@ -279,22 +256,16 @@ mod tests {
             "graph/full/integration-f32.json",
             "graph/full/checks.json",
             "graph/full/integration-f32-baseline.json",
-            Options::default(),
         );
     }
 
     #[test]
     #[cfg(not(miri))]
     fn graph_index_static_f32() {
-        // The static build test is meant to fully mirror the non-static case.
-        //
-        // It gets marked as read-only so is forced to use the same baseline results as the
-        // latter.
         run_regression_example(
-            "graph/full/integration-f32-static.json",
-            "graph/full/checks.json",
-            "graph/full/integration-f32-baseline.json",
-            Options { read_only: true },
+            "graph/static/f32.json",
+            "graph/static/checks.json",
+            "graph/static/f32-baseline.json",
         );
     }
 
@@ -305,7 +276,6 @@ mod tests {
             "graph/full/integration-f32-multi-insert.json",
             "graph/full/checks-multi-insert.json",
             "graph/full/integration-f32-multi-insert-baseline.json",
-            Options::default(),
         );
     }
 
@@ -316,7 +286,6 @@ mod tests {
             "graph/full/integration-f16.json",
             "graph/full/checks.json",
             "graph/full/integration-f16-baseline.json",
-            Options::default(),
         );
     }
 
@@ -327,7 +296,6 @@ mod tests {
             "graph/full/integration-u8.json",
             "graph/full/checks.json",
             "graph/full/integration-u8-baseline.json",
-            Options::default(),
         );
     }
 
@@ -338,7 +306,6 @@ mod tests {
             "graph/full/integration-i8.json",
             "graph/full/checks.json",
             "graph/full/integration-i8-baseline.json",
-            Options::default(),
         );
     }
 
@@ -361,7 +328,6 @@ mod tests {
             "graph/spherical/one-bit-l2.json",
             "graph/spherical/checks-loose.json", // looser
             "graph/spherical/one-bit-l2-baseline.json",
-            Options::default(),
         );
     }
 
@@ -372,7 +338,6 @@ mod tests {
             "graph/spherical/one-bit-ip.json",
             "graph/spherical/checks.json",
             "graph/spherical/one-bit-ip-baseline.json",
-            Options::default(),
         );
     }
 
@@ -383,7 +348,6 @@ mod tests {
             "graph/spherical/one-bit-cosine.json",
             "graph/spherical/checks-loose.json", // looser
             "graph/spherical/one-bit-cosine-baseline.json",
-            Options::default(),
         );
     }
 
@@ -394,7 +358,6 @@ mod tests {
             "graph/spherical/two-bit-l2.json",
             "graph/spherical/checks-loose.json", // looser
             "graph/spherical/two-bit-l2-baseline.json",
-            Options::default(),
         );
     }
 
@@ -405,7 +368,6 @@ mod tests {
             "graph/spherical/two-bit-ip.json",
             "graph/spherical/checks.json",
             "graph/spherical/two-bit-ip-baseline.json",
-            Options::default(),
         );
     }
 
@@ -420,7 +382,6 @@ mod tests {
             "graph/spherical/two-bit-cosine.json",
             "graph/spherical/checks-two-bit-cosine.json",
             "graph/spherical/two-bit-cosine-baseline.json",
-            Options::default(),
         );
     }
 
@@ -431,7 +392,6 @@ mod tests {
             "graph/spherical/four-bit-l2.json",
             "graph/spherical/checks.json",
             "graph/spherical/four-bit-l2-baseline.json",
-            Options::default(),
         );
     }
 
@@ -442,7 +402,6 @@ mod tests {
             "graph/spherical/four-bit-ip.json",
             "graph/spherical/checks.json",
             "graph/spherical/four-bit-ip-baseline.json",
-            Options::default(),
         );
     }
 
@@ -453,7 +412,6 @@ mod tests {
             "graph/spherical/four-bit-cosine.json",
             "graph/spherical/checks.json",
             "graph/spherical/four-bit-cosine-baseline.json",
-            Options::default(),
         );
     }
 
@@ -473,7 +431,6 @@ mod tests {
             "graph/product/l2.json",
             "graph/product/checks.json",
             "graph/product/l2-baseline.json",
-            Options::default(),
         );
     }
 
@@ -484,7 +441,6 @@ mod tests {
             "graph/product/ip.json",
             "graph/product/checks.json",
             "graph/product/ip-baseline.json",
-            Options::default(),
         );
     }
 
@@ -495,7 +451,6 @@ mod tests {
             "graph/product/cosine.json",
             "graph/product/checks-cosine.json",
             "graph/product/cosine-baseline.json",
-            Options::default(),
         );
     }
 
@@ -513,7 +468,6 @@ mod tests {
             "graph/scalar/one-bit-l2.json",
             "graph/scalar/checks.json",
             "graph/scalar/one-bit-l2-baseline.json",
-            Options::default(),
         );
     }
 
@@ -524,7 +478,6 @@ mod tests {
             "graph/scalar/two-bit-cosine.json",
             "graph/scalar/checks.json",
             "graph/scalar/two-bit-cosine-baseline.json",
-            Options::default(),
         );
     }
 
@@ -535,7 +488,6 @@ mod tests {
             "graph/scalar/four-bit-ip.json",
             "graph/scalar/checks.json",
             "graph/scalar/four-bit-ip-baseline.json",
-            Options::default(),
         );
     }
 
@@ -546,7 +498,6 @@ mod tests {
             "graph/scalar/eight-bit-l2.json",
             "graph/scalar/checks.json",
             "graph/scalar/eight-bit-l2-baseline.json",
-            Options::default(),
         );
     }
 
@@ -557,7 +508,6 @@ mod tests {
             "graph/scalar/eight-bit-l2-multi-insert.json",
             "graph/scalar/checks.json",
             "graph/scalar/eight-bit-l2-multi-insert-baseline.json",
-            Options::default(),
         );
     }
 }
