@@ -13,11 +13,11 @@
 
 use crate::ANNResult;
 use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
+use diskann_wide::Architecture;
 
 use super::{
     check_output_rows,
     partition_metric::{PartitionLeaders, PartitionMetric},
-    simd::Simd,
     topk::{Candidate, select_top_k_ids},
 };
 
@@ -52,7 +52,7 @@ pub(super) fn assign_leaders<A, M>(
     workspace: &mut PartitionKernelWorkspace,
 ) -> ANNResult<()>
 where
-    A: Simd,
+    A: Architecture,
     M: PartitionMetric,
 {
     let point_count = points.nrows();
@@ -147,7 +147,7 @@ mod tests {
         }
 
         impl<M: PartitionMetric> ArchCheck for LargeStripes<M> {
-            fn check<A: Simd>(&self, arch: A) {
+            fn check<A: Architecture>(&self, arch: A) {
                 let metric = self.metric;
                 let arch_name = std::any::type_name::<A>();
                 // 35 leaders give distance rows with two SIMD groups and a tail. 129 leaders

@@ -11,11 +11,11 @@
 
 use crate::ANNResult;
 use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
+use diskann_wide::Architecture;
 
 use super::{
     check_output_rows,
     leaf_metric::LeafMetric,
-    simd::Simd,
     topk::{Candidate, select_top_k_symmetric},
 };
 
@@ -47,7 +47,7 @@ pub(super) fn select_leaf_neighbors<A, M>(
     workspace: &mut LeafKernelWorkspace,
 ) -> ANNResult<()>
 where
-    A: Simd,
+    A: Architecture,
     M: LeafMetric,
 {
     let point_count = points.nrows();
@@ -159,7 +159,7 @@ mod tests {
         }
 
         impl<M: LeafMetric> ArchCheck for LargeLeaves<M> {
-            fn check<A: Simd>(&self, arch: A) {
+            fn check<A: Architecture>(&self, arch: A) {
                 let metric = self.metric;
                 let arch_name = std::any::type_name::<A>();
                 // 35 points give distance rows with two SIMD groups and a tail. 129 points

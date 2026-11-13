@@ -20,7 +20,7 @@ use diskann_wide::arch::x86_64::{V3, V4};
 use thiserror::Error;
 
 use super::fallback::FallbackKernel;
-use super::isa::{MaxSimIsa, NotSupported};
+use super::isa::{MaxSimIsa, NotSupported, dispatch_isa};
 use super::kernel::{Erase, MaxSimKernel};
 use super::max_sim::MaxSimError;
 use crate::matrix_kernels as mk;
@@ -578,52 +578,12 @@ impl MaxSimElement for f32 {
         query: MatRef<'_, Standard<f32>>,
         erase: E,
     ) -> Result<E::Output, BuildMaxSimError> {
-        match isa {
-            MaxSimIsa::Auto => Ok(diskann_wide::arch::dispatch1_no_features(
-                BuildAndErase(erase),
-                query,
-            )),
-            MaxSimIsa::Scalar => Ok(Scalar::new().run1(BuildAndErase(erase), query)),
-            #[cfg(target_arch = "x86_64")]
-            MaxSimIsa::X86_64_V3 => {
-                let arch = V3::new_checked().ok_or(NotSupported {
-                    isa,
-                    reason: "AVX2/FMA unavailable on this CPU",
-                })?;
-                Ok(arch.run1(BuildAndErase(erase), query))
-            }
-            #[cfg(target_arch = "x86_64")]
-            MaxSimIsa::X86_64_V4 => {
-                let arch = V4::new_checked().ok_or(NotSupported {
-                    isa,
-                    reason: "AVX-512 unavailable on this CPU",
-                })?;
-                Ok(arch.run1(BuildAndErase(erase), query))
-            }
-            #[cfg(not(target_arch = "x86_64"))]
-            MaxSimIsa::X86_64_V3 | MaxSimIsa::X86_64_V4 => Err(NotSupported {
-                isa,
-                reason: "x86_64 target only",
-            }
-            .into()),
-            #[cfg(target_arch = "aarch64")]
-            MaxSimIsa::Neon => {
-                let arch = Neon::new_checked().ok_or(NotSupported {
-                    isa,
-                    reason: "Neon unavailable on this CPU",
-                })?;
-                Ok(arch.run1(BuildAndErase(erase), query))
-            }
-            #[cfg(not(target_arch = "aarch64"))]
-            MaxSimIsa::Neon => Err(NotSupported {
-                isa,
-                reason: "aarch64 target only",
-            }
-            .into()),
-            MaxSimIsa::Reference => {
-                Ok(erase.erase(ReferenceKernel::new(query, reference_scores::<f32>)))
-            }
-        }
+        Ok(dispatch_isa!(
+            isa,
+            BuildAndErase(erase),
+            query,
+            erase.erase(ReferenceKernel::new(query, reference_scores::<f32>)),
+        )?)
     }
 }
 
@@ -636,52 +596,12 @@ impl MaxSimElement for half::f16 {
         query: MatRef<'_, Standard<half::f16>>,
         erase: E,
     ) -> Result<E::Output, BuildMaxSimError> {
-        match isa {
-            MaxSimIsa::Auto => Ok(diskann_wide::arch::dispatch1_no_features(
-                BuildAndErase(erase),
-                query,
-            )),
-            MaxSimIsa::Scalar => Ok(Scalar::new().run1(BuildAndErase(erase), query)),
-            #[cfg(target_arch = "x86_64")]
-            MaxSimIsa::X86_64_V3 => {
-                let arch = V3::new_checked().ok_or(NotSupported {
-                    isa,
-                    reason: "AVX2/FMA unavailable on this CPU",
-                })?;
-                Ok(arch.run1(BuildAndErase(erase), query))
-            }
-            #[cfg(target_arch = "x86_64")]
-            MaxSimIsa::X86_64_V4 => {
-                let arch = V4::new_checked().ok_or(NotSupported {
-                    isa,
-                    reason: "AVX-512 unavailable on this CPU",
-                })?;
-                Ok(arch.run1(BuildAndErase(erase), query))
-            }
-            #[cfg(not(target_arch = "x86_64"))]
-            MaxSimIsa::X86_64_V3 | MaxSimIsa::X86_64_V4 => Err(NotSupported {
-                isa,
-                reason: "x86_64 target only",
-            }
-            .into()),
-            #[cfg(target_arch = "aarch64")]
-            MaxSimIsa::Neon => {
-                let arch = Neon::new_checked().ok_or(NotSupported {
-                    isa,
-                    reason: "Neon unavailable on this CPU",
-                })?;
-                Ok(arch.run1(BuildAndErase(erase), query))
-            }
-            #[cfg(not(target_arch = "aarch64"))]
-            MaxSimIsa::Neon => Err(NotSupported {
-                isa,
-                reason: "aarch64 target only",
-            }
-            .into()),
-            MaxSimIsa::Reference => {
-                Ok(erase.erase(ReferenceKernel::new(query, reference_scores::<half::f16>)))
-            }
-        }
+        Ok(dispatch_isa!(
+            isa,
+            BuildAndErase(erase),
+            query,
+            erase.erase(ReferenceKernel::new(query, reference_scores::<half::f16>)),
+        )?)
     }
 }
 
@@ -704,52 +624,12 @@ impl MaxSimElement for i8 {
             ));
         }
 
-        match isa {
-            MaxSimIsa::Auto => Ok(diskann_wide::arch::dispatch1_no_features(
-                BuildAndErase(erase),
-                query,
-            )),
-            MaxSimIsa::Scalar => Ok(Scalar::new().run1(BuildAndErase(erase), query)),
-            #[cfg(target_arch = "x86_64")]
-            MaxSimIsa::X86_64_V3 => {
-                let arch = V3::new_checked().ok_or(NotSupported {
-                    isa,
-                    reason: "AVX2/FMA unavailable on this CPU",
-                })?;
-                Ok(arch.run1(BuildAndErase(erase), query))
-            }
-            #[cfg(target_arch = "x86_64")]
-            MaxSimIsa::X86_64_V4 => {
-                let arch = V4::new_checked().ok_or(NotSupported {
-                    isa,
-                    reason: "AVX-512 unavailable on this CPU",
-                })?;
-                Ok(arch.run1(BuildAndErase(erase), query))
-            }
-            #[cfg(not(target_arch = "x86_64"))]
-            MaxSimIsa::X86_64_V3 | MaxSimIsa::X86_64_V4 => Err(NotSupported {
-                isa,
-                reason: "x86_64 target only",
-            }
-            .into()),
-            #[cfg(target_arch = "aarch64")]
-            MaxSimIsa::Neon => {
-                let arch = Neon::new_checked().ok_or(NotSupported {
-                    isa,
-                    reason: "Neon unavailable on this CPU",
-                })?;
-                Ok(arch.run1(BuildAndErase(erase), query))
-            }
-            #[cfg(not(target_arch = "aarch64"))]
-            MaxSimIsa::Neon => Err(NotSupported {
-                isa,
-                reason: "aarch64 target only",
-            }
-            .into()),
-            MaxSimIsa::Reference => {
-                Ok(erase.erase(ReferenceKernel::new(query, reference_scores_i8)))
-            }
-        }
+        Ok(dispatch_isa!(
+            isa,
+            BuildAndErase(erase),
+            query,
+            erase.erase(ReferenceKernel::new(query, reference_scores_i8)),
+        )?)
     }
 }
 
@@ -917,17 +797,22 @@ mod tests {
             let mut expected_scores = vec![0.0f32; nq];
             let _ = MaxSim::new(&mut expected_scores).evaluate(QueryMatRef::from(query), doc);
 
-            let kernel = build_max_sim::<T, _>(MaxSimIsa::Auto, query, BoxErase).unwrap();
-            let mut actual_scores = scores_buffer::<T>(nq);
-            kernel.compute_max_sim(doc, &mut actual_scores).unwrap();
+            for isa in MaxSimIsa::all()
+                .into_iter()
+                .filter(|isa| isa.is_available())
+            {
+                let kernel = build_max_sim::<T, _>(isa, query, BoxErase).unwrap();
+                let mut actual_scores = scores_buffer::<T>(nq);
+                kernel.compute_max_sim(doc, &mut actual_scores).unwrap();
 
-            for i in 0..nq {
-                let actual = T::score_as_f32(actual_scores[i]);
-                assert!(
-                    (actual - expected_scores[i]).abs() < tol,
-                    "{label}MaxSim[{i}] mismatch for ({nq},{nd},{dim}): actual={actual}, expected={}",
-                    expected_scores[i],
-                );
+                for i in 0..nq {
+                    let actual = T::score_as_f32(actual_scores[i]);
+                    assert!(
+                        (actual - expected_scores[i]).abs() < tol,
+                        "{label}({isa:?}) MaxSim[{i}] mismatch for ({nq},{nd},{dim}): actual={actual}, expected={}",
+                        expected_scores[i],
+                    );
+                }
             }
         }
     }

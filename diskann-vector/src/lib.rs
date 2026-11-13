@@ -37,6 +37,7 @@ pub mod conversion;
 pub mod distance;
 pub mod norm;
 pub mod sparse;
+pub mod topk;
 
 #[cfg(any(
     all(target_arch = "x86_64", target_feature = "avx2"),
