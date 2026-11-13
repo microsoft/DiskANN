@@ -54,7 +54,7 @@ impl NoopSearchRecord {
 
 impl<T> SearchRecord<T> for NoopSearchRecord where T: Eq {}
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct VisitedSearchRecord<T>
 where
     T: Eq + Clone + Send + Sync + 'static,
