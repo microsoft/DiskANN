@@ -11,9 +11,13 @@
 //!
 //! 1. The dataset is split into overlapping leaves.
 //! 2. Each point selects its `leaf_k` nearest neighbors inside each of its
-//!    leaves. The selected pairs form one candidate list per point.
+//!    leaves. The selected pairs form one candidate list per point. With
+//!    [`HashPruneConfig`], they go into one bounded reservoir per point
+//!    instead, which keeps at most `l_max` candidates and at most one for each
+//!    direction hash.
 //! 3. Each list that is longer than the graph degree is pruned with Vamana
-//!    RobustPrune.
+//!    RobustPrune. Without `final_prune`, a HashPrune build keeps the nearest
+//!    reservoir entries instead.
 //!
 //! Describe the rows with [`Rows`] or your own [`Dataset`], set the parameters
 //! with [`Config::builder`], and call [`build_graph`]:
@@ -48,12 +52,15 @@
 // compile once. Each step takes ownership of the previous output and frees it
 // when it returns.
 
+mod bf16;
 mod dataset;
 mod finalization;
+mod hash_prune;
 mod kernels;
 mod leaf_build;
 mod leaf_kernel;
 mod leaf_metric;
+mod lsh;
 mod partition_kernel;
 mod partition_metric;
 mod partitioning;
@@ -200,9 +207,67 @@ pub enum ConfigError {
     },
     #[error("max_leaders ({0}) must be at least 2")]
     MaxLeaders(usize),
+    #[error("num_hash_planes ({0}) must be in [1, {max}]", max = lsh::MAX_PLANES)]
+    HashPlanes(usize),
+    #[error("l_max ({0}) must be in [1, {max}]", max = hash_prune::MAX_RESERVOIR_LEN)]
+    ReservoirLength(usize),
+    #[error(
+        "HashPrune capacity min(l_max={l_max}, hash buckets={hash_buckets}) must be at least \
+         the graph degree ({degree})"
+    )]
+    HashPruneCapacity {
+        l_max: usize,
+        hash_buckets: usize,
+        degree: usize,
+    },
 }
 
 crate::convert_error!(ConfigError);
+
+/// HashPrune: a bounded reservoir of candidates for each point instead of the
+/// unbounded direct merge of the leaf pairs.
+///
+/// A reservoir keeps at most `l_max` candidates, at most one for each
+/// direction hash of `num_hash_planes` random hyperplanes, and keeps the
+/// nearer candidate of a hash collision. With `final_prune`, RobustPrune cuts
+/// the reservoirs to the degree; without it, each point keeps its nearest
+/// reservoir entries.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HashPruneConfig {
+    /// Number of random hyperplanes of the direction hash, in
+    /// `[1, 16]`.
+    pub num_hash_planes: usize,
+    /// Maximum number of candidates in a reservoir, in `[1, 255]`.
+    pub l_max: usize,
+    /// Run RobustPrune on the reservoirs. Without it, each point keeps its
+    /// nearest reservoir entries up to the degree.
+    pub final_prune: bool,
+}
+
+impl HashPruneConfig {
+    /// Check the parameters against the graph `degree`: a reservoir must be
+    /// able to hold `degree` candidates.
+    fn validate(&self, degree: usize) -> Result<(), ConfigError> {
+        if !(1..=lsh::MAX_PLANES).contains(&self.num_hash_planes) {
+            return Err(ConfigError::HashPlanes(self.num_hash_planes));
+        }
+        if !(1..=hash_prune::MAX_RESERVOIR_LEN).contains(&self.l_max) {
+            return Err(ConfigError::ReservoirLength(self.l_max));
+        }
+        let hash_buckets = 1 << self.num_hash_planes;
+        if self.l_max.min(hash_buckets) < degree {
+            return Err(ConfigError::HashPruneCapacity {
+                l_max: self.l_max,
+                hash_buckets,
+                degree,
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Seed of the HashPrune hyperplanes.
+const HASH_PRUNE_SEED: u64 = 42;
 
 /// Error for a dataset that a build cannot start from.
 #[derive(Debug, PartialEq, thiserror::Error)]
@@ -231,6 +296,7 @@ crate::convert_error!(DatasetError);
 pub struct Config {
     partition: PartitionConfig,
     leaf_k: NonZeroUsize,
+    hash_prune: Option<HashPruneConfig>,
     prune: PruneConfig,
 }
 
@@ -295,6 +361,11 @@ impl Config {
         self.leaf_k
     }
 
+    /// HashPrune policy, or `None` for the direct merge of the leaf pairs.
+    pub fn hash_prune(&self) -> Option<&HashPruneConfig> {
+        self.hash_prune.as_ref()
+    }
+
     /// Number of neighbors that final pruning keeps for each point.
     pub fn degree(&self) -> NonZeroUsize {
         self.prune.degree
@@ -340,6 +411,7 @@ pub struct Builder {
     max_depth: NonZeroUsize,
     leaf_k: NonZeroUsize,
     seed: Option<u64>,
+    hash_prune: Option<HashPruneConfig>,
     alpha: f32,
     max_occlusion_size: NonZeroU16,
 }
@@ -356,6 +428,7 @@ impl Builder {
             max_depth: defaults::MAX_DEPTH,
             leaf_k: defaults::LEAF_K,
             seed: None,
+            hash_prune: None,
             alpha: config::defaults::ALPHA,
             max_occlusion_size: config::defaults::MAX_OCCLUSION_SIZE,
         }
@@ -434,6 +507,13 @@ impl Builder {
         self
     }
 
+    /// Merge the leaf pairs into bounded HashPrune reservoirs instead of
+    /// unbounded candidate lists. See [`HashPruneConfig`].
+    pub fn hash_prune(mut self, config: HashPruneConfig) -> Self {
+        self.hash_prune = Some(config);
+        self
+    }
+
     /// RobustPrune alpha of final pruning. A larger alpha occludes fewer
     /// candidates and keeps longer edges.
     pub fn alpha(mut self, alpha: f32) -> Self {
@@ -466,6 +546,9 @@ impl Builder {
         if self.max_leaders.get() < 2 {
             return Err(ConfigError::MaxLeaders(self.max_leaders.get()));
         }
+        if let Some(hash_prune) = &self.hash_prune {
+            hash_prune.validate(self.degree.get())?;
+        }
         Ok(Config {
             partition: PartitionConfig {
                 c_max: self.c_max,
@@ -476,6 +559,7 @@ impl Builder {
                 seed: self.seed.unwrap_or_else(rand::random),
             },
             leaf_k: self.leaf_k,
+            hash_prune: self.hash_prune,
             prune: PruneConfig {
                 degree: self.degree,
                 alpha: self.alpha,
@@ -528,8 +612,29 @@ fn build(backend: Backend<'_>, config: &Config) -> ANNResult<Vec<AdjacencyList<u
     // The leaf step takes the leaves by value, so their memory is free before
     // final pruning starts.
     let start = Instant::now();
-    let candidates =
-        leaf_build::build_leaf_candidates(data, &*kernels, leaves, config.leaf_k.get())?;
+    let candidates = match &config.hash_prune {
+        None => leaf_build::build_leaf_candidates(data, &*kernels, leaves, config.leaf_k.get())?,
+        Some(hash_prune) => {
+            let reservoirs = hash_prune::HashPrune::new(
+                data,
+                hash_prune.num_hash_planes,
+                hash_prune.l_max,
+                HASH_PRUNE_SEED,
+            )?;
+            leaf_build::add_hash_prune_candidates(
+                data,
+                &*kernels,
+                leaves,
+                config.leaf_k.get(),
+                &reservoirs,
+            )?;
+            tracked_debug!("PiPNN leaf build in {:.2?}", start.elapsed());
+            if !hash_prune.final_prune {
+                return Ok(reservoirs.into_nearest_lists(config.prune.degree.get()));
+            }
+            reservoirs.into_candidate_lists()
+        }
+    };
     tracked_debug!("PiPNN leaf build in {:.2?}", start.elapsed());
     // Final pruning cuts each candidate list in place.
     let start = Instant::now();
@@ -750,7 +855,7 @@ mod construction_tests {
     use diskann_vector::distance::Metric;
     use half::f16;
     use std::fs::File;
-    use test_support::nz;
+    use test_support::{both_directions, edges, nz};
 
     const SIFT: &str = "sift/siftsmall_learn_256pts.fbin";
     const SIFT_NORMALIZED: &str = "sift/siftsmall_learn_256pts_normalized.fbin";
@@ -950,6 +1055,98 @@ mod construction_tests {
 
         assert_eq!(given.seed(), seed);
         assert_ne!(drawn.seed(), drawn_again.seed());
+    }
+
+    #[test]
+    fn hash_prune_parameters_must_hold_the_graph_degree() {
+        for (num_hash_planes, l_max, degree, expected) in [
+            (0, 64, 2, Err(ConfigError::HashPlanes(0))),
+            (17, 64, 2, Err(ConfigError::HashPlanes(17))),
+            (8, 0, 2, Err(ConfigError::ReservoirLength(0))),
+            (8, 256, 2, Err(ConfigError::ReservoirLength(256))),
+            (16, 255, 2, Ok(())),
+            (8, 64, 64, Ok(())),
+            (
+                8,
+                63,
+                64,
+                Err(ConfigError::HashPruneCapacity {
+                    l_max: 63,
+                    hash_buckets: 256,
+                    degree: 64,
+                }),
+            ),
+            (1, 64, 2, Ok(())),
+            (
+                1,
+                64,
+                3,
+                Err(ConfigError::HashPruneCapacity {
+                    l_max: 64,
+                    hash_buckets: 2,
+                    degree: 3,
+                }),
+            ),
+        ] {
+            let config = HashPruneConfig {
+                num_hash_planes,
+                l_max,
+                final_prune: true,
+            };
+
+            let actual = Config::builder(nz(degree))
+                .hash_prune(config)
+                .build()
+                .map(|_| ());
+
+            assert_eq!(
+                actual, expected,
+                "planes={num_hash_planes}, l_max={l_max}, degree={degree}"
+            );
+        }
+    }
+
+    #[test]
+    fn hash_prune_keeps_the_nearest_neighbor_in_each_direction() {
+        // On a line, the two directions from a point have complementary hashes,
+        // so each reservoir keeps the nearest point on each side. Degree two
+        // keeps both.
+        let values = [-3.0_f32, 0.0, 1.0];
+        let dimensions = 1;
+        let data = rowmajor::Ref::try_from_data(&values[..], values.len(), dimensions).unwrap();
+        let degree = 2;
+        for (n_threads, final_prune) in [(1, true), (4, true), (4, false)] {
+            let config = Config::builder(nz(degree))
+                .c_max(nz(3))
+                .p_samp(1.0)
+                .fanout(vec![nz(1)])
+                .max_depth(nz(10))
+                .leaf_k(nz(2))
+                .seed(1290)
+                .alpha(1.0)
+                .hash_prune(HashPruneConfig {
+                    num_hash_planes: 8,
+                    l_max: 16,
+                    final_prune,
+                })
+                .build()
+                .unwrap();
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(n_threads)
+                .build()
+                .unwrap();
+
+            let actual = pool
+                .install(|| build_graph(&Rows::new(data, Metric::L2).unwrap(), &config))
+                .unwrap();
+
+            let actual: Vec<Vec<u32>> = actual.into_iter().map(Vec::from).collect();
+            assert_eq!(
+                edges(&actual),
+                both_directions([(0, 1), (1, 2)]),
+                "{n_threads} threads, final_prune={final_prune}"
+            );
+        }
     }
 
     #[test]

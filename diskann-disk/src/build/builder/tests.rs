@@ -258,9 +258,18 @@ mod disk_index_build_tests {
     // With 256 points, `p_samp = 0.05` gives 13 leaders, so the fanout-10
     // level applies and the leaves overlap. With fewer leaders the leaves are
     // disjoint, and the two clusters of this sample stay disconnected.
+    // The HashPrune case also computes its sketches from the decoded rows.
     #[cfg(feature = "pipnn")]
-    #[test]
-    fn test_disk_minmax_pipnn_index_builder() {
+    #[rstest]
+    #[case::direct(None)]
+    #[case::hash_prune(Some(diskann::graph::pipnn::HashPruneConfig {
+        num_hash_planes: 12,
+        l_max: 72,
+        final_prune: true,
+    }))]
+    fn test_disk_minmax_pipnn_index_builder(
+        #[case] hash_prune: Option<diskann::graph::pipnn::HashPruneConfig>,
+    ) {
         let params = TestParams {
             dim: 148,
             full_dim: 128,
@@ -275,10 +284,14 @@ mod disk_index_build_tests {
             32,
             |fixture| {
                 fixture.build_with_pipnn::<GraphDataMinMaxVectorUnitData>(|pipnn| {
-                    pipnn
+                    let pipnn = pipnn
                         .c_max(std::num::NonZeroUsize::new(64).unwrap())
                         .p_samp(0.05)
-                        .seed(42)
+                        .seed(42);
+                    match hash_prune {
+                        Some(hash_prune) => pipnn.hash_prune(hash_prune),
+                        None => pipnn,
+                    }
                 })
             },
         );

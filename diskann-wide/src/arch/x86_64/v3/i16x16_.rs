@@ -16,7 +16,7 @@ use crate::{
             v3::i16x8,
         },
     },
-    bitmask::BitMask,
+    bitmask::{BitMask, FromInt},
     constant::Const,
     emulated::Emulated,
     helpers,
@@ -89,16 +89,19 @@ impl SIMDMulAdd for i16x16 {
 impl SIMDPartialEq for i16x16 {
     #[inline(always)]
     fn eq_simd(self, other: Self) -> Self::Mask {
-        self.emulated()
-            .eq_simd(other.emulated())
-            .as_arch(self.arch())
+        // SAFETY: V3 includes AVX2 and BMI2. Each equal i16 lane contributes
+        // two adjacent movemask bits; pext keeps one bit per lane.
+        let bits = unsafe {
+            let bytes = _mm256_movemask_epi8(_mm256_cmpeq_epi16(self.0, other.0)) as u32;
+            _pext_u32(bytes, 0x5555_5555) as u16
+        };
+        BitMask::from_int(self.arch(), bits)
     }
 
     #[inline(always)]
     fn ne_simd(self, other: Self) -> Self::Mask {
-        self.emulated()
-            .ne_simd(other.emulated())
-            .as_arch(self.arch())
+        let equal = self.eq_simd(other);
+        BitMask::from_int(self.arch(), !equal.0)
     }
 }
 
