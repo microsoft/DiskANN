@@ -34,8 +34,11 @@ pub trait NeighborQueue<I: NeighborPriorityQueueIdType>: Debug + Send + Sync {
     /// Insert a neighbor into the priority queue.
     fn insert(&mut self, nbr: Neighbor<I>);
 
-    /// Insert unique neighbors into the priority queue, clearing the buffer without
-    /// changing its capacity.
+    /// Insert unique neighbors into the priority queue.
+    ///
+    /// The mutable buffer allows implementations to filter and sort candidates
+    /// in place. It is empty on return, with its capacity unchanged, so callers
+    /// can reuse the allocation for subsequent batches.
     fn batch_insert(&mut self, neighbors: &mut Vec<Neighbor<I>>) {
         for neighbor in neighbors.drain(..) {
             self.insert(neighbor);
@@ -179,10 +182,9 @@ impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
         }
     }
 
-    /// Insert unique neighbors into the priority queue, clearing the buffer without
-    /// changing its capacity.
+    /// See [`NeighborQueue::batch_insert`].
     ///
-    /// As with [`Self::insert`], IDs must be unique; NaN distances are ignored.
+    /// NaN distances are ignored.
     pub fn batch_insert(&mut self, neighbors: &mut Vec<Neighbor<I>>) {
         if self.auto_resizable {
             for neighbor in neighbors.drain(..) {
