@@ -3,6 +3,9 @@
  * Licensed under the MIT license.
  */
 
+use std::path::Path;
+
+use anyhow::Context;
 use diskann_utils::{
     io::read_bin,
     views::rowmajor::{self, MatrixMut},
@@ -10,6 +13,19 @@ use diskann_utils::{
 use half::f16;
 
 use super::datatype::{DataType, Dataset, Preprocess, SliceMut};
+
+pub(crate) fn open<P>(path: P) -> anyhow::Result<std::io::BufReader<std::fs::File>>
+where
+    P: AsRef<Path>,
+{
+    fn inner(path: &Path) -> anyhow::Result<std::io::BufReader<std::fs::File>> {
+        std::fs::File::open(path)
+            .map(std::io::BufReader::new)
+            .with_context(|| format!("could not open {}", path.display()))
+    }
+
+    inner(path.as_ref())
+}
 
 pub(crate) fn load_and_convert<IO>(
     io: &mut IO,
