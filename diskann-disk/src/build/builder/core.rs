@@ -562,6 +562,8 @@ pub(crate) mod disk_index_builder_tests {
     use vfs::OverlayFS;
 
     use super::*;
+    #[cfg(feature = "pipnn")]
+    use crate::build::configuration::GraphBuildConfig;
     use crate::{
         build::{
             builder::{backend::BuildElement, build::DiskIndexBuilder},
@@ -695,13 +697,13 @@ pub(crate) mod disk_index_builder_tests {
             let graph = configure(diskann::graph::pipnn::Config::builder(degree)).build()?;
             let metadata =
                 load_metadata_from_file(self.storage_provider.as_ref(), &self.params.data_path)?;
-            let mut config = DiskIndexBuildConfig::pipnn(
+            let mut config = DiskIndexBuildConfig::new(
                 self.params.metric,
                 self.params.dim,
                 metadata.npoints(),
                 self.params.num_threads,
                 NumPQChunks::new_with(self.params.num_pq_chunks, self.params.full_dim)?,
-                graph,
+                GraphBuildConfig::Pipnn(graph),
             )
             .with_seed(100);
             if let Some(count) = self.params.data_compression_chunk_vector_count {
@@ -778,10 +780,7 @@ pub(crate) mod disk_index_builder_tests {
 
             DiskIndexBuilder::<T, _>::new(
                 self.storage_provider.as_ref(),
-                DiskIndexBuildConfig::Vamana {
-                    index: config,
-                    parameters: disk_index_build_parameters,
-                },
+                DiskIndexBuildConfig::from((config, disk_index_build_parameters)),
                 disk_index_writer,
             )
         }
@@ -1207,10 +1206,7 @@ pub(crate) mod disk_index_builder_tests {
 
         DiskIndexBuilder::<GraphDataF32VectorUnitData, VirtualStorageProvider<OverlayFS>>::new(
             storage_provider,
-            DiskIndexBuildConfig::Vamana {
-                index: index_configuration,
-                parameters: build_parameters,
-            },
+            DiskIndexBuildConfig::from((index_configuration, build_parameters)),
             disk_index_writer,
         )
     }

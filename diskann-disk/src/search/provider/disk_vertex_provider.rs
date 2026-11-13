@@ -347,10 +347,7 @@ mod disk_vertex_provider_tests {
         let mut disk_index: DiskIndexBuilder<GraphDataF32VectorU32Data, StorageProviderType> =
             DiskIndexBuilder::<GraphDataF32VectorU32Data, StorageProviderType>::new(
                 storage_provider,
-                DiskIndexBuildConfig::Vamana {
-                    index: config,
-                    parameters: disk_index_build_parameters,
-                },
+                DiskIndexBuildConfig::from((config, disk_index_build_parameters)),
                 disk_index_writer,
             )
             .unwrap();

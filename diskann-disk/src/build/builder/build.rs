@@ -37,7 +37,9 @@ use crate::{
         inmem_builder::{self, InmemIndexBuilder, StartPoint},
         tokio::create_runtime,
     },
-    build::configuration::{BuildParameters, DiskIndexBuildConfig},
+    build::configuration::{
+        BuildParameters, DiskIndexBuildConfig, GraphBuildConfig, MemoryBudget, QuantizationType,
+    },
     error::{ErrorKind, diskann_error},
     storage::{
         DiskIndexWriter,
@@ -50,8 +52,13 @@ use crate::{
 
 enum GraphBuild<T> {
     Vamana {
-        index: IndexConfiguration,
-        parameters: DiskIndexBuildParameters,
+        graph: diskann::graph::config::Config,
+        memory_budget: MemoryBudget,
+        build_quantization: QuantizationType,
+        frozen_points: NonZeroUsize,
+        prefetch_lookahead: Option<NonZeroUsize>,
+        prefetch_cache_line_level:
+            Option<diskann_providers::model::graph::provider::async_::PrefetchCacheLineLevel>,
         backend: Backend<T>,
     },
     #[cfg(feature = "pipnn")]
@@ -86,47 +93,41 @@ where
         config: DiskIndexBuildConfig,
         index_writer: DiskIndexWriter,
     ) -> ANNResult<Self> {
-        let (parameters, graph) = match config {
-            DiskIndexBuildConfig::Vamana { index, parameters } => {
-                let common = BuildParameters::from((&index, &parameters));
+        let parameters = BuildParameters::from(&config);
+        let graph = match config.graph {
+            GraphBuildConfig::Vamana {
+                graph,
+                memory_budget,
+                build_quantization,
+                frozen_points,
+                prefetch_lookahead,
+                prefetch_cache_line_level,
+            } => {
+                let index = parameters.index_configuration(
+                    graph.clone(),
+                    frozen_points,
+                    prefetch_lookahead,
+                    prefetch_cache_line_level,
+                );
                 let backend = Backend::<Data::VectorDataType>::new(
-                    parameters.build_quantization(),
+                    &build_quantization,
                     &index_writer.get_index_path_prefix(),
                     &index,
                     &index_writer.get_dataset_file(),
                     storage_provider,
                 )?;
-                (
-                    common,
-                    GraphBuild::Vamana {
-                        index,
-                        parameters,
-                        backend,
-                    },
-                )
+                GraphBuild::Vamana {
+                    graph,
+                    memory_budget,
+                    build_quantization,
+                    frozen_points,
+                    prefetch_lookahead,
+                    prefetch_cache_line_level,
+                    backend,
+                }
             }
             #[cfg(feature = "pipnn")]
-            DiskIndexBuildConfig::Pipnn {
-                graph,
-                metric,
-                dim,
-                num_points,
-                num_threads,
-                search_pq_chunks,
-                compression_chunk_vector_count,
-                seed,
-            } => (
-                BuildParameters {
-                    metric,
-                    dim,
-                    num_points,
-                    num_threads,
-                    search_pq_chunks,
-                    compression_chunk_vector_count,
-                    seed,
-                },
-                GraphBuild::Pipnn(graph),
-            ),
+            GraphBuildConfig::Pipnn(graph) => GraphBuild::Pipnn(graph),
         };
         let pq_storage = PQStorage::new(
             &(index_writer.get_index_path_prefix() + "_pq_pivots.bin"),
@@ -155,13 +156,34 @@ where
 
         match &self.graph {
             GraphBuild::Vamana {
-                index,
-                parameters,
+                graph,
+                memory_budget,
+                build_quantization,
+                frozen_points,
+                prefetch_lookahead,
+                prefetch_cache_line_level,
                 backend,
             } => {
-                create_runtime(index.num_threads)?.block_on(build_vamana_graph::<Data, _>(
-                    index,
-                    parameters,
+                let index = self.parameters.index_configuration(
+                    graph.clone(),
+                    *frozen_points,
+                    *prefetch_lookahead,
+                    *prefetch_cache_line_level,
+                );
+                let parameters = DiskIndexBuildParameters::new(
+                    *memory_budget,
+                    *build_quantization,
+                    self.parameters.search_pq_chunks,
+                )
+                .with_data_compression_chunk_vector_count(
+                    self.parameters.compression_chunk_vector_count,
+                );
+                create_runtime(self.parameters.num_threads)?.block_on(build_vamana_graph::<
+                    Data,
+                    _,
+                >(
+                    &index,
+                    &parameters,
                     backend,
                     &self.index_writer,
                     self.storage_provider,

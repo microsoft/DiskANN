@@ -3,98 +3,124 @@
  * Licensed under the MIT license.
  */
 
-//! Configuration selected once for disk graph construction.
+//! Shared disk-build inputs and algorithm-specific graph settings.
 
-use diskann_providers::model::IndexConfiguration;
+use std::num::NonZeroUsize;
+
+use diskann::graph::config::Config;
+use diskann_providers::model::{
+    IndexConfiguration, graph::provider::async_::PrefetchCacheLineLevel,
+};
 use diskann_vector::distance::Metric;
 
-#[cfg(feature = "pipnn")]
-use super::disk_index_build_parameter::DEFAULT_DATA_COMPRESSION_CHUNK_VECTOR_COUNT;
-use super::{DiskIndexBuildParameters, NumPQChunks};
+use super::{
+    DEFAULT_DATA_COMPRESSION_CHUNK_VECTOR_COUNT, DiskIndexBuildParameters, MemoryBudget,
+    NumPQChunks, QuantizationType,
+};
 
-/// Owns the selected algorithm's configuration, without parameters for the other algorithm.
+/// Shared inputs for disk construction, with one selected graph algorithm.
+#[derive(Clone, Debug)]
+pub struct DiskIndexBuildConfig {
+    /// Dataset metric.
+    pub metric: Metric,
+    /// Stored scalar elements per row.
+    pub dim: usize,
+    /// Dataset row count.
+    pub num_points: usize,
+    /// Worker count; zero selects the system default.
+    pub num_threads: usize,
+    /// Search-time PQ code size.
+    pub search_pq_chunks: NumPQChunks,
+    /// Number of vectors compressed per batch.
+    pub compression_chunk_vector_count: usize,
+    /// Seed for search-PQ training and medoid sampling.
+    pub seed: Option<u64>,
+    /// Parameters used only by the selected graph algorithm.
+    pub graph: GraphBuildConfig,
+}
+
+/// Graph-specific configuration; dataset and search-PQ settings stay outside it.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
-pub enum DiskIndexBuildConfig {
-    /// Existing Vamana configuration, including its build representation and RAM budget.
+pub enum GraphBuildConfig {
+    /// Vamana insertion and build-provider settings.
     Vamana {
-        /// Vamana provider and graph settings.
-        index: IndexConfiguration,
-        /// Disk-search compression and Vamana build settings.
-        parameters: DiskIndexBuildParameters,
+        /// Vamana search and pruning policy.
+        graph: Config,
+        /// Budget used to select one-shot or sharded construction.
+        memory_budget: MemoryBudget,
+        /// Vamana build representation, independent of search-time PQ.
+        build_quantization: QuantizationType,
+        /// Initial candidates retained by the Vamana provider.
+        frozen_points: NonZeroUsize,
+        /// Vector-provider prefetch lookahead.
+        prefetch_lookahead: Option<NonZeroUsize>,
+        /// Vector-provider prefetch granularity.
+        prefetch_cache_line_level: Option<PrefetchCacheLineLevel>,
     },
-    /// PiPNN graph settings and the shared disk-build inputs.
+    /// PiPNN partitioning and pruning policy.
     #[cfg(feature = "pipnn")]
-    Pipnn {
-        /// PiPNN partitioning and pruning policy.
-        graph: diskann::graph::pipnn::Config,
-        /// Dataset metric.
-        metric: Metric,
-        /// Number of stored scalar elements per row.
-        dim: usize,
-        /// Dataset row count.
-        num_points: usize,
-        /// Worker count; zero selects the system default.
-        num_threads: usize,
-        /// Search-time PQ code size.
-        search_pq_chunks: NumPQChunks,
-        /// Number of vectors compressed per batch.
-        compression_chunk_vector_count: usize,
-        /// Seed for search-PQ training and medoid sampling.
-        seed: Option<u64>,
-    },
+    Pipnn(diskann::graph::pipnn::Config),
 }
 
 impl DiskIndexBuildConfig {
-    /// Configures PiPNN with default disk compression batching and unseeded PQ sampling.
-    #[cfg(feature = "pipnn")]
-    pub fn pipnn(
+    /// Configures a disk build with default compression batching and unseeded PQ sampling.
+    pub fn new(
         metric: Metric,
         dim: usize,
         num_points: usize,
         num_threads: usize,
         search_pq_chunks: NumPQChunks,
-        graph: diskann::graph::pipnn::Config,
+        graph: GraphBuildConfig,
     ) -> Self {
-        Self::Pipnn {
-            graph,
+        Self {
             metric,
             dim,
             num_points,
             num_threads,
             search_pq_chunks,
+            graph,
             compression_chunk_vector_count: DEFAULT_DATA_COMPRESSION_CHUNK_VECTOR_COUNT,
             seed: None,
         }
     }
 
-    /// Seeds disk-search PQ and medoid sampling; graph-specific seeds remain independent.
+    /// Seeds search-PQ training and medoid sampling; graph-specific seeds stay independent.
     pub fn with_seed(mut self, seed: u64) -> Self {
-        match &mut self {
-            Self::Vamana { index, .. } => index.random_seed = Some(seed),
-            #[cfg(feature = "pipnn")]
-            Self::Pipnn { seed: value, .. } => *value = Some(seed),
-        }
+        self.seed = Some(seed);
         self
     }
 
     /// Sets the number of vectors compressed per batch.
     pub fn with_data_compression_chunk_vector_count(mut self, count: usize) -> Self {
-        match &mut self {
-            Self::Vamana { parameters, .. } => {
-                *parameters = parameters.with_data_compression_chunk_vector_count(count);
-            }
-            #[cfg(feature = "pipnn")]
-            Self::Pipnn {
-                compression_chunk_vector_count,
-                ..
-            } => *compression_chunk_vector_count = count,
-        }
+        self.compression_chunk_vector_count = count;
         self
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+impl From<(IndexConfiguration, DiskIndexBuildParameters)> for DiskIndexBuildConfig {
+    fn from((index, parameters): (IndexConfiguration, DiskIndexBuildParameters)) -> Self {
+        Self {
+            metric: index.dist_metric,
+            dim: index.dim,
+            num_points: index.max_points,
+            num_threads: index.num_threads,
+            search_pq_chunks: parameters.search_pq_chunks(),
+            compression_chunk_vector_count: parameters.data_compression_chunk_vector_count(),
+            seed: index.random_seed,
+            graph: GraphBuildConfig::Vamana {
+                graph: index.config,
+                memory_budget: parameters.build_memory_limit(),
+                build_quantization: *parameters.build_quantization(),
+                frozen_points: index.num_frozen_pts,
+                prefetch_lookahead: index.prefetch_lookahead,
+                prefetch_cache_line_level: index.prefetch_cache_line_level,
+            },
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
 pub(crate) struct BuildParameters {
     pub metric: Metric,
     pub dim: usize,
@@ -105,16 +131,38 @@ pub(crate) struct BuildParameters {
     pub seed: Option<u64>,
 }
 
-impl From<(&IndexConfiguration, &DiskIndexBuildParameters)> for BuildParameters {
-    fn from((index, parameters): (&IndexConfiguration, &DiskIndexBuildParameters)) -> Self {
+impl From<&DiskIndexBuildConfig> for BuildParameters {
+    fn from(config: &DiskIndexBuildConfig) -> Self {
         Self {
-            metric: index.dist_metric,
-            dim: index.dim,
-            num_points: index.max_points,
-            num_threads: index.num_threads,
-            search_pq_chunks: parameters.search_pq_chunks(),
-            compression_chunk_vector_count: parameters.data_compression_chunk_vector_count(),
-            seed: index.random_seed,
+            metric: config.metric,
+            dim: config.dim,
+            num_points: config.num_points,
+            num_threads: config.num_threads,
+            search_pq_chunks: config.search_pq_chunks,
+            compression_chunk_vector_count: config.compression_chunk_vector_count,
+            seed: config.seed,
+        }
+    }
+}
+
+impl BuildParameters {
+    pub(crate) fn index_configuration(
+        &self,
+        graph: Config,
+        frozen_points: NonZeroUsize,
+        prefetch_lookahead: Option<NonZeroUsize>,
+        prefetch_cache_line_level: Option<PrefetchCacheLineLevel>,
+    ) -> IndexConfiguration {
+        IndexConfiguration {
+            config: graph,
+            dist_metric: self.metric,
+            dim: self.dim,
+            max_points: self.num_points,
+            num_threads: self.num_threads,
+            random_seed: self.seed,
+            num_frozen_pts: frozen_points,
+            prefetch_lookahead,
+            prefetch_cache_line_level,
         }
     }
 }

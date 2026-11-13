@@ -10,7 +10,7 @@ use std::num::NonZeroUsize;
 use diskann::ANNError;
 use thiserror::Error;
 
-use super::QuantizationType;
+use super::{DEFAULT_DATA_COMPRESSION_CHUNK_VECTOR_COUNT, QuantizationType};
 
 use crate::error::{ErrorKind, diskann_error};
 
@@ -20,8 +20,6 @@ pub const BYTES_IN_GB: f64 = 1024_f64 * 1024_f64 * 1024_f64;
 /// Disk sector length in bytes. This is used as the offset alignment and
 /// smallest block size when reading/writing index data from/to disk.
 pub const DISK_SECTOR_LEN: usize = 4096;
-
-pub(super) const DEFAULT_DATA_COMPRESSION_CHUNK_VECTOR_COUNT: usize = 25_000;
 
 /// Errors returned when validating PQ chunk parameters.
 #[derive(Debug, Error, PartialEq)]

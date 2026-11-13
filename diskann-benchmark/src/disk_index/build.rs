@@ -121,10 +121,7 @@ where
 
     let mut disk_index = DiskIndexBuilder::<AdHoc<T>, StorageProviderType>::new(
         storage_provider,
-        DiskIndexBuildConfig::Vamana {
-            index: index_configuration,
-            parameters: build_parameters,
-        },
+        DiskIndexBuildConfig::from((index_configuration, build_parameters)),
         disk_index_writer,
     )?;
 
