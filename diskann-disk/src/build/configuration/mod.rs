@@ -5,7 +5,6 @@
 const DEFAULT_DATA_COMPRESSION_CHUNK_VECTOR_COUNT: usize = 25_000;
 
 mod disk_index_build_config;
-pub(crate) use disk_index_build_config::BuildParameters;
 pub use disk_index_build_config::{DiskIndexBuildConfig, GraphBuildConfig};
 
 pub mod disk_index_build_parameter;

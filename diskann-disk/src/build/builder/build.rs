@@ -37,9 +37,7 @@ use crate::{
         inmem_builder::{self, InmemIndexBuilder, StartPoint},
         tokio::create_runtime,
     },
-    build::configuration::{
-        BuildParameters, DiskIndexBuildConfig, GraphBuildConfig, MemoryBudget, QuantizationType,
-    },
+    build::configuration::{DiskIndexBuildConfig, GraphBuildConfig},
     error::{ErrorKind, diskann_error},
     storage::{
         DiskIndexWriter,
@@ -50,21 +48,6 @@ use crate::{
     utils::instrumentation::{DiskIndexBuildCheckpoint, PerfLogger},
 };
 
-enum GraphBuild<T> {
-    Vamana {
-        graph: diskann::graph::config::Config,
-        memory_budget: MemoryBudget,
-        build_quantization: QuantizationType,
-        frozen_points: NonZeroUsize,
-        prefetch_lookahead: Option<NonZeroUsize>,
-        prefetch_cache_line_level:
-            Option<diskann_providers::model::graph::provider::async_::PrefetchCacheLineLevel>,
-        backend: Backend<T>,
-    },
-    #[cfg(feature = "pipnn")]
-    Pipnn(diskann::graph::pipnn::Config),
-}
-
 /// Shared search-PQ, graph, disk-layout and cleanup pipeline.
 pub struct DiskIndexBuilder<'a, Data, StorageProvider>
 where
@@ -74,8 +57,8 @@ where
     index_writer: DiskIndexWriter,
     pq_storage: PQStorage,
     storage_provider: &'a StorageProvider,
-    parameters: BuildParameters,
-    graph: GraphBuild<Data::VectorDataType>,
+    config: DiskIndexBuildConfig,
+    vamana_backend: Option<Backend<Data::VectorDataType>>,
     _phantom: PhantomData<Data>,
 }
 
@@ -84,50 +67,40 @@ where
     Data: GraphDataType<VectorIdType = u32, VectorDataType: BuildElement>,
     StorageProvider: StorageReadProvider<Reader: Send> + StorageWriteProvider + 'static,
 {
-    /// Creates a disk builder with one selected graph configuration.
+    /// Stores the configuration and prepares the Vamana backend when selected.
     ///
     /// # Errors
-    /// Returns Vamana graph-backend training or storage errors.
+    /// Returns Vamana backend-training or storage errors.
     pub fn new(
         storage_provider: &'a StorageProvider,
         config: DiskIndexBuildConfig,
         index_writer: DiskIndexWriter,
     ) -> ANNResult<Self> {
-        let parameters = BuildParameters::from(&config);
-        let graph = match config.graph {
+        let vamana_backend = match &config.graph {
             GraphBuildConfig::Vamana {
                 graph,
-                memory_budget,
                 build_quantization,
                 frozen_points,
                 prefetch_lookahead,
                 prefetch_cache_line_level,
+                ..
             } => {
-                let index = parameters.index_configuration(
+                let index = config.index_configuration(
                     graph.clone(),
-                    frozen_points,
-                    prefetch_lookahead,
-                    prefetch_cache_line_level,
+                    *frozen_points,
+                    *prefetch_lookahead,
+                    *prefetch_cache_line_level,
                 );
-                let backend = Backend::<Data::VectorDataType>::new(
-                    &build_quantization,
+                Some(Backend::<Data::VectorDataType>::new(
+                    build_quantization,
                     &index_writer.get_index_path_prefix(),
                     &index,
                     &index_writer.get_dataset_file(),
                     storage_provider,
-                )?;
-                GraphBuild::Vamana {
-                    graph,
-                    memory_budget,
-                    build_quantization,
-                    frozen_points,
-                    prefetch_lookahead,
-                    prefetch_cache_line_level,
-                    backend,
-                }
+                )?)
             }
             #[cfg(feature = "pipnn")]
-            GraphBuildConfig::Pipnn(graph) => GraphBuild::Pipnn(graph),
+            GraphBuildConfig::Pipnn(_) => None,
         };
         let pq_storage = PQStorage::new(
             &(index_writer.get_index_path_prefix() + "_pq_pivots.bin"),
@@ -138,8 +111,8 @@ where
             index_writer,
             pq_storage,
             storage_provider,
-            parameters,
-            graph,
+            config,
+            vamana_backend,
             _phantom: PhantomData,
         })
     }
@@ -150,21 +123,20 @@ where
     /// Returns compression, graph-construction or storage errors.
     pub fn build(&mut self) -> ANNResult<()> {
         let mut logger = PerfLogger::new_disk_index_build_logger();
-        let pool = create_thread_pool(self.parameters.num_threads)?;
+        let pool = create_thread_pool(self.config.num_threads)?;
         self.generate_compressed_data(pool.as_ref())?;
         logger.log_checkpoint(DiskIndexBuildCheckpoint::PqConstruction);
 
-        match &self.graph {
-            GraphBuild::Vamana {
+        match &self.config.graph {
+            GraphBuildConfig::Vamana {
                 graph,
                 memory_budget,
                 build_quantization,
                 frozen_points,
                 prefetch_lookahead,
                 prefetch_cache_line_level,
-                backend,
             } => {
-                let index = self.parameters.index_configuration(
+                let index = self.config.index_configuration(
                     graph.clone(),
                     *frozen_points,
                     *prefetch_lookahead,
@@ -173,28 +145,31 @@ where
                 let parameters = DiskIndexBuildParameters::new(
                     *memory_budget,
                     *build_quantization,
-                    self.parameters.search_pq_chunks,
+                    self.config.search_pq_chunks,
                 )
                 .with_data_compression_chunk_vector_count(
-                    self.parameters.compression_chunk_vector_count,
+                    self.config.compression_chunk_vector_count,
                 );
-                create_runtime(self.parameters.num_threads)?.block_on(build_vamana_graph::<
-                    Data,
-                    _,
-                >(
-                    &index,
-                    &parameters,
-                    backend,
-                    &self.index_writer,
-                    self.storage_provider,
-                    pool.as_ref(),
-                ))?;
+                let backend = self
+                    .vamana_backend
+                    .as_ref()
+                    .expect("Vamana backend is prepared by the constructor");
+                create_runtime(self.config.num_threads)?.block_on(
+                    build_vamana_graph::<Data, _>(
+                        &index,
+                        &parameters,
+                        backend,
+                        &self.index_writer,
+                        self.storage_provider,
+                        pool.as_ref(),
+                    ),
+                )?;
             }
             #[cfg(feature = "pipnn")]
-            GraphBuild::Pipnn(config) => {
+            GraphBuildConfig::Pipnn(graph) => {
                 super::pipnn::build_inmem_index::<Data::VectorDataType, _>(
-                    &self.parameters,
-                    config,
+                    &self.config,
+                    graph,
                     &self.index_writer.get_dataset_file(),
                     &self.index_writer.get_mem_index_file(),
                     self.storage_provider,
@@ -212,7 +187,7 @@ where
     }
 
     fn generate_compressed_data(&mut self, pool: RayonThreadPoolRef<'_>) -> ANNResult<()> {
-        let parameters = &self.parameters;
+        let parameters = &self.config;
         let data_path = self.index_writer.get_dataset_file();
         let max_block_size = parameters.compression_chunk_vector_count;
         validate_data_generation_input(self.storage_provider, &data_path, max_block_size)?;

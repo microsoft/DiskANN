@@ -23,7 +23,7 @@ use diskann_utils::{io::read_bin, views::rowmajor::Matrix};
 
 use super::build::start_point_from_medoid;
 use crate::{
-    build::configuration::BuildParameters,
+    build::configuration::DiskIndexBuildConfig,
     error::{ErrorKind, diskann_error},
 };
 
@@ -88,7 +88,7 @@ impl<T: VectorRepr> pipnn::Dataset for InputRows<'_, T> {
 ///
 /// The start point is the medoid of a storage sample, as in the Vamana build.
 pub(super) fn build_inmem_index<T, StorageProvider>(
-    index_configuration: &BuildParameters,
+    index_configuration: &DiskIndexBuildConfig,
     config: &pipnn::Config,
     data_path: &str,
     save_path: &str,
@@ -117,7 +117,7 @@ where
 /// The dataset is dropped on return, so only the graph stays in memory while
 /// it is written.
 fn build_graph<T, StorageProvider>(
-    index_configuration: &BuildParameters,
+    index_configuration: &DiskIndexBuildConfig,
     config: &pipnn::Config,
     data_path: &str,
     storage_provider: &StorageProvider,
@@ -199,23 +199,23 @@ mod tests {
     use vfs::MemoryFS;
 
     use super::*;
-    use crate::build::configuration::NumPQChunks;
+    use crate::build::configuration::{GraphBuildConfig, NumPQChunks};
 
     const DATA: &str = "/data.fbin";
     const GRAPH: &str = "/graph";
     const DEGREE: usize = 32;
     const SEED: u64 = 42;
 
-    fn common_configuration(points: usize, dimensions: usize) -> BuildParameters {
-        BuildParameters {
-            metric: Metric::L2,
-            dim: dimensions,
-            num_points: points,
-            num_threads: 1,
-            search_pq_chunks: NumPQChunks::new_with(1, dimensions).unwrap(),
-            compression_chunk_vector_count: 1,
-            seed: Some(SEED),
-        }
+    fn common_configuration(points: usize, dimensions: usize) -> DiskIndexBuildConfig {
+        DiskIndexBuildConfig::new(
+            Metric::L2,
+            dimensions,
+            points,
+            1,
+            NumPQChunks::new_with(1, dimensions).unwrap(),
+            GraphBuildConfig::Pipnn(pipnn_config()),
+        )
+        .with_seed(SEED)
     }
 
     fn pipnn_config() -> pipnn::Config {
@@ -240,7 +240,7 @@ mod tests {
 
     fn build(
         storage: &VirtualStorageProvider<MemoryFS>,
-        index_configuration: &BuildParameters,
+        index_configuration: &DiskIndexBuildConfig,
     ) -> ANNResult<()> {
         let pool = create_thread_pool(1)?;
         build_inmem_index::<f32, _>(

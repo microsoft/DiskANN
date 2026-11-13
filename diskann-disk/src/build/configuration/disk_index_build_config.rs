@@ -120,32 +120,7 @@ impl From<(IndexConfiguration, DiskIndexBuildParameters)> for DiskIndexBuildConf
     }
 }
 
-#[derive(Clone, Copy)]
-pub(crate) struct BuildParameters {
-    pub metric: Metric,
-    pub dim: usize,
-    pub num_points: usize,
-    pub num_threads: usize,
-    pub search_pq_chunks: NumPQChunks,
-    pub compression_chunk_vector_count: usize,
-    pub seed: Option<u64>,
-}
-
-impl From<&DiskIndexBuildConfig> for BuildParameters {
-    fn from(config: &DiskIndexBuildConfig) -> Self {
-        Self {
-            metric: config.metric,
-            dim: config.dim,
-            num_points: config.num_points,
-            num_threads: config.num_threads,
-            search_pq_chunks: config.search_pq_chunks,
-            compression_chunk_vector_count: config.compression_chunk_vector_count,
-            seed: config.seed,
-        }
-    }
-}
-
-impl BuildParameters {
+impl DiskIndexBuildConfig {
     pub(crate) fn index_configuration(
         &self,
         graph: Config,
