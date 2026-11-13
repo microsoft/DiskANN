@@ -274,12 +274,44 @@ mod disk_index_build_tests {
             10,
             32,
             |fixture| {
-                fixture.build_with_pipnn::<GraphDataMinMaxVectorUnitData>(|pipnn| {
-                    pipnn
-                        .c_max(std::num::NonZeroUsize::new(64).unwrap())
-                        .p_samp(0.05)
-                        .seed(42)
-                })
+                use crate::build::{
+                    builder::build::DiskIndexBuilder,
+                    configuration::{DiskIndexBuildConfig, GraphBuildConfig, NumPQChunks},
+                };
+                use crate::storage::DiskIndexWriter;
+                use diskann_providers::utils::load_metadata_from_file;
+                use std::num::NonZeroUsize;
+
+                let params = &fixture.params;
+                let storage = fixture.storage_provider.as_ref();
+                let metadata = load_metadata_from_file(storage, &params.data_path)?;
+                let graph = diskann::graph::pipnn::Config::builder(
+                    NonZeroUsize::new(params.max_degree as usize).unwrap(),
+                )
+                .c_max(NonZeroUsize::new(64).unwrap())
+                .p_samp(0.05)
+                .seed(42)
+                .build()?;
+                let mut config = DiskIndexBuildConfig::new(
+                    params.metric,
+                    params.dim,
+                    metadata.npoints(),
+                    params.num_threads,
+                    NumPQChunks::new_with(params.num_pq_chunks, params.full_dim)?,
+                    GraphBuildConfig::Pipnn(graph),
+                )
+                .with_seed(100);
+                if let Some(count) = params.data_compression_chunk_vector_count {
+                    config = config.with_data_compression_chunk_vector_count(count);
+                }
+                let writer = DiskIndexWriter::new(
+                    params.data_path.clone(),
+                    params.index_path_prefix.clone(),
+                    params.associated_data_path.clone(),
+                    params.block_size,
+                )?;
+                DiskIndexBuilder::<GraphDataMinMaxVectorUnitData, _>::new(storage, config, writer)?
+                    .build()
             },
         );
     }
