@@ -262,6 +262,7 @@ convert_error!(TryFromIntError);
 convert_error!(TryFromSliceError);
 convert_error!(diskann_utils::io::ReadBinError);
 convert_error!(diskann_utils::io::SaveBinError);
+convert_error!(diskann_utils::io::ReadStaggeredBinError);
 convert_error!(diskann_utils::views::rowmajor::LayoutError);
 convert_error!(diskann_utils::views::rowmajor::TryFromErrorLight);
 
