@@ -1,0 +1,80 @@
+# Copyright (c) Microsoft Corporation. All rights reserved.
+# Licensed under the MIT license.
+
+name: Neighbor queue benchmark
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'diskann/src/neighbor/**'
+      - 'diskann-benchmark/**'
+      - 'diskann-benchmark-runner/**'
+      - '.github/scripts/summarize_neighbor_queue.py'
+      - '.github/workflows/neighbor-queue-benchmark.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PYTHONUTF8: '1'
+
+concurrency:
+  group: neighbor-queue-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  benchmark:
+    name: Neighbor queue (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm, windows-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Describe environment
+        run: |
+          mkdir -p benchmark-results
+          {
+            echo "Runner: $RUNNER_OS $RUNNER_ARCH"
+            echo "Commit: $(git rev-parse HEAD)"
+            rustc --version --verbose
+            python -c "import platform; print(platform.platform()); print(platform.processor())"
+            if [ "$RUNNER_OS" = Windows ]; then
+              powershell -NoProfile -Command 'Get-CimInstance Win32_Processor | Format-List Name,NumberOfCores,NumberOfLogicalProcessors'
+            else
+              lscpu
+            fi
+          } | tee benchmark-results/environment.txt
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: Build benchmark
+        run: cargo build --locked --release -p diskann-benchmark
+      - name: Compare queue updates
+        run: |
+          set -euo pipefail
+          exe=target/release/diskann-benchmark
+          if [ "$RUNNER_OS" = Windows ]; then exe="$exe.exe"; fi
+          for run in 1 2 3; do
+            "$exe" run \
+              --input-file diskann-benchmark/example/neighbor-queue.json \
+              --output-file "benchmark-results/run-$run.json" \
+              2>&1 | tee "benchmark-results/run-$run.log"
+          done
+          python .github/scripts/summarize_neighbor_queue.py \
+            benchmark-results/run-1.json benchmark-results/run-2.json benchmark-results/run-3.json \
+            | tee benchmark-results/summary.md
+          cat benchmark-results/summary.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload benchmark results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: neighbor-queue-${{ matrix.runner }}
+          path: benchmark-results/
+          retention-days: 30

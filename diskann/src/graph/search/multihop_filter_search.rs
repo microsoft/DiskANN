@@ -190,9 +190,7 @@ where
         for (choice, distance) in one_hop_neighbors.iter().copied() {
             match choice {
                 glue::Decision::Accept(id) => {
-                    scratch
-                        .best
-                        .insert(Neighbor::new(id.into_inner(), distance));
+                    two_hop_neighbors.push(Neighbor::new(id.into_inner(), distance));
                 }
                 glue::Decision::Reject(id) => {
                     candidates_two_hop_expansion.push(Neighbor::new(id.into_inner(), distance));
@@ -200,6 +198,7 @@ where
             }
         }
 
+        scratch.best.batch_insert(&mut two_hop_neighbors);
         scratch.cmps += one_hop_neighbors.len() as u32;
         scratch.hops += scratch.beam_nodes.len() as u32;
 
@@ -228,11 +227,10 @@ where
             .await?;
 
         // Next, insert the new matches into `scratch.best` and increment stats counters
-        two_hop_neighbors
-            .iter()
-            .for_each(|neighbor| scratch.best.insert(*neighbor));
+        let two_hop_count = two_hop_neighbors.len();
+        scratch.best.batch_insert(&mut two_hop_neighbors);
 
-        scratch.cmps += two_hop_neighbors.len() as u32;
+        scratch.cmps += two_hop_count as u32;
         scratch.hops += two_hop_expansion_candidate_ids.len() as u32;
     }
 

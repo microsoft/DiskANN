@@ -237,26 +237,22 @@ where
             .expand_beam_filtered(
                 scratch.beam_nodes.iter().copied(),
                 glue::NotInMut::new(&mut scratch.visited),
-                |id, distance| one_hop_neighbors.push((id, distance)),
+                |decision, distance| {
+                    // Process one-hop neighbors based on on_visit() decision
+                    if let glue::Decision::Accept(id) = decision {
+                        // matched nodes also go into matched_results for final output.
+                        matched_results.push(Neighbor::new(id.into_inner(), distance));
+                        sample_matched += 1;
+                    }
+                    one_hop_neighbors.push(Neighbor::new(decision.into_inner(), distance));
+                },
             )
             .await?;
 
-        // Process one-hop neighbors based on on_visit() decision
-        for (decision, distance) in one_hop_neighbors.iter().copied() {
-            if let glue::Decision::Accept(id) = decision {
-                // matched nodes also go into matched_results for final output.
-                matched_results.push(Neighbor::new(id.into_inner(), distance));
-                sample_matched += 1;
-            }
-
-            // All nodes go into scratch.best for navigation,
-            scratch
-                .best
-                .insert(Neighbor::new(decision.into_inner(), distance));
-            sample_visited += 1;
-        }
-
         scratch.cmps += one_hop_neighbors.len() as u32;
+        sample_visited += one_hop_neighbors.len();
+        // All nodes go into scratch.best for navigation,
+        scratch.best.batch_insert(&mut one_hop_neighbors);
         scratch.hops += scratch.beam_nodes.len() as u32;
 
         // Estimate specificity at N samples. If none match, retry at 2N, 4N, 8N,

@@ -1,0 +1,39 @@
+{
+  "search_directories": [],
+  "jobs": [
+    {
+      "type": "neighbor-queue",
+      "content": {
+        "seed": 20261113,
+        "samples": 9,
+        "queues_per_sample": 8,
+        "blocks_per_sample": 2,
+        "cases": [
+          {"capacity": 10, "initial_size": 10, "input_size": 8, "initial_cutoff_survivors": 8, "placement": "uniform", "order": "shuffled"},
+          {"capacity": 10, "initial_size": 10, "input_size": 10, "initial_cutoff_survivors": 10, "placement": "uniform", "order": "shuffled"},
+          {"capacity": 20, "initial_size": 20, "input_size": 1, "initial_cutoff_survivors": 1, "placement": "uniform", "order": "shuffled"},
+          {"capacity": 20, "initial_size": 20, "input_size": 8, "initial_cutoff_survivors": 8, "placement": "uniform", "order": "shuffled"},
+          {"capacity": 20, "initial_size": 20, "input_size": 20, "initial_cutoff_survivors": 20, "placement": "uniform", "order": "shuffled"},
+          {"capacity": 20, "initial_size": 20, "input_size": 21, "initial_cutoff_survivors": 21, "placement": "uniform", "order": "shuffled"},
+          {"capacity": 20, "initial_size": 20, "input_size": 40, "initial_cutoff_survivors": 40, "placement": "uniform", "order": "shuffled"},
+          {"capacity": 20, "initial_size": 20, "input_size": 8, "initial_cutoff_survivors": 8, "placement": "head", "order": "shuffled"},
+          {"capacity": 20, "initial_size": 20, "input_size": 8, "initial_cutoff_survivors": 8, "placement": "tail", "order": "shuffled"},
+          {"capacity": 20, "initial_size": 20, "input_size": 8, "initial_cutoff_survivors": 8, "placement": "uniform", "order": "descending"},
+          {"capacity": 20, "initial_size": 10, "input_size": 8, "initial_cutoff_survivors": 8, "placement": "uniform", "order": "shuffled"},
+          {"capacity": 20, "initial_size": 10, "input_size": 20, "initial_cutoff_survivors": 20, "placement": "uniform", "order": "shuffled"},
+          {"capacity": 20, "initial_size": 20, "input_size": 20, "initial_cutoff_survivors": 0, "placement": "uniform", "order": "shuffled"},
+          {"capacity": 20, "initial_size": 20, "input_size": 20, "initial_cutoff_survivors": 10, "placement": "uniform", "order": "shuffled"},
+          {"capacity": 40, "initial_size": 40, "input_size": 8, "initial_cutoff_survivors": 8, "placement": "uniform", "order": "shuffled"},
+          {"capacity": 40, "initial_size": 40, "input_size": 40, "initial_cutoff_survivors": 40, "placement": "uniform", "order": "shuffled"},
+          {"capacity": 200, "initial_size": 200, "input_size": 8, "initial_cutoff_survivors": 8, "placement": "uniform", "order": "shuffled"},
+          {"capacity": 200, "initial_size": 200, "input_size": 200, "initial_cutoff_survivors": 200, "placement": "uniform", "order": "shuffled"},
+          {"capacity": 200, "initial_size": 200, "input_size": 400, "initial_cutoff_survivors": 400, "placement": "uniform", "order": "shuffled"},
+          {"capacity": 2000, "initial_size": 2000, "input_size": 1, "initial_cutoff_survivors": 1, "placement": "uniform", "order": "shuffled"},
+          {"capacity": 2000, "initial_size": 2000, "input_size": 8, "initial_cutoff_survivors": 8, "placement": "uniform", "order": "shuffled"},
+          {"capacity": 2000, "initial_size": 2000, "input_size": 2000, "initial_cutoff_survivors": 2000, "placement": "uniform", "order": "shuffled"},
+          {"capacity": 2000, "initial_size": 2000, "input_size": 4000, "initial_cutoff_survivors": 4000, "placement": "uniform", "order": "shuffled"}
+        ]
+      }
+    }
+  ]
+}
