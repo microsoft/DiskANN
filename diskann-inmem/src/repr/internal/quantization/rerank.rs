@@ -109,7 +109,7 @@ impl Reranker {
     pub(in crate::repr) fn post_process<'a>(
         &'a self,
         query: &'a [f32],
-        guard: &epoch::Guard<'a>,
+        guard: &epoch::ReadGuard<'a>,
         slots: &'a Optional<store::simple::Simple>,
         counters: &LocalCounters<'a>,
     ) -> Option<Box<dyn repr::PostProcess + 'a>> {
@@ -263,7 +263,9 @@ mod tests {
         let counters = Counters::new();
 
         let post_processor = store
-            .guard(|slots, guard| reranker.post_process(query, &guard, slots, &counters.local()))
+            .read_guard(|slots, guard| {
+                reranker.post_process(query, &guard, slots, &counters.local())
+            })
             .unwrap();
 
         assert!(post_processor.is_none());
@@ -344,7 +346,7 @@ mod tests {
 
             // Create the post-processor.
             let mut post_process = store
-                .guard(|slots, guard| {
+                .read_guard(|slots, guard| {
                     reranker
                         .post_process(query, &guard, slots, &counters.local())
                         .unwrap()

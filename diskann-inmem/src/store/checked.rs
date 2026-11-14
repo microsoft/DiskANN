@@ -26,8 +26,8 @@
 //! corresponding slot. Many such guards can coexist. Providing long-lived guards like this
 //! improves our chances of catching a bug in the EBR scheme where exclusive access is
 //! attempted too early. [`Reader::read`] constrains each [`Value`] to the borrow of the
-//! [`Reader`]. Since [`Reader`]s own an [`epoch::Guard`], [`Value`]s are guaranteed to be
-//! dropped before their protecting [`epoch::Guard`] is dropped.
+//! [`Reader`]. Since [`Reader`]s own an [`epoch::ReadGuard`], [`Value`]s are guaranteed to
+//! be dropped before their protecting [`epoch::ReadGuard`] is dropped.
 //!
 //! ## Lifecycle Details
 //!
@@ -64,7 +64,7 @@
 //!   **not** transition away from "retiring" until thread `A` (and all other concurrent
 //!   threads that could have observed the slot while it was published) have dropped their
 //!   read guards, and thus any data accessed while under the guard, since these are
-//!   outlived by a proper [`epoch::Guard`].
+//!   outlived by a proper [`epoch::ReadGuard`].
 
 #![expect(
     clippy::panic,
@@ -341,7 +341,7 @@ impl Checked {
     /// # Panics
     ///
     /// Panics if `guard` does not belong to `self`'s [`epoch::Registry`].
-    pub(crate) fn reader<'a>(&'a self, guard: epoch::Guard<'a>) -> Reader<'a> {
+    pub(crate) fn reader<'a>(&'a self, guard: epoch::ReadGuard<'a>) -> Reader<'a> {
         self.handle.assert_guard_belongs(&guard);
         Reader {
             parent: self,
@@ -368,7 +368,7 @@ impl Value<'_> {
 #[derive(Debug)]
 pub(crate) struct Reader<'a> {
     parent: &'a Checked,
-    _guard: epoch::Guard<'a>,
+    _guard: epoch::ReadGuard<'a>,
 }
 
 impl Reader<'_> {

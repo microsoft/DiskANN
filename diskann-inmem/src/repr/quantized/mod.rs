@@ -614,32 +614,33 @@ impl Quantized {
             )));
         }
 
-        let (expand_beam, post_process) = self.store.guard(|cons, guard| -> ANNResult<_> {
-            // This will result in some wasted work if `expand_beam` errors, but that should
-            // be a relatively rare occurrence.
-            let rerank_if_enabled = !insert;
-            let post_process = rerank_if_enabled
-                .then(|| {
-                    self.reranker
-                        .post_process(query, &guard, cons.second(), &counters)
-                })
-                .flatten();
+        let (expand_beam, post_process) =
+            self.store.read_guard(|cons, guard| -> ANNResult<_> {
+                // This will result in some wasted work if `expand_beam` errors, but that should
+                // be a relatively rare occurrence.
+                let rerank_if_enabled = !insert;
+                let post_process = rerank_if_enabled
+                    .then(|| {
+                        self.reranker
+                            .post_process(query, &guard, cons.second(), &counters)
+                    })
+                    .flatten();
 
-            let kind = if insert {
-                inner::ExpandBeamKind::Insert
-            } else {
-                inner::ExpandBeamKind::Query
-            };
+                let kind = if insert {
+                    inner::ExpandBeamKind::Insert
+                } else {
+                    inner::ExpandBeamKind::Query
+                };
 
-            let expand_beam = self.quantizer.expand_beam(
-                query,
-                cons.first().reader(guard),
-                self.lookahead,
-                kind,
-            )?;
+                let expand_beam = self.quantizer.expand_beam(
+                    query,
+                    cons.first().reader(guard),
+                    self.lookahead,
+                    kind,
+                )?;
 
-            Ok((expand_beam, post_process))
-        })??;
+                Ok((expand_beam, post_process))
+            })??;
 
         Ok(crate::provider::SearchAccessor::new(
             self.store.neighbors(),
@@ -719,7 +720,7 @@ impl repr::Insert for Quantized {
     ) -> ANNResult<crate::provider::PruneAccessor<'a>> {
         let reader = self
             .store
-            .guard(|slots, guard| slots.first().reader(guard))?;
+            .write_guard(|slots, guard| slots.first().reader(guard.into_read_guard()))?;
 
         let prune = self.quantizer.prune(reader);
 

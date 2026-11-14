@@ -424,7 +424,12 @@ where
     }
 
     fn reader(&self) -> Result<packed::Reader<'_>, epoch::Unavailable> {
-        self.store.guard(|packed, guard| packed.reader(guard))
+        self.store.read_guard(|packed, guard| packed.reader(guard))
+    }
+
+    fn writer(&self) -> Result<packed::Reader<'_>, epoch::Unavailable> {
+        self.store
+            .write_guard(|packed, guard| packed.reader(guard.into_read_guard()))
     }
 }
 
@@ -765,7 +770,7 @@ impl FullPrecisionImpl for f32 {
     }
 
     fn make_prune<'a>(full: &'a Full<Self>) -> ANNResult<Box<dyn repr::Prune + 'a>> {
-        let reader = full.reader()?;
+        let reader = full.writer()?;
 
         let output: Box<dyn repr::Prune> = match full.metric {
             Metric::L2 => prune!(Self, reader, SquaredL2),
@@ -806,7 +811,7 @@ impl FullPrecisionImpl for f16 {
     }
 
     fn make_prune<'a>(full: &'a Full<Self>) -> ANNResult<Box<dyn repr::Prune + 'a>> {
-        let reader = full.reader()?;
+        let reader = full.writer()?;
 
         let output: Box<dyn repr::Prune> = match full.metric {
             Metric::L2 => prune!(Self, reader, SquaredL2),
@@ -842,7 +847,7 @@ impl FullPrecisionImpl for u8 {
     }
 
     fn make_prune<'a>(full: &'a Full<Self>) -> ANNResult<Box<dyn repr::Prune + 'a>> {
-        let reader = full.reader()?;
+        let reader = full.writer()?;
 
         let output: Box<dyn repr::Prune> = match full.metric {
             Metric::L2 => prune!(Self, reader, SquaredL2),
@@ -872,7 +877,7 @@ impl FullPrecisionImpl for i8 {
     }
 
     fn make_prune<'a>(full: &'a Full<Self>) -> ANNResult<Box<dyn repr::Prune + 'a>> {
-        let reader = full.reader()?;
+        let reader = full.writer()?;
 
         let distance = VDistance::<Self, Self>::new(full.metric(), Some(full.dim()));
 

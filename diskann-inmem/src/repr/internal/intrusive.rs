@@ -391,7 +391,7 @@ mod tests {
 
             let expand = ExpandBeam::new(
                 store
-                    .guard(|intrusive, guard| intrusive.reader(guard))
+                    .read_guard(|intrusive, guard| intrusive.reader(guard))
                     .unwrap(),
                 TestQueryDistance::new(&query),
                 prefetch::Loop::new(),
@@ -524,7 +524,7 @@ mod tests {
 
         let mut prune = Prune::new(
             store
-                .guard(|intrusive, guard| intrusive.reader(guard))
+                .read_guard(|intrusive, guard| intrusive.reader(guard))
                 .unwrap(),
             TestDistance,
         );
