@@ -354,6 +354,17 @@ pub trait NeighborAccessor: HasId + Send + Sync {
     ) -> impl std::future::Future<Output = ANNResult<()>> + Send;
 }
 
+/// Random-access adjacency for in-memory filtered search algorithms that need
+/// to inspect links before deciding which vectors to score.
+pub trait PathSeerGraph: DataProvider {
+    /// Copy the stored neighbors of `id` into `neighbors` in their graph order.
+    fn pathseer_neighbors(
+        &self,
+        id: Self::InternalId,
+        neighbors: &mut AdjacencyList<Self::InternalId>,
+    ) -> ANNResult<()>;
+}
+
 /// A mutable extension of [`NeighborAccessor`] that enables the underlying graph to be
 /// mutated.
 pub trait NeighborAccessorMut: NeighborAccessor {

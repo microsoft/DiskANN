@@ -46,6 +46,7 @@ mod filtered_range_search;
 mod inline_filter_search;
 mod knn_search;
 pub(crate) mod multihop_filter_search;
+mod pathseer;
 mod range_search;
 
 mod paged;
@@ -68,6 +69,7 @@ pub(crate) mod scratch;
 /// - [`Diverse`] - Diversity-aware search (feature-gated)
 /// - [`MultihopFilterSearch`] - Label-filtered search with multi-hop expansion
 /// - [`InlineFilterSearch`] - Inline filtered search with optional adaptive L sizing
+/// - [`PathSeer`] - Two-phase filtered search for in-memory graphs
 /// - [`RecordedKnn`] - K-NN search with path recording for debugging
 pub trait Search<'a, DP, S, T>
 where
@@ -118,6 +120,7 @@ pub use filtered_range_search::FilteredRange;
 pub use inline_filter_search::{AdaptiveL, InlineFilterSearch};
 pub use knn_search::{Knn, KnnSearchError, RecordedKnn};
 pub use multihop_filter_search::MultihopFilterSearch;
+pub use pathseer::PathSeer;
 pub use range_search::{Range, RangeBuilder, RangeSearchError};
 
 // Feature-gated diverse search.
