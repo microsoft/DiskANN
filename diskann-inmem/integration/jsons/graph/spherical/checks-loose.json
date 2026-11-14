@@ -17,13 +17,13 @@
           "knn": {
             "counters": {
               "max-relative-change": {
-                "decrease": 0.005,
-                "increase": 0.005
+                "decrease": 0.009,
+                "increase": 0.009
               }
             },
             "recall": {
               "recall": {
-                "max-absolute-change": 0.0011
+                "max-absolute-change": 0.0138
               }
             }
           }

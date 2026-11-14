@@ -323,6 +323,18 @@ pub enum Decision<T> {
 }
 
 impl<T> Decision<T> {
+    /// Construct a new [`Decision`].
+    ///
+    /// If `accept == true`, return as [`Decision::Accept`]. Otherwise, return as
+    /// [`Decision::Reject`].
+    pub fn new(accept: bool, id: T) -> Self {
+        if accept {
+            Self::accept(id)
+        } else {
+            Self::reject(id)
+        }
+    }
+
     /// Construct a new [`Decision`] in the [`Accept`] state.
     pub fn accept(id: T) -> Self {
         Self::Accept(Accept::new(id))

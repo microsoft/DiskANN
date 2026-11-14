@@ -7,7 +7,7 @@ use std::{collections::HashSet, fmt, hash::Hash, io::Read, mem::size_of};
 use bytemuck::cast_slice;
 use diskann::{ANNError, ANNResult};
 use diskann_providers::storage::StorageReadProvider;
-use diskann_utils::io::Metadata;
+use diskann_utils::io::{read_staggered_bin, Metadata};
 use tracing::info;
 
 use crate::utils::CMDToolError;
@@ -22,8 +22,6 @@ pub struct TruthSet {
 pub struct RangeSearchTruthSet {
     pub index_nodes: Vec<Vec<u32>>,
     pub distances: Option<Vec<Vec<f32>>>,
-    pub index_num_points: usize,
-    pub index_dimensions: Vec<u32>,
 }
 
 /// A struct used to indicate the bounds `k` and `n` for recall computation where:
@@ -359,34 +357,11 @@ pub fn load_range_truthset(
     bin_file: &str,
 ) -> ANNResult<RangeSearchTruthSet> {
     let mut file = storage_provider.open_reader(bin_file)?;
-
-    let metadata = Metadata::read(&mut file)?;
-    let (npts, total_ids) = metadata.into_dims();
-    let mut buffer = [0; size_of::<i32>()];
-
-    info!("Metadata: #pts = {}, #totalIds = {}", npts, total_ids);
-
-    let mut ids: Vec<Vec<u32>> = Vec::new();
-    let mut counts: Vec<u32> = vec![0; npts];
-
-    for count in counts.iter_mut() {
-        file.read_exact(&mut buffer)?;
-        *count = i32::from_le_bytes(buffer) as u32;
-    }
-
-    for &count in &counts {
-        let mut point_ids: Vec<u32> = vec![0; count as usize];
-        let mut buffer = vec![0; count as usize * size_of::<u32>()];
-        file.read_exact(&mut buffer)?;
-        point_ids.clone_from_slice(cast_slice::<u8, u32>(&buffer));
-        ids.push(point_ids);
-    }
+    let ids = read_staggered_bin::<u32>(&mut file)?;
 
     Ok(RangeSearchTruthSet {
         index_nodes: ids,
         distances: None,
-        index_num_points: npts,
-        index_dimensions: counts,
     })
 }
 

@@ -83,10 +83,6 @@ const DEFAULT_GUARD_SLOTS: NonZeroUsize = NonZeroUsize::new(256).unwrap();
 /// We abort if we overflow this reference count, which can only happen if a thread is
 /// creating shared references and [`std::mem::forget`]ting them. In the words of the standard
 /// library, we don't care to support such degenerate programs.
-#[cfg_attr(
-    not(any(feature = "quantization", test)),
-    expect(dead_code, reason = "this is used when features are enabled")
-)]
 const MAX_REFCOUNT: usize = (isize::MAX) as usize;
 
 #[derive(Debug)]
@@ -503,7 +499,6 @@ impl<'a> Guard<'a> {
     ///
     /// The epoch associated with the original [`Guard`] will be released only when all
     /// transitively shared guards are dropped.
-    #[cfg(any(test, feature = "quantization"))]
     #[inline]
     pub(crate) fn share(&self) -> Guard<'a> {
         let ref_count = self.slot.references.fetch_add(1, Ordering::Relaxed);

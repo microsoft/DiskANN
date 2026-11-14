@@ -3,1002 +3,64 @@
  * Licensed under the MIT license.
  */
 
-use std::{
-    io::Write,
-    num::{NonZeroU32, NonZeroUsize},
-    sync::Arc,
-};
+use std::io::Write;
 
-use anyhow::Context;
-use diskann::graph::{DiskANNIndex, search::Knn};
 use diskann_benchmark_runner::{
     Checker, Checkpoint, Output, Registry, RegistryError,
     benchmark::{MatchContext, PassFail, Regression, Score},
-    files::InputFile,
     report::{Finished, Report},
     utils::fmt::Indent,
 };
-use diskann_utils::views::rowmajor::{self, Matrix};
-use diskann_vector::distance::Metric;
 use serde::{Deserialize, Serialize};
 
-use diskann_inmem::{
-    self as inmem, Provider,
-    num::{Capacity, MaxDegree, Range},
-    repr::Full,
+use super::{
+    factory, ops, parse,
+    stats::{CheckCounters, CheckKnnStats, Counters, KnnStats},
 };
-
-use crate::{
-    index::{CheckCounters, Counters, Index},
-    support::{
-        datatype::{self, DataType, Dataset, DatasetView},
-        io::load_and_convert,
-    },
-};
+use crate::support::{check_all, datatype::DataType};
 
 pub(super) fn register(registry: &mut Registry) -> Result<(), RegistryError> {
-    registry.register_regression("full-precision-integration-test", FullPrecision)?;
+    registry.register_regression("full-integration-test", FullTest)?;
+    registry.register_regression("partial-integration-test", PartialTest)?;
     Ok(())
-}
-
-mod dto {
-    use super::*;
-
-    use serde::{Deserialize, Serialize};
-
-    #[derive(Debug, Serialize, Deserialize)]
-    #[serde(rename_all = "kebab-case")]
-    pub(super) enum SerdeMetric {
-        L2,
-        InnerProduct,
-        Cosine,
-    }
-
-    impl From<SerdeMetric> for Metric {
-        fn from(m: SerdeMetric) -> Self {
-            match m {
-                SerdeMetric::L2 => Metric::L2,
-                SerdeMetric::InnerProduct => Metric::InnerProduct,
-                SerdeMetric::Cosine => Metric::Cosine,
-            }
-        }
-    }
-
-    impl TryFrom<Metric> for SerdeMetric {
-        type Error = anyhow::Error;
-        fn try_from(m: Metric) -> anyhow::Result<Self> {
-            match m {
-                Metric::L2 => Ok(SerdeMetric::L2),
-                Metric::InnerProduct => Ok(SerdeMetric::InnerProduct),
-                Metric::Cosine => Ok(SerdeMetric::Cosine),
-                Metric::CosineNormalized => anyhow::bail!("cosine normalized is not supported"),
-            }
-        }
-    }
-
-    #[derive(Debug, Serialize, Deserialize)]
-    #[serde(rename_all = "kebab-case")]
-    pub(super) enum Preprocess {
-        Halve,
-        Floor,
-    }
-
-    impl From<Preprocess> for datatype::Preprocess {
-        fn from(op: Preprocess) -> Self {
-            match op {
-                Preprocess::Halve => datatype::Preprocess::Halve,
-                Preprocess::Floor => datatype::Preprocess::Floor,
-            }
-        }
-    }
-
-    impl From<&datatype::Preprocess> for Preprocess {
-        fn from(op: &datatype::Preprocess) -> Self {
-            match op {
-                datatype::Preprocess::Halve => Preprocess::Halve,
-                datatype::Preprocess::Floor => Preprocess::Floor,
-            }
-        }
-    }
-
-    #[derive(Debug, Serialize, Deserialize)]
-    pub(super) struct Data {
-        pub(super) data: InputFile,
-        pub(super) queries: InputFile,
-        pub(super) groundtruth: InputFile,
-        pub(super) metric: SerdeMetric,
-        pub(super) data_type: DataType,
-        pub(super) preprocess: Vec<Preprocess>,
-    }
-
-    //-------------------------//
-    // Quantization Parameters //
-    //-------------------------//
-
-    pub(super) mod quantization {
-        use super::*;
-
-        #[derive(Debug, Serialize, Deserialize)]
-        #[serde(rename_all = "kebab-case")]
-        pub(in crate::index::runner) enum Rerank {
-            None,
-            F16,
-        }
-    }
-
-    pub(super) mod spherical {
-        use super::*;
-
-        #[derive(Debug, Serialize, Deserialize)]
-        #[serde(rename_all = "kebab-case")]
-        pub(in crate::index::runner) enum Bits {
-            One,
-            Two,
-            Four,
-        }
-    }
-
-    pub(super) mod scalar {
-        use super::*;
-
-        #[derive(Debug, Serialize, Deserialize)]
-        #[serde(rename_all = "kebab-case")]
-        pub(in crate::index::runner) enum Bits {
-            One,
-            Two,
-            Four,
-            Eight,
-        }
-    }
-
-    #[derive(Debug, Serialize, Deserialize)]
-    #[serde(rename_all = "kebab-case")]
-    pub(super) enum Representation {
-        FullPrecision {
-            data_type: DataType,
-        },
-        StaticBuild,
-        Spherical {
-            bits: spherical::Bits,
-            rerank: quantization::Rerank,
-        },
-        Product {
-            chunks: NonZeroUsize,
-            rerank: quantization::Rerank,
-        },
-        Scalar {
-            bits: scalar::Bits,
-            override_to_cosine_normalized: bool,
-            rerank: quantization::Rerank,
-        },
-    }
-
-    #[derive(Debug, Serialize, Deserialize)]
-    #[serde(rename_all = "kebab-case")]
-    pub(super) enum Insert {
-        Single,
-        Multi {
-            batch_size: NonZeroU32,
-            parallelism: NonZeroUsize,
-            intra_batch_candidates: u32,
-        },
-    }
-
-    #[derive(Debug, Serialize, Deserialize)]
-    pub(super) struct Build {
-        pub(super) pruned_degree: usize,
-        pub(super) max_degree: usize,
-        pub(super) l_build: usize,
-        pub(super) alpha: f32,
-        pub(super) insert: Insert,
-    }
-
-    #[derive(Debug, Serialize, Deserialize)]
-    pub(super) struct KnnSearch {
-        pub(super) knn: usize,
-        pub(super) search_l: usize,
-        #[serde(deserialize_with = "Deserialize::deserialize")]
-        pub(super) beam_width: Option<usize>,
-    }
-
-    #[derive(Debug, Serialize, Deserialize)]
-    pub(super) struct Search {
-        pub(super) knn: Vec<KnnSearch>,
-    }
-
-    #[derive(Debug, Serialize, Deserialize)]
-    pub(super) struct Test {
-        pub(super) data: Data,
-        pub(super) representation: Representation,
-        pub(super) build: Build,
-        pub(super) search: Search,
-    }
-}
-
-#[derive(Debug)]
-struct Data {
-    data: InputFile,
-    queries: InputFile,
-    groundtruth: InputFile,
-    metric: Metric,
-    data_type: DataType,
-    preprocess: Vec<datatype::Preprocess>,
-}
-
-impl Data {
-    fn from_raw(raw: dto::Data, checker: Option<&mut Checker>) -> anyhow::Result<Self> {
-        let dto::Data {
-            mut data,
-            mut queries,
-            mut groundtruth,
-            metric,
-            data_type,
-            preprocess,
-        } = raw;
-
-        if let Some(checker) = checker {
-            data.resolve(checker)?;
-            queries.resolve(checker)?;
-            groundtruth.resolve(checker)?;
-        }
-
-        Ok(Self {
-            data,
-            queries,
-            groundtruth,
-            metric: metric.into(),
-            data_type,
-            preprocess: preprocess.into_iter().map(From::from).collect(),
-        })
-    }
-
-    fn as_raw(&self) -> anyhow::Result<dto::Data> {
-        Ok(dto::Data {
-            data: self.data.clone(),
-            queries: self.queries.clone(),
-            groundtruth: self.groundtruth.clone(),
-            metric: self.metric.try_into()?,
-            data_type: self.data_type,
-            preprocess: self.preprocess.iter().map(From::from).collect(),
-        })
-    }
-
-    fn load_as(&self, data_type: DataType) -> anyhow::Result<Bundle> {
-        let data = {
-            let mut io = std::fs::File::open(&*self.data)
-                .with_context(|| format!("could not open {}", self.data.display()))?;
-
-            load_and_convert(&mut io, self.data_type, data_type, &self.preprocess)?
-        };
-
-        let queries = {
-            let mut io = std::fs::File::open(&*self.queries)
-                .with_context(|| format!("could not open {}", self.queries.display()))?;
-
-            load_and_convert(&mut io, self.data_type, data_type, &self.preprocess)?
-        };
-
-        let groundtruth = {
-            let mut io = std::fs::File::open(&*self.groundtruth)
-                .with_context(|| format!("could not open {}", self.groundtruth.display()))?;
-
-            let raw = diskann_utils::io::read_bin::<u32>(&mut io)?;
-            raw.map(|&x| u64::from(x))
-        };
-
-        Ok(Bundle {
-            data,
-            queries,
-            groundtruth,
-        })
-    }
-}
-
-#[derive(Debug)]
-struct Bundle {
-    data: Dataset,
-    queries: Dataset,
-    groundtruth: rowmajor::Owned<u64>,
-}
-
-mod quantization {
-    use super::*;
-
-    #[derive(Debug, Clone, Copy)]
-    pub(super) enum Rerank {
-        None,
-        F16,
-    }
-
-    impl Rerank {
-        pub(super) fn from_raw(raw: dto::quantization::Rerank) -> Self {
-            match raw {
-                dto::quantization::Rerank::None => Self::None,
-                dto::quantization::Rerank::F16 => Self::F16,
-            }
-        }
-
-        pub(super) fn as_raw(&self) -> dto::quantization::Rerank {
-            match self {
-                Self::None => dto::quantization::Rerank::None,
-                Self::F16 => dto::quantization::Rerank::F16,
-            }
-        }
-    }
-}
-
-mod spherical {
-    use super::*;
-
-    #[derive(Debug, Clone, Copy)]
-    pub(super) enum Bits {
-        One,
-        Two,
-        Four,
-    }
-
-    impl Bits {
-        pub(super) fn from_raw(raw: dto::spherical::Bits) -> Self {
-            match raw {
-                dto::spherical::Bits::One => Self::One,
-                dto::spherical::Bits::Two => Self::Two,
-                dto::spherical::Bits::Four => Self::Four,
-            }
-        }
-
-        pub(super) fn as_raw(&self) -> dto::spherical::Bits {
-            match self {
-                Self::One => dto::spherical::Bits::One,
-                Self::Two => dto::spherical::Bits::Two,
-                Self::Four => dto::spherical::Bits::Four,
-            }
-        }
-    }
-}
-
-mod scalar {
-    use super::*;
-
-    #[derive(Debug, Clone, Copy)]
-    pub(super) enum Bits {
-        One,
-        Two,
-        Four,
-        Eight,
-    }
-
-    impl Bits {
-        pub(super) fn from_raw(raw: dto::scalar::Bits) -> Self {
-            match raw {
-                dto::scalar::Bits::One => Self::One,
-                dto::scalar::Bits::Two => Self::Two,
-                dto::scalar::Bits::Four => Self::Four,
-                dto::scalar::Bits::Eight => Self::Eight,
-            }
-        }
-
-        pub(super) fn as_raw(&self) -> dto::scalar::Bits {
-            match self {
-                Self::One => dto::scalar::Bits::One,
-                Self::Two => dto::scalar::Bits::Two,
-                Self::Four => dto::scalar::Bits::Four,
-                Self::Eight => dto::scalar::Bits::Eight,
-            }
-        }
-    }
-}
-
-#[derive(Debug)]
-enum Representation {
-    FullPrecision {
-        data_type: DataType,
-    },
-    StaticBuild,
-    Spherical {
-        bits: spherical::Bits,
-        rerank: quantization::Rerank,
-    },
-    Product {
-        chunks: NonZeroUsize,
-        rerank: quantization::Rerank,
-    },
-    // NOTE: We allow overriding to `cosine_normalized` since that is basically L2 in
-    // a trench coat. We can at least still get coverage.
-    Scalar {
-        bits: scalar::Bits,
-        override_to_cosine_normalized: bool,
-        rerank: quantization::Rerank,
-    },
-}
-
-impl Representation {
-    fn from_raw(raw: dto::Representation) -> Self {
-        match raw {
-            dto::Representation::FullPrecision { data_type } => Self::FullPrecision { data_type },
-            dto::Representation::StaticBuild => Self::StaticBuild,
-            dto::Representation::Spherical { bits, rerank } => Self::Spherical {
-                bits: spherical::Bits::from_raw(bits),
-                rerank: quantization::Rerank::from_raw(rerank),
-            },
-            dto::Representation::Product { chunks, rerank } => Self::Product {
-                chunks,
-                rerank: quantization::Rerank::from_raw(rerank),
-            },
-            dto::Representation::Scalar {
-                bits,
-                override_to_cosine_normalized,
-                rerank,
-            } => Self::Scalar {
-                bits: scalar::Bits::from_raw(bits),
-                override_to_cosine_normalized,
-                rerank: quantization::Rerank::from_raw(rerank),
-            },
-        }
-    }
-
-    fn as_raw(&self) -> dto::Representation {
-        match self {
-            Self::FullPrecision { data_type } => dto::Representation::FullPrecision {
-                data_type: *data_type,
-            },
-            Self::StaticBuild => dto::Representation::StaticBuild,
-            Self::Spherical { bits, rerank } => dto::Representation::Spherical {
-                bits: bits.as_raw(),
-                rerank: rerank.as_raw(),
-            },
-            Self::Product { chunks, rerank } => dto::Representation::Product {
-                chunks: *chunks,
-                rerank: rerank.as_raw(),
-            },
-            Self::Scalar {
-                bits,
-                override_to_cosine_normalized,
-                rerank,
-            } => dto::Representation::Scalar {
-                bits: bits.as_raw(),
-                override_to_cosine_normalized: *override_to_cosine_normalized,
-                rerank: rerank.as_raw(),
-            },
-        }
-    }
-}
-
-#[derive(Debug)]
-pub(super) enum Insert {
-    Single,
-    Multi { batch_size: NonZeroU32 },
-}
-
-#[derive(Debug)]
-struct Build {
-    config: diskann::graph::Config,
-    insert: Insert,
-}
-
-impl Build {
-    fn from_raw(raw: dto::Build, metric: Metric) -> anyhow::Result<Self> {
-        use diskann::graph::config as graph_config;
-
-        let dto::Build {
-            pruned_degree,
-            max_degree,
-            l_build,
-            alpha,
-            insert,
-        } = raw;
-
-        let mut builder = graph_config::Builder::new_with(
-            pruned_degree,
-            graph_config::MaxDegree::new(max_degree),
-            l_build,
-            metric.into(),
-            |b| {
-                b.alpha(alpha);
-            },
-        );
-
-        let insert = match insert {
-            dto::Insert::Single => Insert::Single,
-            dto::Insert::Multi {
-                batch_size,
-                parallelism,
-                intra_batch_candidates,
-            } => {
-                let ibc = graph_config::IntraBatchCandidates::new(intra_batch_candidates);
-                builder
-                    .max_minibatch_par(parallelism.get())
-                    .intra_batch_candidates(ibc);
-                Insert::Multi { batch_size }
-            }
-        };
-
-        let config = builder.build()?;
-        Ok(Self { config, insert })
-    }
-
-    fn as_raw(&self) -> dto::Build {
-        use diskann::graph::config::IntraBatchCandidates as IBC;
-
-        let insert = match self.insert {
-            Insert::Single => dto::Insert::Single,
-            Insert::Multi { batch_size } => dto::Insert::Multi {
-                batch_size,
-                parallelism: self.config.max_minibatch_par(),
-                intra_batch_candidates: match self.config.intra_batch_candidates() {
-                    IBC::None => 0,
-                    IBC::Max(m) => m.get(),
-                    IBC::All => batch_size.get(),
-                },
-            },
-        };
-
-        dto::Build {
-            pruned_degree: self.config.pruned_degree().get(),
-            max_degree: self.config.max_degree().get(),
-            l_build: self.config.l_build().get(),
-            alpha: self.config.alpha(),
-            insert,
-        }
-    }
-}
-
-#[derive(Debug)]
-struct Search {
-    knn: Vec<(usize, Knn)>,
-}
-
-impl Search {
-    fn from_raw(raw: dto::Search) -> anyhow::Result<Self> {
-        fn make_knn(raw: &dto::KnnSearch) -> anyhow::Result<(usize, Knn)> {
-            Ok((raw.knn, Knn::new(raw.search_l, raw.beam_width)?))
-        }
-
-        Ok(Self {
-            knn: raw
-                .knn
-                .iter()
-                .map(make_knn)
-                .collect::<anyhow::Result<Vec<_>>>()?,
-        })
-    }
-
-    fn as_raw(&self) -> dto::Search {
-        fn make_knn((k, knn): &(usize, Knn)) -> dto::KnnSearch {
-            dto::KnnSearch {
-                knn: *k,
-                search_l: knn.l_value().get(),
-                beam_width: Some(knn.beam_width().get()),
-            }
-        }
-
-        dto::Search {
-            knn: self.knn.iter().map(make_knn).collect(),
-        }
-    }
-}
-
-#[derive(Debug)]
-struct Test {
-    data: Data,
-    representation: Representation,
-    build: Build,
-    search: Search,
-}
-
-impl Test {
-    fn from_raw(raw: dto::Test, checker: Option<&mut Checker>) -> anyhow::Result<Self> {
-        let data = Data::from_raw(raw.data, checker)?;
-        let representation = Representation::from_raw(raw.representation);
-        let build = Build::from_raw(raw.build, data.metric)?;
-        let search = Search::from_raw(raw.search)?;
-
-        Ok(Self {
-            data,
-            representation,
-            build,
-            search,
-        })
-    }
-
-    fn as_raw(&self) -> anyhow::Result<dto::Test> {
-        Ok(dto::Test {
-            data: self.data.as_raw()?,
-            representation: self.representation.as_raw(),
-            build: self.build.as_raw(),
-            search: self.search.as_raw(),
-        })
-    }
-
-    fn index(&self, data: DatasetView<'_>) -> anyhow::Result<Arc<dyn Index>> {
-        match &self.representation {
-            Representation::FullPrecision { data_type } => {
-                if data.data_type() != *data_type {
-                    anyhow::bail!(
-                        "mismatched data types for start point - expected {}, got {}",
-                        data_type,
-                        data.data_type(),
-                    );
-                }
-
-                let start_points = data.medoid();
-                let metric = self.data.metric;
-                let capacity = Capacity::new(data.nrows());
-                let max_degree = self.build.config.max_degree().get();
-                let index_config = self.build.config.clone();
-
-                let index = match start_points {
-                    Dataset::F32(v) => finish(
-                        Provider::new(Full::config(
-                            capacity,
-                            MaxDegree::new(max_degree),
-                            metric,
-                            v,
-                        )?)?,
-                        index_config,
-                    ),
-                    Dataset::F16(v) => finish(
-                        Provider::new(Full::config(
-                            capacity,
-                            MaxDegree::new(max_degree),
-                            metric,
-                            v,
-                        )?)?,
-                        index_config,
-                    ),
-                    Dataset::U8(v) => finish(
-                        Provider::new(Full::config(
-                            capacity,
-                            MaxDegree::new(max_degree),
-                            metric,
-                            v,
-                        )?)?,
-                        index_config,
-                    ),
-                    Dataset::I8(v) => finish(
-                        Provider::new(Full::config(
-                            capacity,
-                            MaxDegree::new(max_degree),
-                            metric,
-                            v,
-                        )?)?,
-                        index_config,
-                    ),
-                };
-
-                Ok(index)
-            }
-            Representation::StaticBuild => self.create_static(data),
-            Representation::Spherical { bits, rerank } => {
-                self.create_spherical(data, *bits, *rerank)
-            }
-            Representation::Product { chunks, rerank } => {
-                self.create_product(data, *chunks, *rerank)
-            }
-            Representation::Scalar {
-                bits,
-                override_to_cosine_normalized,
-                rerank,
-            } => self.create_scalar(data, *bits, *override_to_cosine_normalized, *rerank),
-        }
-    }
-
-    fn create_static(&self, data: DatasetView<'_>) -> anyhow::Result<Arc<dyn Index>> {
-        let DatasetView::F32(data) = data else {
-            anyhow::bail!("static build tests only support f32 data");
-        };
-
-        let start_point = rowmajor::Owned::row_vector(Box::from(
-            <f32 as diskann_utils::sampling::medoid::ComputeMedoid>::compute_medoid(data),
-        ));
-        let num_start_points = start_point.nrows();
-
-        let metric = self.data.metric;
-        let capacity = Capacity::new(data.nrows());
-        let max_degree = self.build.config.max_degree().get();
-        let index_config = self.build.config.clone();
-
-        let end_range = Range::start_plus_usize(data.nrows(), num_start_points)
-            .ok_or_else(|| anyhow::anyhow!("cannot move start points to the end"))?;
-
-        let full_config = Full::config(capacity, MaxDegree::new(max_degree), metric, start_point)?
-            .locate_start_point_ids_at(end_range)?;
-
-        let provider = inmem::provider::buildonly::Provider::new(full_config)?;
-        Ok(finish(provider, index_config))
-    }
-
-    fn create_spherical(
-        &self,
-        data: DatasetView<'_>,
-        bits: spherical::Bits,
-        rerank: quantization::Rerank,
-    ) -> anyhow::Result<Arc<dyn Index>> {
-        use diskann_quantization::{
-            algorithms::transforms,
-            alloc::GlobalAllocator,
-            spherical::{PreScale, SphericalQuantizer},
-        };
-        use inmem::repr::quantized::{Backend, Config, spherical::Spherical};
-        use rand::SeedableRng;
-
-        let DatasetView::F32(data) = data else {
-            anyhow::bail!("spherical quantization only supports f32 data");
-        };
-
-        // Step 1: Train a generic quantizer.
-        let quantizer = SphericalQuantizer::train(
-            data,
-            transforms::TransformKind::DoubleHadamard {
-                target_dim: transforms::TargetDim::Same,
-            },
-            self.data.metric.try_into().map_err(|_| {
-                anyhow::anyhow!(
-                    "metric {} not supported for spherical quantization",
-                    self.data.metric
-                )
-            })?,
-            PreScale::ReciprocalMeanNorm,
-            &mut rand::rngs::StdRng::seed_from_u64(0xc0ff33),
-            GlobalAllocator,
-        )?;
-
-        // Step 2: Associate it with the target bit-width.
-        let capacity = Capacity::new(data.nrows());
-        let max_degree = MaxDegree::new(self.build.config.max_degree().get());
-        let start_point = rowmajor::Owned::row_vector(Box::from(
-            <f32 as diskann_utils::sampling::medoid::ComputeMedoid>::compute_medoid(data),
-        ));
-        let rerank = quantizer_rerank(rerank, self.data.metric);
-
-        let backend = match bits {
-            spherical::Bits::One => {
-                Backend::new(Spherical::new(quantizer.as_quantizer_impl::<1>()?))
-            }
-            spherical::Bits::Two => {
-                Backend::new(Spherical::new(quantizer.as_quantizer_impl::<2>()?))
-            }
-            spherical::Bits::Four => {
-                Backend::new(Spherical::new(quantizer.as_quantizer_impl::<4>()?))
-            }
-        };
-
-        let config = Config::new(backend, capacity, max_degree, start_point, rerank)?;
-        let index_config = self.build.config.clone();
-
-        Ok(finish(Provider::new(config)?, index_config))
-    }
-
-    fn create_product(
-        &self,
-        data: DatasetView<'_>,
-        chunks: NonZeroUsize,
-        rerank: quantization::Rerank,
-    ) -> anyhow::Result<Arc<dyn Index>> {
-        use diskann_quantization::{
-            Parallelism,
-            cancel::DontCancel,
-            product::{self, train::TrainQuantizer},
-            random,
-            views::ChunkOffsets,
-        };
-
-        let DatasetView::F32(data) = data else {
-            anyhow::bail!("product quantization only supports f32 data");
-        };
-
-        // Step 1: Train a generic quantizer.
-        let trainer = product::train::LightPQTrainingParameters::new(256, 2);
-        let Some(dim) = NonZeroUsize::new(data.ncols()) else {
-            anyhow::bail!("cannot compress a zero-dimensional dataset");
-        };
-
-        let table = trainer.train(
-            data,
-            ChunkOffsets::partition(dim, chunks)?.as_view(),
-            Parallelism::Sequential,
-            &random::StdRngBuilder::new(0xc0ff33),
-            &DontCancel,
-        )?;
-
-        let start_point = rowmajor::Owned::row_vector(Box::from(
-            <f32 as diskann_utils::sampling::medoid::ComputeMedoid>::compute_medoid(data),
-        ));
-
-        // Step 2: Create the quantizer.
-        let product =
-            inmem::repr::quantized::product::Product::new(table, self.data.metric.into(), None)?;
-
-        // Step 3: Create the config.
-        let config = inmem::repr::quantized::Quantized::config(
-            product,
-            Capacity::new(data.nrows()),
-            MaxDegree::new(self.build.config.max_degree().get()),
-            start_point,
-            quantizer_rerank(rerank, self.data.metric),
-        )?;
-
-        let index_config = self.build.config.clone();
-        Ok(finish(Provider::new(config)?, index_config))
-    }
-
-    fn create_scalar(
-        &self,
-        data: DatasetView<'_>,
-        bits: scalar::Bits,
-        override_to_cosine_normalized: bool,
-        rerank: quantization::Rerank,
-    ) -> anyhow::Result<Arc<dyn Index>> {
-        use diskann_quantization::{num::Positive, scalar as qscalar};
-        use inmem::repr::quantized::{Backend, Quantized, scalar::Scalar};
-
-        let DatasetView::F32(data) = data else {
-            anyhow::bail!("scalar quantization only supports f32 data");
-        };
-
-        // Step 1: Train a generic quantizer.
-        let std = Positive::<f64>::new(1.5)?;
-        let trainer = qscalar::train::ScalarQuantizationParameters::new(std);
-        let quantizer = trainer.train(data);
-
-        let start_point = rowmajor::Owned::row_vector(Box::from(
-            <f32 as diskann_utils::sampling::medoid::ComputeMedoid>::compute_medoid(data),
-        ));
-
-        // Step 2: Create the config.
-        let metric = if override_to_cosine_normalized {
-            inmem::repr::quantized::scalar::Metric::CosineNormalized
-        } else {
-            inmem::repr::quantized::scalar::Metric::try_from(self.data.metric)?
-        };
-
-        let backend = match bits {
-            scalar::Bits::One => Backend::new(Scalar::<1>::new(quantizer, metric)),
-            scalar::Bits::Two => Backend::new(Scalar::<2>::new(quantizer, metric)),
-            scalar::Bits::Four => Backend::new(Scalar::<4>::new(quantizer, metric)),
-            scalar::Bits::Eight => Backend::new(Scalar::<8>::new(quantizer, metric)),
-        };
-
-        let capacity = Capacity::new(data.nrows());
-        let max_degree = MaxDegree::new(self.build.config.max_degree().get());
-        let rerank = quantizer_rerank(rerank, self.data.metric);
-
-        let config = Quantized::config(backend, capacity, max_degree, start_point, rerank)?;
-
-        let index_config = self.build.config.clone();
-        Ok(finish(Provider::new(config)?, index_config))
-    }
-}
-
-fn finish<DP>(provider: DP, config: diskann::graph::Config) -> Arc<dyn Index>
-where
-    DP: diskann::provider::DataProvider,
-    DiskANNIndex<DP>: Index,
-{
-    Arc::new(DiskANNIndex::new(config, provider, None))
-}
-
-fn quantizer_rerank(
-    rerank: quantization::Rerank,
-    metric: Metric,
-) -> inmem::repr::quantized::Rerank {
-    match rerank {
-        quantization::Rerank::None => inmem::repr::quantized::Rerank::None,
-        quantization::Rerank::F16 => inmem::repr::quantized::Rerank::F16 {
-            metric: metric.into(),
-        },
-    }
-}
-
-///////////////
-// Benchmark //
-///////////////
-
-impl diskann_benchmark_runner::Input for Test {
-    type Raw = dto::Test;
-
-    fn tag() -> &'static str {
-        "integration-test"
-    }
-
-    fn from_raw(raw: dto::Test, checker: &mut Checker) -> anyhow::Result<Self> {
-        <Test>::from_raw(raw, Some(checker))
-    }
-
-    fn serialize(&self) -> anyhow::Result<serde_json::Value> {
-        let raw = self.as_raw()?;
-        Ok(serde_json::to_value(raw)?)
-    }
-
-    fn example() -> dto::Test {
-        dto::Test {
-            data: dto::Data {
-                data: InputFile::new("path/to/data"),
-                queries: InputFile::new("path/to/queries"),
-                groundtruth: InputFile::new("path/to/groundtruth"),
-                metric: dto::SerdeMetric::L2,
-                data_type: DataType::F32,
-                preprocess: vec![],
-            },
-            representation: dto::Representation::FullPrecision {
-                data_type: DataType::F32,
-            },
-            build: dto::Build {
-                pruned_degree: 16,
-                max_degree: 20,
-                l_build: 50,
-                alpha: 1.2,
-                insert: dto::Insert::Single,
-            },
-            search: dto::Search {
-                knn: vec![
-                    dto::KnnSearch {
-                        knn: 10,
-                        search_l: 50,
-                        beam_width: None,
-                    },
-                    dto::KnnSearch {
-                        knn: 10,
-                        search_l: 50,
-                        beam_width: Some(3),
-                    },
-                    dto::KnnSearch {
-                        knn: 20,
-                        search_l: 100,
-                        beam_width: Some(3),
-                    },
-                ],
-            },
-        }
-    }
 }
 
 ////////////////
 // Benchmarks //
 ////////////////
 
-#[derive(Debug)]
-struct FullPrecision;
+//----------//
+// FullTest //
+//----------//
 
-impl diskann_benchmark_runner::Benchmark for FullPrecision {
-    type Input = Test;
+/// Integration tests capable of insert, multi-insert, and all the supported search variations.
+#[derive(Debug)]
+struct FullTest;
+
+impl diskann_benchmark_runner::Benchmark for FullTest {
+    type Input = parse::Test;
     type Output = BuildAndSearch;
 
-    fn try_match(&self, input: &Test, context: &MatchContext) -> Score {
+    fn try_match(&self, input: &parse::Test, context: &MatchContext) -> Score {
         let mut score = context.success(0);
 
         // Match data-type.
         match input.representation {
-            Representation::FullPrecision { .. } => {
+            parse::Representation::FullPrecision { .. } => {
                 // We match all valid data-types
             }
-            Representation::StaticBuild
-            | Representation::Spherical { .. }
-            | Representation::Product { .. }
-            | Representation::Scalar { .. } => {
+            parse::Representation::Spherical { .. }
+            | parse::Representation::Product { .. }
+            | parse::Representation::Scalar { .. } => {
                 let data_type = input.data.data_type;
                 // Ensure that the data type if `f32`.
                 if data_type != DataType::F32 {
                     score.fail(
                         1,
-                        &format_args!(
-                            "static-build/quantization requires f32 data, not {}",
-                            data_type
-                        ),
+                        &format_args!("quantization requires f32 data, not {}", data_type),
                     );
                 }
             }
-        }
-
-        // Don't run multi-insert for static-builds.
-        //
-        // This should be kept in-sync with backend capabilities.
-        if matches!(input.representation, Representation::StaticBuild)
-            && matches!(input.build.insert, Insert::Multi { .. })
-        {
-            score.fail(
-                1,
-                &"multi-insert is not supported for static builds to save compilation time",
-            );
         }
 
         score
@@ -1010,55 +72,78 @@ impl diskann_benchmark_runner::Benchmark for FullPrecision {
 
     fn run(
         &self,
-        input: &Test,
+        input: &parse::Test,
         _checkpoint: Checkpoint<'_>,
         mut output: &mut dyn Output,
     ) -> anyhow::Result<Self::Output> {
-        let data_type = match input.representation {
-            Representation::FullPrecision { data_type } => data_type,
-            Representation::StaticBuild
-            | Representation::Spherical { .. }
-            | Representation::Product { .. }
-            | Representation::Scalar { .. } => input.data.data_type,
+        let parse::Test {
+            data,
+            representation,
+            build,
+            search,
+        } = input;
+
+        let data_type = match representation {
+            parse::Representation::FullPrecision { data_type } => *data_type,
+            parse::Representation::Spherical { .. }
+            | parse::Representation::Product { .. }
+            | parse::Representation::Scalar { .. } => data.data_type,
         };
 
         // Load the data and perform any necessary data conversions.
-        let Bundle {
+        let ops::Bundle {
             data,
+            labels,
             queries,
-            groundtruth,
-        } = input.data.load_as(data_type)?;
+        } = ops::load_data(data, data_type)?;
 
-        let index = input.index(data.as_view())?;
-        let build = match input.build.insert {
-            Insert::Single => {
+        let index = factory::create(
+            representation,
+            input.data.metric,
+            &build.config,
+            data.as_view(),
+        )?;
+        let build = match build.insert {
+            parse::Insert::Single => {
                 let rt = diskann_benchmark_core::tokio::runtime(1)?;
-                super::ops::insert(&*index, data.as_view(), rt.handle())?
+                ops::insert(&*index, data.as_view(), rt.handle())?
             }
-            Insert::Multi { batch_size } => {
+            parse::Insert::Multi { batch_size } => {
                 let rt = diskann_benchmark_core::tokio::runtime(
-                    input.build.config.max_minibatch_par().into(),
+                    build.config.max_minibatch_par().into(),
                 )?;
-                super::ops::multi_insert(&index, data.as_view(), batch_size, rt.handle())?
+                ops::multi_insert(&index, data.as_view(), batch_size, rt.handle())?
             }
         };
 
         let rt = diskann_benchmark_core::tokio::runtime(1)?;
-        let mut knn = Vec::new();
-        for (k, param) in input.search.knn.iter() {
-            let stats = super::ops::knn(
-                &*index,
-                *k,
-                *param,
-                queries.as_view(),
-                &groundtruth.as_view(),
-                rt.handle(),
-            )?;
 
-            knn.push(stats);
-        }
+        let parse::Search {
+            knn,
+            inline_filter,
+            multihop_filter,
+        } = search;
 
-        let build_and_search = BuildAndSearch { build, knn };
+        let knn = ops::knn(&*index, knn, queries.as_view(), rt.handle())?;
+        let inline_filter = match inline_filter {
+            Some(search) => {
+                ops::filter_search(&*index, &labels, search.common(), queries.as_view())?
+            }
+            None => Vec::new(),
+        };
+        let multihop_filter = match multihop_filter {
+            Some(search) => {
+                ops::filter_search(&*index, &labels, search.common(), queries.as_view())?
+            }
+            None => Vec::new(),
+        };
+
+        let build_and_search = BuildAndSearch {
+            build,
+            knn,
+            inline_filter,
+            multihop_filter,
+        };
 
         writeln!(output, "{}", build_and_search)?;
 
@@ -1066,7 +151,118 @@ impl diskann_benchmark_runner::Benchmark for FullPrecision {
     }
 }
 
-impl Regression for FullPrecision {
+impl Regression for FullTest {
+    type Tolerances = CheckBuildAndSearch;
+    type Pass = Finished;
+    type Fail = Finished;
+
+    fn check(
+        &self,
+        tolerances: &Self::Tolerances,
+        _input: &Self::Input,
+        before: &Self::Output,
+        after: &Self::Output,
+    ) -> anyhow::Result<PassFail<Self::Pass, Self::Fail>> {
+        Ok(tolerances.check(before, after).pass_fail())
+    }
+}
+
+//-------------//
+// PartialTest //
+//-------------//
+
+/// Partial integration test supporting only insert and regular KNN search.
+///
+/// This is used to lightly test the static build path without needing to support the whole
+/// range of build and search modes. Done to save compilation time and to keep the static
+/// build support limited to just what is needed.
+#[derive(Debug)]
+struct PartialTest;
+
+impl diskann_benchmark_runner::Benchmark for PartialTest {
+    type Input = parse::PartialTest;
+    type Output = BuildAndSearch;
+
+    fn try_match(&self, input: &parse::PartialTest, context: &MatchContext) -> Score {
+        let mut score = context.success(0);
+
+        // Match data-type.
+        let data_type = input.data.data_type;
+        if data_type != DataType::F32 {
+            score.fail(
+                1,
+                &format_args!("static-build requires f32 data, not {}", data_type),
+            );
+        }
+
+        // Don't run multi-insert for static-builds.
+        //
+        // This should be kept in-sync with backend capabilities.
+        match input.build.insert {
+            parse::Insert::Single => {}
+            parse::Insert::Multi { .. } => {
+                score.fail(
+                    1,
+                    &"multi-insert is not supported for static builds to save compilation time",
+                );
+            }
+        }
+
+        score
+    }
+
+    fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "nop")
+    }
+
+    fn run(
+        &self,
+        input: &parse::PartialTest,
+        _checkpoint: Checkpoint<'_>,
+        mut output: &mut dyn Output,
+    ) -> anyhow::Result<Self::Output> {
+        let parse::PartialTest {
+            data,
+            build,
+            search,
+        } = input;
+
+        let data_type = data.data_type;
+
+        // Load the data and perform any necessary data conversions.
+        let ops::Bundle {
+            data,
+            labels: _, // unused for partial-tests.
+            queries,
+        } = ops::load_data(data, data_type)?;
+
+        let index = factory::create_partial(input.data.metric, &build.config, data.as_view())?;
+
+        let rt = diskann_benchmark_core::tokio::runtime(1)?;
+        let build = match build.insert {
+            parse::Insert::Single => ops::insert(&*index, data.as_view(), rt.handle())?,
+            parse::Insert::Multi { .. } => {
+                anyhow::bail!("partial-tests do not support multi-insert");
+            }
+        };
+
+        let rt = diskann_benchmark_core::tokio::runtime(1)?;
+
+        let knn = ops::knn(&*index, search, queries.as_view(), rt.handle())?;
+
+        let build_and_search = BuildAndSearch {
+            build,
+            knn,
+            inline_filter: Vec::new(),
+            multihop_filter: Vec::new(),
+        };
+
+        writeln!(output, "{}", build_and_search)?;
+        Ok(build_and_search)
+    }
+}
+
+impl Regression for PartialTest {
     type Tolerances = CheckBuildAndSearch;
     type Pass = Finished;
     type Fail = Finished;
@@ -1089,15 +285,28 @@ impl Regression for FullPrecision {
 #[derive(Debug, Serialize, Deserialize)]
 struct BuildAndSearch {
     build: Counters,
-    knn: Vec<super::ops::KnnStats>,
+    knn: Vec<KnnStats>,
+    inline_filter: Vec<KnnStats>,
+    multihop_filter: Vec<KnnStats>,
 }
 
 impl std::fmt::Display for BuildAndSearch {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "build stats")?;
         writeln!(f, "{}", Indent::new(&self.build.to_string(), 4))?;
+
         writeln!(f, "knn stats")?;
         for k in self.knn.iter() {
+            writeln!(f, "{}\n", k)?;
+        }
+
+        writeln!(f, "inline filter")?;
+        for k in self.inline_filter.iter() {
+            writeln!(f, "{}\n", k)?;
+        }
+
+        writeln!(f, "multihop filter")?;
+        for k in self.multihop_filter.iter() {
             writeln!(f, "{}\n", k)?;
         }
 
@@ -1117,14 +326,14 @@ impl std::fmt::Display for BuildAndSearch {
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct CheckBuildAndSearch {
     build: CheckCounters,
-    knn: super::ops::CheckKnnStats,
+    knn: CheckKnnStats,
 }
 
 impl CheckBuildAndSearch {
     fn example() -> Self {
         Self {
             build: CheckCounters::example(),
-            knn: super::ops::CheckKnnStats::example(),
+            knn: CheckKnnStats::example(),
         }
     }
 
@@ -1133,26 +342,38 @@ impl CheckBuildAndSearch {
             build: check_build,
             knn: check_knn,
         } = self;
-        let BuildAndSearch { build, knn } = old;
+
+        let BuildAndSearch {
+            build,
+            knn,
+            inline_filter,
+            multihop_filter,
+        } = old;
+
         let mut builder = Report::builder();
         builder.push("build", check_build.check(build, &new.build));
-
-        if knn.len() != new.knn.len() {
-            builder.push(
-                "knn",
-                Report::error(format_args!(
-                    "old KNN has {} entries while the new has {}",
-                    knn.len(),
-                    new.knn.len()
-                )),
-            );
-        } else {
-            let mut sub = Report::builder();
-            for (i, (old, new)) in std::iter::zip(knn.iter(), new.knn.iter()).enumerate() {
-                sub.push(i, check_knn.check(old, new));
-            }
-            builder.push("knn", sub.finish());
-        }
+        builder.push(
+            "knn",
+            check_all(knn, &new.knn, "KNN", |o, n| check_knn.check(o, n)),
+        );
+        builder.push(
+            "inline_filter",
+            check_all(
+                inline_filter,
+                &new.inline_filter,
+                "Inline Filter",
+                |o, n| check_knn.check(o, n),
+            ),
+        );
+        builder.push(
+            "multihop_filter",
+            check_all(
+                multihop_filter,
+                &new.multihop_filter,
+                "Multihop Filter",
+                |o, n| check_knn.check(o, n),
+            ),
+        );
 
         builder.finish()
     }
@@ -1189,18 +410,13 @@ mod tests {
     use diskann_benchmark_runner::report::Status;
 
     #[test]
-    fn example_parses() {
-        let _ = Test::from_raw(<Test as diskann_benchmark_runner::Input>::example(), None).unwrap();
-    }
-
-    #[test]
     fn check_build_and_search_rejects_knn_length_mismatch() {
         let tolerance = CheckBuildAndSearch::example();
         let output = |len| BuildAndSearch {
             build: Counters::test_fixture(),
-            knn: (0..len)
-                .map(|_| super::super::ops::KnnStats::test_fixture())
-                .collect(),
+            knn: (0..len).map(|_| KnnStats::test_fixture()).collect(),
+            inline_filter: vec![],
+            multihop_filter: vec![],
         };
         for (old_len, new_len, expected) in [
             (1, 1, Status::Pass),
