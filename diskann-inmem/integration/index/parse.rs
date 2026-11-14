@@ -359,6 +359,48 @@ mod dto {
         }
     }
 
+    pub(super) mod range_filter {
+        use super::*;
+
+        #[derive(Debug, Serialize, Deserialize)]
+        #[serde(deny_unknown_fields)]
+        pub(in crate::index::parse) struct Params {
+            pub(in crate::index::parse) starting_l: usize,
+            pub(in crate::index::parse) radius: f32,
+        }
+
+        #[derive(Debug, Serialize, Deserialize)]
+        #[serde(deny_unknown_fields)]
+        pub(in crate::index::parse) struct Search {
+            pub(in crate::index::parse) searches: Vec<Params>,
+            pub(in crate::index::parse) predicates: InputFile,
+            pub(in crate::index::parse) groundtruth: InputFile,
+        }
+
+        impl Search {
+            pub(in crate::index::parse) fn example() -> Self {
+                Self {
+                    searches: vec![
+                        Params {
+                            starting_l: 10,
+                            radius: 110000.0,
+                        },
+                        Params {
+                            starting_l: 20,
+                            radius: 110000.0,
+                        },
+                        Params {
+                            starting_l: 50,
+                            radius: 110000.0,
+                        },
+                    ],
+                    predicates: InputFile::new("path/to/predicate.jsonl"),
+                    groundtruth: InputFile::new("path/to/groundtruth"),
+                }
+            }
+        }
+    }
+
     #[derive(Debug, Serialize, Deserialize)]
     #[serde(deny_unknown_fields)]
     pub(super) struct Search {
@@ -367,6 +409,8 @@ mod dto {
         pub(super) inline_filter: Option<inline_filter::Search>,
         #[serde(deserialize_with = "Deserialize::deserialize")]
         pub(super) multihop_filter: Option<multihop_filter::Search>,
+        #[serde(deserialize_with = "Deserialize::deserialize")]
+        pub(super) range_filter: Option<range_filter::Search>,
     }
 
     impl Search {
@@ -375,6 +419,7 @@ mod dto {
                 knn: knn::Search::example(),
                 inline_filter: Some(inline_filter::Search::example()),
                 multihop_filter: Some(multihop_filter::Search::example()),
+                range_filter: Some(range_filter::Search::example()),
             }
         }
     }
@@ -766,7 +811,7 @@ impl Knn {
 
 #[derive(Debug)]
 pub(super) struct CommonFilter<'a> {
-    pub(super) searches: Vec<(usize, object::Filter)>,
+    pub(super) searches: Vec<object::Filter>,
     pub(super) predicates: &'a Path,
     pub(super) groundtruth: &'a Path,
 }
@@ -784,7 +829,8 @@ impl InlineFilter {
             searches: self
                 .searches
                 .iter()
-                .map(|(k, filter)| (*k, object::Filter::Inline(filter.clone())))
+                .cloned()
+                .map(|(knn, params)| object::Filter::Inline { knn, params })
                 .collect(),
             predicates: self.predicates.as_ref(),
             groundtruth: self.groundtruth.as_ref(),
@@ -877,7 +923,8 @@ impl MultihopFilter {
             searches: self
                 .searches
                 .iter()
-                .map(|(k, filter)| (*k, object::Filter::Multihop(filter.clone())))
+                .cloned()
+                .map(|(knn, params)| object::Filter::Multihop { knn, params })
                 .collect(),
             predicates: self.predicates.as_ref(),
             groundtruth: self.groundtruth.as_ref(),
@@ -944,10 +991,83 @@ impl MultihopFilter {
 }
 
 #[derive(Debug)]
+pub(super) struct RangeFilter {
+    searches: Vec<dgs::FilteredRange>,
+    predicates: InputFile,
+    groundtruth: InputFile,
+}
+
+impl RangeFilter {
+    pub(super) fn common(&self) -> CommonFilter<'_> {
+        CommonFilter {
+            searches: self
+                .searches
+                .iter()
+                .map(|params| object::Filter::Range(*params))
+                .collect(),
+            predicates: self.predicates.as_ref(),
+            groundtruth: self.groundtruth.as_ref(),
+        }
+    }
+
+    fn from_raw(
+        raw: dto::range_filter::Search,
+        checker: Option<&mut Checker>,
+    ) -> anyhow::Result<Self> {
+        let dto::range_filter::Search {
+            searches,
+            mut predicates,
+            mut groundtruth,
+        } = raw;
+
+        if let Some(checker) = checker {
+            predicates.resolve(checker)?;
+            groundtruth.resolve(checker)?;
+        }
+
+        fn make(s: dto::range_filter::Params) -> anyhow::Result<dgs::FilteredRange> {
+            let dto::range_filter::Params { starting_l, radius } = s;
+
+            let range = dgs::FilteredRange::new(starting_l, radius)?;
+            Ok(range)
+        }
+
+        let me = Self {
+            searches: searches
+                .into_iter()
+                .map(make)
+                .collect::<anyhow::Result<Vec<_>>>()?,
+            predicates,
+            groundtruth,
+        };
+
+        Ok(me)
+    }
+
+    fn as_raw(&self) -> dto::range_filter::Search {
+        let searches = self
+            .searches
+            .iter()
+            .map(|params| dto::range_filter::Params {
+                starting_l: params.starting_l().get(),
+                radius: params.radius(),
+            })
+            .collect();
+
+        dto::range_filter::Search {
+            searches,
+            predicates: self.predicates.clone(),
+            groundtruth: self.groundtruth.clone(),
+        }
+    }
+}
+
+#[derive(Debug)]
 pub(super) struct Search {
     pub(super) knn: Knn,
     pub(super) inline_filter: Option<InlineFilter>,
     pub(super) multihop_filter: Option<MultihopFilter>,
+    pub(super) range_filter: Option<RangeFilter>,
 }
 
 impl Search {
@@ -956,6 +1076,7 @@ impl Search {
             knn,
             inline_filter,
             multihop_filter,
+            range_filter,
         } = raw;
 
         Ok(Self {
@@ -964,7 +1085,10 @@ impl Search {
                 .map(|raw| InlineFilter::from_raw(raw, checker.as_deref_mut()))
                 .transpose()?,
             multihop_filter: multihop_filter
-                .map(|raw| MultihopFilter::from_raw(raw, checker))
+                .map(|raw| MultihopFilter::from_raw(raw, checker.as_deref_mut()))
+                .transpose()?,
+            range_filter: range_filter
+                .map(|raw| RangeFilter::from_raw(raw, checker))
                 .transpose()?,
         })
     }
@@ -974,6 +1098,7 @@ impl Search {
             knn: self.knn.as_raw(),
             inline_filter: self.inline_filter.as_ref().map(InlineFilter::as_raw),
             multihop_filter: self.multihop_filter.as_ref().map(MultihopFilter::as_raw),
+            range_filter: self.range_filter.as_ref().map(RangeFilter::as_raw),
         }
     }
 }

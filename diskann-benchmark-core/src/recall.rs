@@ -46,7 +46,7 @@ pub enum ComputeRecallError {
 
 /// An abstraction over data-structures such as vector-of-vectors.
 ///
-/// This is used in recall calculations such as [`knn`] and [`average_precision`] and
+/// This is used in recall calculations such as [`knn`] and [`range_metrics`] and
 /// is purposely `dyn` compatible to reduce compilation overhead.
 ///
 /// Implementations should ensure that if [`Self::nrows`] returns a value `N` that `row(i)`
@@ -114,7 +114,7 @@ impl<T> Rows<T> for Vec<Vec<T>> {
     }
 }
 
-/// Aggregate trait for required behavior when computing recall and average precision.
+/// Aggregate trait for required behavior when computing recall and range metrics.
 pub trait RecallCompatible: Eq + Hash + Clone + std::fmt::Debug {}
 
 impl<T> RecallCompatible for T where T: Eq + Hash + Clone + std::fmt::Debug {}
@@ -302,59 +302,84 @@ where
 
 #[derive(Debug, Clone)]
 #[non_exhaustive]
-pub struct AveragePrecisionMetrics {
+pub struct RangeMetrics {
     /// The number of queries.
     pub num_queries: usize,
-    /// The average precision
-    pub average_precision: f64,
+    /// Total groundtruth IDs, deduplicated within each query.
+    pub num_groundtruth_values: usize,
+    /// Total returned IDs, deduplicated within each query.
+    pub num_result_values: usize,
+    /// Total returned IDs present in their query's groundtruth.
+    pub num_matches: usize,
+    /// Total matching IDs divided by total returned IDs.
+    pub precision: f64,
+    /// Total matching IDs divided by total groundtruth IDs.
+    pub recall: f64,
 }
 
 #[derive(Debug, Error)]
-pub enum AveragePrecisionError {
+pub enum RangeMetricsError {
     #[error("results has {0} elements but ground truth has {1}")]
     EntriesMismatch(usize, usize),
 }
 
-/// Compute average precision of a range search result
-pub fn average_precision<T>(
+/// Compute pooled (micro-averaged) precision and recall for range search results.
+///
+/// Each row is treated as a set: duplicate IDs and ordering do not affect the scores.
+/// Counts are summed across queries before division, rather than averaging per-query
+/// ratios. A metric is zero when its denominator is zero, including an empty batch.
+///
+/// # Errors
+///
+/// Returns an error if results and groundtruth have different numbers of queries.
+pub fn range_metrics<T>(
     results: &dyn Rows<T>,
     groundtruth: &dyn Rows<T>,
-) -> Result<AveragePrecisionMetrics, AveragePrecisionError>
+) -> Result<RangeMetrics, RangeMetricsError>
 where
     T: RecallCompatible,
 {
     let nrows = results.nrows();
     let groundtruth_nrows = groundtruth.nrows();
     if nrows != groundtruth_nrows {
-        return Err(AveragePrecisionError::EntriesMismatch(
-            nrows,
-            groundtruth_nrows,
-        ));
+        return Err(RangeMetricsError::EntriesMismatch(nrows, groundtruth_nrows));
     }
 
-    // The actual recall computation.
     let mut num_gt_results = 0;
     let mut num_reported_results = 0;
+    let mut num_matches = 0;
 
-    let mut scratch = HashSet::new();
-    let nrows = results.nrows();
+    let mut result_ids = HashSet::new();
+    let mut gt_ids = HashSet::new();
 
     for i in 0..nrows {
         let result = results.row(i);
         let gt = groundtruth.row(i);
 
-        scratch.clear();
-        scratch.extend(result.iter().cloned());
-        num_reported_results += gt.iter().filter(|i| scratch.contains(i)).count();
-        num_gt_results += gt.len();
+        result_ids.clear();
+        result_ids.extend(result.iter().cloned());
+        gt_ids.clear();
+        gt_ids.extend(gt.iter().cloned());
+        num_matches += result_ids.intersection(&gt_ids).count();
+        num_reported_results += result_ids.len();
+        num_gt_results += gt_ids.len();
     }
 
-    // Perform post-processing.
-    let average_precision = (num_reported_results as f64) / (num_gt_results as f64);
-
-    Ok(AveragePrecisionMetrics {
-        average_precision,
+    Ok(RangeMetrics {
+        precision: if num_reported_results == 0 {
+            0.0
+        } else {
+            (num_matches as f64) / (num_reported_results as f64)
+        },
+        recall: if num_gt_results == 0 {
+            0.0
+        } else {
+            (num_matches as f64) / (num_gt_results as f64)
+        },
         num_queries: nrows,
+        num_groundtruth_values: num_gt_results,
+        num_result_values: num_reported_results,
+        num_matches,
     })
 }
 
@@ -367,6 +392,64 @@ mod tests {
     use super::*;
 
     use diskann_utils::views::rowmajor::MatrixMut;
+
+    #[test]
+    fn test_range_metrics() {
+        let groundtruth = vec![vec![1, 2, 3], vec![4]];
+        for (results, num_results, num_matches, precision, recall) in [
+            (groundtruth.clone(), 4, 4, 1.0, 1.0),
+            (vec![vec![1, 2, 3, 5, 6], vec![4, 7, 8]], 8, 4, 0.5, 1.0),
+            (vec![vec![1, 2], vec![]], 2, 2, 1.0, 0.5),
+            (vec![vec![1, 5], vec![6]], 3, 1, 1.0 / 3.0, 0.25),
+            (vec![vec![5], vec![6]], 2, 0, 0.0, 0.0),
+            (vec![vec![3, 1, 1, 2], vec![4, 4]], 4, 4, 1.0, 1.0),
+        ] {
+            let metrics = range_metrics(&results, &groundtruth).unwrap();
+            assert_eq!(metrics.num_queries, 2);
+            assert_eq!(metrics.num_groundtruth_values, 4);
+            assert_eq!(metrics.num_result_values, num_results);
+            assert_eq!(metrics.num_matches, num_matches);
+            assert_eq!(metrics.precision, precision);
+            assert_eq!(metrics.recall, recall);
+        }
+
+        let metrics = range_metrics(&vec![vec![1, 1, 2]], &vec![vec![1, 1]]).unwrap();
+        assert_eq!(metrics.num_groundtruth_values, 1);
+        assert_eq!(metrics.num_result_values, 2);
+        assert_eq!(metrics.num_matches, 1);
+        assert_eq!(metrics.precision, 0.5);
+        assert_eq!(metrics.recall, 1.0);
+    }
+
+    #[test]
+    fn test_range_metrics_empty_rows() {
+        for (results, groundtruth, precision, recall) in [
+            (vec![], vec![], 0.0, 0.0),
+            (vec![vec![]], vec![vec![]], 0.0, 0.0),
+            (vec![vec![]], vec![vec![1]], 0.0, 0.0),
+            (vec![vec![1]], vec![vec![]], 0.0, 0.0),
+            (vec![vec![1], vec![2]], vec![vec![1], vec![]], 0.5, 1.0),
+        ] {
+            let metrics = range_metrics::<u32>(&results, &groundtruth).unwrap();
+            assert_eq!(metrics.num_queries, results.len());
+            assert_eq!(
+                metrics.num_groundtruth_values,
+                groundtruth.iter().map(Vec::len).sum::<usize>()
+            );
+            assert_eq!(
+                metrics.num_result_values,
+                results.iter().map(Vec::len).sum::<usize>()
+            );
+            assert_eq!(metrics.precision, precision);
+            assert_eq!(metrics.recall, recall);
+        }
+    }
+
+    #[test]
+    fn test_range_metrics_rows_mismatch() {
+        let err = range_metrics::<u32>(&vec![vec![1]], &vec![]).unwrap_err();
+        assert!(matches!(err, RangeMetricsError::EntriesMismatch(1, 0)));
+    }
 
     fn test_rows_inner(rows: &dyn Rows<usize>, ncols: Option<usize>) {
         assert_eq!(rows.ncols(), ncols);

@@ -150,7 +150,7 @@ pub struct Summary {
     pub mean_latencies: Vec<f64>,
     pub p90_latencies: Vec<MicroSeconds>,
     pub p99_latencies: Vec<MicroSeconds>,
-    pub average_precision: recall::AveragePrecisionMetrics,
+    pub range_metrics: recall::RangeMetrics,
 }
 
 /// A [`search::Aggregate`] for collecting the results of multiple [`FilteredRange`] search
@@ -177,10 +177,8 @@ where
         run: search::Run<graph::search::FilteredRange>,
         mut results: Vec<search::SearchResults<I, Metrics>>,
     ) -> anyhow::Result<Summary> {
-        let average_precision = match results.first() {
-            Some(first) => {
-                crate::recall::average_precision(first.ids().as_rows(), self.groundtruth)?
-            }
+        let range_metrics = match results.first() {
+            Some(first) => crate::recall::range_metrics(first.ids().as_rows(), self.groundtruth)?,
             None => anyhow::bail!("Results must be non-empty"),
         };
 
@@ -212,7 +210,7 @@ where
             mean_latencies,
             p90_latencies,
             p99_latencies,
-            average_precision,
+            range_metrics,
         })
     }
 }
@@ -322,12 +320,13 @@ mod tests {
             assert_eq!(summary.p90_latencies.len(), TWO.get());
             assert_eq!(summary.p99_latencies.len(), TWO.get());
 
-            let ap = summary.average_precision;
-            assert_eq!(ap.num_queries, queries.nrows());
+            let metrics = summary.range_metrics;
+            assert_eq!(metrics.num_queries, queries.nrows());
             assert_eq!(
-                ap.average_precision, 1.0,
+                metrics.precision, 1.0,
                 "we used a search as the groundtruth"
             );
+            assert_eq!(metrics.recall, 1.0, "we used a search as the groundtruth");
         }
     }
 

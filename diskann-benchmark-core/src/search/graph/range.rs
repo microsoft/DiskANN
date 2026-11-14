@@ -154,17 +154,17 @@ pub struct Summary {
     /// This contains one entry per repetition in the batch.
     pub p99_latencies: Vec<MicroSeconds>,
 
-    /// The average precision metrics for the batch of runs.
+    /// The pooled precision and recall for the batch of runs.
     ///
     /// This implementation assumes that search is deterministic and only
-    /// uses the first repetition's results to compute the average precision.
-    pub average_precision: recall::AveragePrecisionMetrics,
+    /// uses the first repetition's results to compute precision and recall.
+    pub range_metrics: recall::RangeMetrics,
 }
 
 /// A [`search::Aggregate`] for collecting the results of multiple [`Range`] search runs.
 ///
 /// In addition to collecting latencies and other metrics, this aggregator computes
-/// [`crate::recall::AveragePrecisionMetrics`] using a provided groundtruth.
+/// [`crate::recall::RangeMetrics`] using a provided groundtruth.
 ///
 /// The aggregated results are available as a [`Summary`].
 pub struct Aggregator<'a, I> {
@@ -172,7 +172,7 @@ pub struct Aggregator<'a, I> {
 }
 
 impl<'a, I> Aggregator<'a, I> {
-    /// Construct a new [`Aggregator`] using `groundtruth` for average precision computation.
+    /// Construct a new [`Aggregator`] using `groundtruth` for precision and recall.
     pub fn new(groundtruth: &'a dyn crate::recall::Rows<I>) -> Self {
         Self { groundtruth }
     }
@@ -190,11 +190,9 @@ where
         run: search::Run<graph::search::Range>,
         mut results: Vec<search::SearchResults<I, Metrics>>,
     ) -> anyhow::Result<Summary> {
-        // Compute the recall using just the first result.
-        let average_precision = match results.first() {
-            Some(first) => {
-                crate::recall::average_precision(first.ids().as_rows(), self.groundtruth)?
-            }
+        // Compute quality metrics using just the first result.
+        let range_metrics = match results.first() {
+            Some(first) => crate::recall::range_metrics(first.ids().as_rows(), self.groundtruth)?,
             None => anyhow::bail!("Results must be non-empty"),
         };
 
@@ -226,7 +224,7 @@ where
             mean_latencies,
             p90_latencies,
             p99_latencies,
-            average_precision,
+            range_metrics,
         })
     }
 }
@@ -316,12 +314,13 @@ mod tests {
             assert_eq!(summary.p90_latencies.len(), TWO.get());
             assert_eq!(summary.p99_latencies.len(), TWO.get());
 
-            let ap = summary.average_precision;
-            assert_eq!(ap.num_queries, queries.nrows());
+            let metrics = summary.range_metrics;
+            assert_eq!(metrics.num_queries, queries.nrows());
             assert_eq!(
-                ap.average_precision, 1.0,
+                metrics.precision, 1.0,
                 "we used a search as the groundtruth"
             );
+            assert_eq!(metrics.recall, 1.0, "we used a search as the groundtruth");
         }
     }
 

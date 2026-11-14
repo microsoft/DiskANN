@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     factory, ops, parse,
-    stats::{CheckCounters, CheckKnnStats, Counters, KnnStats},
+    stats::{CheckCounters, CheckStats, Counters, Stats},
 };
 use crate::support::{check_all, datatype::DataType};
 
@@ -122,6 +122,7 @@ impl diskann_benchmark_runner::Benchmark for FullTest {
             knn,
             inline_filter,
             multihop_filter,
+            range_filter,
         } = search;
 
         let knn = ops::knn(&*index, knn, queries.as_view(), rt.handle())?;
@@ -138,11 +139,19 @@ impl diskann_benchmark_runner::Benchmark for FullTest {
             None => Vec::new(),
         };
 
+        let range_filter = match range_filter {
+            Some(search) => {
+                ops::filter_search(&*index, &labels, search.common(), queries.as_view())?
+            }
+            None => Vec::new(),
+        };
+
         let build_and_search = BuildAndSearch {
             build,
             knn,
             inline_filter,
             multihop_filter,
+            range_filter,
         };
 
         writeln!(output, "{}", build_and_search)?;
@@ -255,6 +264,7 @@ impl diskann_benchmark_runner::Benchmark for PartialTest {
             knn,
             inline_filter: Vec::new(),
             multihop_filter: Vec::new(),
+            range_filter: Vec::new(),
         };
 
         writeln!(output, "{}", build_and_search)?;
@@ -285,9 +295,10 @@ impl Regression for PartialTest {
 #[derive(Debug, Serialize, Deserialize)]
 struct BuildAndSearch {
     build: Counters,
-    knn: Vec<KnnStats>,
-    inline_filter: Vec<KnnStats>,
-    multihop_filter: Vec<KnnStats>,
+    knn: Vec<Stats>,
+    inline_filter: Vec<Stats>,
+    multihop_filter: Vec<Stats>,
+    range_filter: Vec<Stats>,
 }
 
 impl std::fmt::Display for BuildAndSearch {
@@ -326,21 +337,21 @@ impl std::fmt::Display for BuildAndSearch {
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct CheckBuildAndSearch {
     build: CheckCounters,
-    knn: CheckKnnStats,
+    stats: CheckStats,
 }
 
 impl CheckBuildAndSearch {
     fn example() -> Self {
         Self {
             build: CheckCounters::example(),
-            knn: CheckKnnStats::example(),
+            stats: CheckStats::example(),
         }
     }
 
     fn check(&self, old: &BuildAndSearch, new: &BuildAndSearch) -> Report {
         let Self {
             build: check_build,
-            knn: check_knn,
+            stats: check_stats,
         } = self;
 
         let BuildAndSearch {
@@ -348,13 +359,14 @@ impl CheckBuildAndSearch {
             knn,
             inline_filter,
             multihop_filter,
+            range_filter,
         } = old;
 
         let mut builder = Report::builder();
         builder.push("build", check_build.check(build, &new.build));
         builder.push(
             "knn",
-            check_all(knn, &new.knn, "KNN", |o, n| check_knn.check(o, n)),
+            check_all(knn, &new.knn, "KNN", |o, n| check_stats.check(o, n)),
         );
         builder.push(
             "inline_filter",
@@ -362,7 +374,7 @@ impl CheckBuildAndSearch {
                 inline_filter,
                 &new.inline_filter,
                 "Inline Filter",
-                |o, n| check_knn.check(o, n),
+                |o, n| check_stats.check(o, n),
             ),
         );
         builder.push(
@@ -371,8 +383,14 @@ impl CheckBuildAndSearch {
                 multihop_filter,
                 &new.multihop_filter,
                 "Multihop Filter",
-                |o, n| check_knn.check(o, n),
+                |o, n| check_stats.check(o, n),
             ),
+        );
+        builder.push(
+            "range_filter",
+            check_all(range_filter, &new.range_filter, "Range Filter", |o, n| {
+                check_stats.check(o, n)
+            }),
         );
 
         builder.finish()
@@ -414,9 +432,10 @@ mod tests {
         let tolerance = CheckBuildAndSearch::example();
         let output = |len| BuildAndSearch {
             build: Counters::test_fixture(),
-            knn: (0..len).map(|_| KnnStats::test_fixture()).collect(),
+            knn: (0..len).map(|_| Stats::test_fixture()).collect(),
             inline_filter: vec![],
             multihop_filter: vec![],
+            range_filter: vec![],
         };
         for (old_len, new_len, expected) in [
             (1, 1, Status::Pass),

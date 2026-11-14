@@ -74,18 +74,25 @@ where
 
 #[derive(Debug, Clone, Serialize)]
 #[non_exhaustive]
-pub(crate) struct AveragePrecisionMetrics {
+pub(crate) struct RangeMetrics {
     /// The number of queries.
     pub(crate) num_queries: usize,
-    /// The average precision
-    pub(crate) average_precision: f64,
+    pub(crate) num_groundtruth_values: usize,
+    pub(crate) num_result_values: usize,
+    pub(crate) num_matches: usize,
+    pub(crate) precision: f64,
+    pub(crate) recall: f64,
 }
 
-impl From<&benchmark_core::recall::AveragePrecisionMetrics> for AveragePrecisionMetrics {
-    fn from(m: &benchmark_core::recall::AveragePrecisionMetrics) -> Self {
+impl From<&benchmark_core::recall::RangeMetrics> for RangeMetrics {
+    fn from(m: &benchmark_core::recall::RangeMetrics) -> Self {
         Self {
             num_queries: m.num_queries,
-            average_precision: m.average_precision,
+            num_groundtruth_values: m.num_groundtruth_values,
+            num_result_values: m.num_result_values,
+            num_matches: m.num_matches,
+            precision: m.precision,
+            recall: m.recall,
         }
     }
 }

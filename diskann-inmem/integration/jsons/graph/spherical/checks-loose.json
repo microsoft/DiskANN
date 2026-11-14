@@ -14,15 +14,15 @@
               "increase": 0.0005
             }
           },
-          "knn": {
+          "stats": {
             "counters": {
               "max-relative-change": {
                 "decrease": 0.009,
                 "increase": 0.009
               }
             },
-            "recall": {
-              "recall": {
+            "quality": {
+              "change": {
                 "max-absolute-change": 0.0138
               }
             }

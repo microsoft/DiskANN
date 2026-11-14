@@ -86,6 +86,16 @@
                 "search_l": 100
               }
             ]
+          },
+          "range_filter": {
+            "groundtruth": "/yfcc/groundtruth_rad_110000_filtered.rangeres",
+            "predicates": "/yfcc/yfcc_query_filters.json",
+            "searches": [
+              {
+                "radius": 110000.0,
+                "starting_l": 10
+              }
+            ]
           }
         }
       },
@@ -116,11 +126,13 @@
             "cmps": 45094,
             "hops": 5439
           },
-          "recall": {
-            "average": 0.467719298245614,
-            "num_queries": 100,
-            "recall_k": 10,
-            "recall_n": 10
+          "quality": {
+            "recall": {
+              "average": 0.467719298245614,
+              "num_queries": 100,
+              "recall_k": 10,
+              "recall_n": 10
+            }
           }
         },
         {
@@ -137,11 +149,13 @@
             "cmps": 130678,
             "hops": 24418
           },
-          "recall": {
-            "average": 0.5877192982456141,
-            "num_queries": 100,
-            "recall_k": 10,
-            "recall_n": 10
+          "quality": {
+            "recall": {
+              "average": 0.5877192982456141,
+              "num_queries": 100,
+              "recall_k": 10,
+              "recall_n": 10
+            }
           }
         }
       ],
@@ -160,11 +174,13 @@
             "cmps": 45194,
             "hops": 5439
           },
-          "recall": {
-            "average": 0.902,
-            "num_queries": 100,
-            "recall_k": 10,
-            "recall_n": 10
+          "quality": {
+            "recall": {
+              "average": 0.902,
+              "num_queries": 100,
+              "recall_k": 10,
+              "recall_n": 10
+            }
           }
         },
         {
@@ -181,11 +197,13 @@
             "cmps": 49411,
             "hops": 5790
           },
-          "recall": {
-            "average": 0.904,
-            "num_queries": 100,
-            "recall_k": 10,
-            "recall_n": 10
+          "quality": {
+            "recall": {
+              "average": 0.904,
+              "num_queries": 100,
+              "recall_k": 10,
+              "recall_n": 10
+            }
           }
         },
         {
@@ -202,11 +220,13 @@
             "cmps": 74516,
             "hops": 10649
           },
-          "recall": {
-            "average": 0.908,
-            "num_queries": 100,
-            "recall_k": 10,
-            "recall_n": 10
+          "quality": {
+            "recall": {
+              "average": 0.908,
+              "num_queries": 100,
+              "recall_k": 10,
+              "recall_n": 10
+            }
           }
         }
       ],
@@ -225,11 +245,13 @@
             "cmps": 40939,
             "hops": 24584
           },
-          "recall": {
-            "average": 0.45087719298245615,
-            "num_queries": 100,
-            "recall_k": 10,
-            "recall_n": 10
+          "quality": {
+            "recall": {
+              "average": 0.45087719298245615,
+              "num_queries": 100,
+              "recall_k": 10,
+              "recall_n": 10
+            }
           }
         },
         {
@@ -246,11 +268,13 @@
             "cmps": 33998,
             "hops": 11740
           },
-          "recall": {
-            "average": 0.42561403508771933,
-            "num_queries": 100,
-            "recall_k": 10,
-            "recall_n": 10
+          "quality": {
+            "recall": {
+              "average": 0.42561403508771933,
+              "num_queries": 100,
+              "recall_k": 10,
+              "recall_n": 10
+            }
           }
         },
         {
@@ -267,11 +291,40 @@
             "cmps": 55281,
             "hops": 20131
           },
-          "recall": {
-            "average": 0.42771929824561405,
-            "num_queries": 100,
-            "recall_k": 10,
-            "recall_n": 10
+          "quality": {
+            "recall": {
+              "average": 0.42771929824561405,
+              "num_queries": 100,
+              "recall_k": 10,
+              "recall_n": 10
+            }
+          }
+        }
+      ],
+      "range_filter": [
+        {
+          "counters": {
+            "append_neighbors": 0,
+            "distance": 0,
+            "get_neighbors": 54426,
+            "get_vector": 220328,
+            "query_distance": 220328,
+            "set_neighbors": 0,
+            "set_vector": 0
+          },
+          "misc": {
+            "cmps": 220228,
+            "hops": 54426
+          },
+          "quality": {
+            "range": {
+              "num_groundtruth_values": 1606,
+              "num_matches": 1604,
+              "num_queries": 100,
+              "num_result_values": 2804,
+              "precision": 0.572039942938659,
+              "recall": 0.9987546699875468
+            }
           }
         }
       ]

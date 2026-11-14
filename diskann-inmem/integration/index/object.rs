@@ -8,7 +8,7 @@ use std::{future::Future, pin::Pin, sync::Arc};
 use diskann::{
     graph::{
         DiskANNIndex, glue,
-        search::{InlineFilterSearch, Knn, MultihopFilterSearch},
+        search::{FilteredRange, InlineFilterSearch, Knn, MultihopFilterSearch},
     },
     neighbor::Neighbor,
 };
@@ -16,7 +16,7 @@ use diskann_utils::views::rowmajor::Matrix;
 
 use diskann_inmem::{self as di, Context, Provider, Strategy, repr};
 
-use super::stats::{Counters, KnnSearch};
+use super::stats::{Counters, MiscStats};
 use crate::support::datatype::{AsDataType, DatasetView, Slice, TryCast};
 
 pub(crate) trait PartialIndex {
@@ -29,7 +29,7 @@ pub(crate) trait PartialIndex {
         query: Slice<'a>,
         knn: Knn,
         neighbors: &'a mut Vec<Neighbor<u64>>,
-    ) -> Pin<Box<dyn Future<Output = anyhow::Result<KnnSearch>> + 'a>>;
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<MiscStats>> + 'a>>;
 
     //--------//
     // Insert //
@@ -50,8 +50,15 @@ pub(crate) trait PartialIndex {
 
 #[derive(Debug, Clone)]
 pub(crate) enum Filter {
-    Inline(InlineFilterSearch),
-    Multihop(MultihopFilterSearch),
+    Inline {
+        knn: usize,
+        params: InlineFilterSearch,
+    },
+    Multihop {
+        knn: usize,
+        params: MultihopFilterSearch,
+    },
+    Range(FilteredRange),
 }
 
 pub(crate) trait Index: PartialIndex {
@@ -66,7 +73,7 @@ pub(crate) trait Index: PartialIndex {
         bitmap: &'a [bool],
         filter: Filter,
         neighbors: &'a mut Vec<Neighbor<u64>>,
-    ) -> anyhow::Result<KnnSearch>;
+    ) -> anyhow::Result<MiscStats>;
 
     //--------//
     // Insert //
@@ -101,7 +108,7 @@ macro_rules! index {
                 query: Slice<'a>,
                 knn: Knn,
                 neighbors: &'a mut Vec<Neighbor<u64>>,
-            ) -> Pin<Box<dyn Future<Output = anyhow::Result<KnnSearch>> + 'a>> {
+            ) -> Pin<Box<dyn Future<Output = anyhow::Result<MiscStats>> + 'a>> {
                 let fut = async move {
                     let query = query.try_cast()?;
                     let stats = self
@@ -156,7 +163,9 @@ macro_rules! index {
                 predicate: &[bool],
                 filter: Filter,
                 neighbors: &mut Vec<Neighbor<u64>>,
-            ) -> anyhow::Result<KnnSearch> {
+            ) -> anyhow::Result<MiscStats> {
+                neighbors.clear();
+
                 anyhow::ensure!(
                     predicate.len() == self.provider().capacity().value(),
                     "expected predicate to densly represent external IDs",
@@ -170,8 +179,9 @@ macro_rules! index {
                 )?;
 
                 let stats = match filter {
-                    Filter::Inline(inline) => filtered.inline_filtered(inline, neighbors)?,
-                    Filter::Multihop(multihop) => filtered.multihop_filtered(multihop, neighbors)?,
+                    Filter::Inline { knn: _, params } => filtered.inline_filtered(params, neighbors)?,
+                    Filter::Multihop { knn: _, params } => filtered.multihop_filtered(params, neighbors)?,
+                    Filter::Range(params) => filtered.range_filtered(params, neighbors)?,
                 };
 
                 Ok(stats.into())
@@ -208,7 +218,7 @@ impl PartialIndex for DiskANNIndex<di::provider::buildonly::Provider<repr::Full<
         query: Slice<'a>,
         knn: Knn,
         neighbors: &'a mut Vec<Neighbor<u64>>,
-    ) -> Pin<Box<dyn Future<Output = anyhow::Result<KnnSearch>> + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<MiscStats>> + 'a>> {
         let fut = async move {
             let query = query.try_cast()?;
             let mut neighbors_u32 = Vec::<Neighbor<u32>>::new();

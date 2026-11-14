@@ -92,6 +92,16 @@
                 "search_l": 100
               }
             ]
+          },
+          "range_filter": {
+            "groundtruth": "/yfcc/groundtruth_rad_110000_filtered.rangeres",
+            "predicates": "/yfcc/yfcc_query_filters.json",
+            "searches": [
+              {
+                "radius": 110000.0,
+                "starting_l": 10
+              }
+            ]
           }
         }
       },
@@ -122,11 +132,13 @@
             "cmps": 51759,
             "hops": 5436
           },
-          "recall": {
-            "average": 0.4494736842105264,
-            "num_queries": 100,
-            "recall_k": 10,
-            "recall_n": 10
+          "quality": {
+            "recall": {
+              "average": 0.4494736842105264,
+              "num_queries": 100,
+              "recall_k": 10,
+              "recall_n": 10
+            }
           }
         },
         {
@@ -143,11 +155,13 @@
             "cmps": 168808,
             "hops": 25803
           },
-          "recall": {
-            "average": 0.6243859649122807,
-            "num_queries": 100,
-            "recall_k": 10,
-            "recall_n": 10
+          "quality": {
+            "recall": {
+              "average": 0.6243859649122807,
+              "num_queries": 100,
+              "recall_k": 10,
+              "recall_n": 10
+            }
           }
         }
       ],
@@ -166,11 +180,13 @@
             "cmps": 51859,
             "hops": 5436
           },
-          "recall": {
-            "average": 0.9,
-            "num_queries": 100,
-            "recall_k": 10,
-            "recall_n": 10
+          "quality": {
+            "recall": {
+              "average": 0.9,
+              "num_queries": 100,
+              "recall_k": 10,
+              "recall_n": 10
+            }
           }
         },
         {
@@ -187,11 +203,13 @@
             "cmps": 56518,
             "hops": 5835
           },
-          "recall": {
-            "average": 0.901,
-            "num_queries": 100,
-            "recall_k": 10,
-            "recall_n": 10
+          "quality": {
+            "recall": {
+              "average": 0.901,
+              "num_queries": 100,
+              "recall_k": 10,
+              "recall_n": 10
+            }
           }
         },
         {
@@ -208,11 +226,13 @@
             "cmps": 88647,
             "hops": 10693
           },
-          "recall": {
-            "average": 0.905,
-            "num_queries": 100,
-            "recall_k": 10,
-            "recall_n": 10
+          "quality": {
+            "recall": {
+              "average": 0.905,
+              "num_queries": 100,
+              "recall_k": 10,
+              "recall_n": 10
+            }
           }
         }
       ],
@@ -231,11 +251,13 @@
             "cmps": 51468,
             "hops": 28577
           },
-          "recall": {
-            "average": 0.5098245614035087,
-            "num_queries": 100,
-            "recall_k": 10,
-            "recall_n": 10
+          "quality": {
+            "recall": {
+              "average": 0.5098245614035087,
+              "num_queries": 100,
+              "recall_k": 10,
+              "recall_n": 10
+            }
           }
         },
         {
@@ -252,11 +274,13 @@
             "cmps": 39033,
             "hops": 12107
           },
-          "recall": {
-            "average": 0.4456140350877193,
-            "num_queries": 100,
-            "recall_k": 10,
-            "recall_n": 10
+          "quality": {
+            "recall": {
+              "average": 0.4456140350877193,
+              "num_queries": 100,
+              "recall_k": 10,
+              "recall_n": 10
+            }
           }
         },
         {
@@ -273,11 +297,40 @@
             "cmps": 64746,
             "hops": 20968
           },
-          "recall": {
-            "average": 0.447719298245614,
-            "num_queries": 100,
-            "recall_k": 10,
-            "recall_n": 10
+          "quality": {
+            "recall": {
+              "average": 0.447719298245614,
+              "num_queries": 100,
+              "recall_k": 10,
+              "recall_n": 10
+            }
+          }
+        }
+      ],
+      "range_filter": [
+        {
+          "counters": {
+            "append_neighbors": 0,
+            "distance": 0,
+            "get_neighbors": 54501,
+            "get_vector": 276358,
+            "query_distance": 276358,
+            "set_neighbors": 0,
+            "set_vector": 0
+          },
+          "misc": {
+            "cmps": 276258,
+            "hops": 54501
+          },
+          "quality": {
+            "range": {
+              "num_groundtruth_values": 1606,
+              "num_matches": 1604,
+              "num_queries": 100,
+              "num_result_values": 2807,
+              "precision": 0.5714285714285714,
+              "recall": 0.9987546699875468
+            }
           }
         }
       ]

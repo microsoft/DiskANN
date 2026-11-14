@@ -71,6 +71,16 @@
               }
             ]
           },
+          "range_filter": {
+            "groundtruth": "groundtruth_rad_110000_filtered.rangeres",
+            "predicates": "yfcc_query_filters.json",
+            "searches": [
+              {
+                "radius": 110000.0,
+                "starting_l": 10
+              }
+            ]
+          },
           "multihop_filter": {
             "groundtruth": "groundtruth_filtered.rangeres",
             "predicates": "yfcc_query_filters.json",
@@ -159,6 +169,16 @@
                 "beam_width": null,
                 "knn": 10,
                 "search_l": 50
+              }
+            ]
+          },
+          "range_filter": {
+            "groundtruth": "groundtruth_rad_110000_filtered.rangeres",
+            "predicates": "yfcc_query_filters.json",
+            "searches": [
+              {
+                "radius": 110000.0,
+                "starting_l": 10
               }
             ]
           },

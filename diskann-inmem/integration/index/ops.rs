@@ -10,9 +10,9 @@ use diskann_benchmark_core::recall::Rows;
 use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
 
 use super::{
-    object::{Index, PartialIndex},
+    object::{self, Index, PartialIndex},
     parse,
-    stats::{Counters, KnnSearch, KnnStats},
+    stats::{Counters, KnnRecall, MiscStats, Quality, RangeQuality, Stats},
 };
 use crate::support::{
     datatype::{DataType, Dataset, DatasetView},
@@ -88,7 +88,7 @@ pub(super) fn knn(
     searches: &parse::Knn,
     queries: DatasetView<'_>,
     rt: &tokio::runtime::Handle,
-) -> anyhow::Result<Vec<KnnStats>> {
+) -> anyhow::Result<Vec<Stats>> {
     let parse::Knn {
         searches,
         groundtruth,
@@ -113,7 +113,7 @@ pub(super) fn knn(
         let mut ids = rowmajor::Owned::from_element(queries.nrows(), *k, u64::MAX);
 
         let before = index.counters();
-        let mut misc = KnnSearch::new();
+        let mut misc = MiscStats::new();
         let mut neighbors = Vec::new();
         for (out, query) in std::iter::zip(ids.rows_mut(), queries.iter()) {
             neighbors.clear();
@@ -134,9 +134,9 @@ pub(super) fn knn(
             diskann_benchmark_core::recall::GroundTruthMode::Fixed,
         )?;
 
-        let stats = KnnStats {
+        let stats = Stats {
             counters,
-            recall: recall.into(),
+            quality: Quality::from(KnnRecall::from(recall)),
             misc,
         };
 
@@ -151,7 +151,7 @@ pub(super) fn filter_search(
     labels: &InvertedIndex,
     searches: parse::CommonFilter<'_>,
     queries: DatasetView<'_>,
-) -> anyhow::Result<Vec<KnnStats>> {
+) -> anyhow::Result<Vec<Stats>> {
     let parse::CommonFilter {
         searches,
         predicates,
@@ -184,40 +184,48 @@ pub(super) fn filter_search(
 
     let mut results = Vec::new();
 
-    for (k, params) in searches {
-        let mut ids = rowmajor::Owned::from_element(queries.nrows(), k, u64::MAX);
+    let mut ids = vec![Vec::new(); queries.nrows()];
+    let mut neighbors = Vec::new();
+    for params in searches {
         let before = index.counters();
-        let mut misc = KnnSearch::new();
-        let mut neighbors = Vec::new();
+        let mut misc = MiscStats::new();
 
         for (out, (query, predicate)) in std::iter::zip(
-            ids.rows_mut(),
+            ids.iter_mut(),
             std::iter::zip(queries.iter(), predicates.rows()),
         ) {
-            neighbors.clear();
-
             let stats = index.filter_search(query, predicate, params.clone(), &mut neighbors)?;
             misc += stats;
 
-            std::iter::zip(out.iter_mut(), neighbors.iter()).for_each(|(d, s)| *d = *s.id());
+            out.clear();
+            out.extend(neighbors.iter().map(|n| *n.id()));
         }
         let counters = before.delta(&index.counters())?;
 
-        let recall = diskann_benchmark_core::recall::knn(
-            &groundtruth,
-            None,
-            &ids.as_view(),
-            k,
-            k,
-            diskann_benchmark_core::recall::GroundTruthMode::Flexible,
-        )?;
+        let quality = match params {
+            object::Filter::Inline { knn, .. } | object::Filter::Multihop { knn, .. } => {
+                let recall = diskann_benchmark_core::recall::knn(
+                    &groundtruth,
+                    None,
+                    &ids,
+                    knn,
+                    knn,
+                    diskann_benchmark_core::recall::GroundTruthMode::Flexible,
+                )?;
 
-        let stats = KnnStats {
-            counters,
-            recall: recall.into(),
-            misc,
+                Quality::from(KnnRecall::from(recall))
+            }
+            object::Filter::Range(_) => {
+                let metrics = diskann_benchmark_core::recall::range_metrics(&ids, &groundtruth)?;
+                Quality::from(RangeQuality::from(metrics))
+            }
         };
 
+        let stats = Stats {
+            counters,
+            quality,
+            misc,
+        };
         results.push(stats);
     }
 

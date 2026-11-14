@@ -237,7 +237,7 @@ pub(crate) struct RangeSearchResults {
     pub(crate) mean_latencies: Vec<f64>,
     pub(crate) p90_latencies: Vec<MicroSeconds>,
     pub(crate) p99_latencies: Vec<MicroSeconds>,
-    pub(crate) average_precision: utils::recall::AveragePrecisionMetrics,
+    pub(crate) range_metrics: utils::recall::RangeMetrics,
 }
 
 impl RangeSearchResults {
@@ -249,13 +249,13 @@ impl RangeSearchResults {
             mean_latencies,
             p90_latencies,
             p99_latencies,
-            average_precision,
+            range_metrics,
             ..
         } = summary;
 
         let qps = end_to_end_latencies
             .iter()
-            .map(|latency| average_precision.num_queries as f64 / latency.as_seconds())
+            .map(|latency| range_metrics.num_queries as f64 / latency.as_seconds())
             .collect();
 
         Self {
@@ -266,7 +266,7 @@ impl RangeSearchResults {
             mean_latencies,
             p90_latencies,
             p99_latencies,
-            average_precision: (&average_precision).into(),
+            range_metrics: (&range_metrics).into(),
         }
     }
 
@@ -278,13 +278,13 @@ impl RangeSearchResults {
             mean_latencies,
             p90_latencies,
             p99_latencies,
-            average_precision,
+            range_metrics,
             ..
         } = summary;
 
         let qps = end_to_end_latencies
             .iter()
-            .map(|latency| average_precision.num_queries as f64 / latency.as_seconds())
+            .map(|latency| range_metrics.num_queries as f64 / latency.as_seconds())
             .collect();
 
         Self {
@@ -295,7 +295,7 @@ impl RangeSearchResults {
             mean_latencies,
             p90_latencies,
             p99_latencies,
-            average_precision: (&average_precision).into(),
+            range_metrics: (&range_metrics).into(),
         }
     }
 }
@@ -320,7 +320,12 @@ where
             "QPS - mean(max)",
             "Avg Latency",
             "p99 Latency",
-            "Average Precision",
+            "Precision",
+            "Recall",
+            "Queries",
+            "Groundtruth IDs",
+            "Returned IDs",
+            "Matches",
             "Threads",
         ]
     } else {
@@ -329,7 +334,12 @@ where
             "QPS - mean(max)",
             "Avg Latency",
             "p99 Latency",
-            "Average Precision",
+            "Precision",
+            "Recall",
+            "Queries",
+            "Groundtruth IDs",
+            "Returned IDs",
+            "Matches",
             "Threads",
         ]
     };
@@ -369,11 +379,13 @@ where
             ),
             col_idx + 3,
         );
-        row.insert(
-            format!("{:3}", r.average_precision.average_precision),
-            col_idx + 4,
-        );
-        row.insert(r.num_tasks, col_idx + 5);
+        row.insert(format!("{:.3}", r.range_metrics.precision), col_idx + 4);
+        row.insert(format!("{:.3}", r.range_metrics.recall), col_idx + 5);
+        row.insert(r.range_metrics.num_queries, col_idx + 6);
+        row.insert(r.range_metrics.num_groundtruth_values, col_idx + 7);
+        row.insert(r.range_metrics.num_result_values, col_idx + 8);
+        row.insert(r.range_metrics.num_matches, col_idx + 9);
+        row.insert(r.num_tasks, col_idx + 10);
     });
 
     write!(f, "{}", table)

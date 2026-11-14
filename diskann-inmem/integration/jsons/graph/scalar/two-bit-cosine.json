@@ -30,6 +30,7 @@
           }
         },
         "search": {
+          "range_filter": null,
           "knn": {
             "groundtruth": "groundtruth.bin",
             "searches": [

@@ -29,6 +29,7 @@
           }
         },
         "search": {
+          "range_filter": null,
           "knn": {
             "groundtruth": "groundtruth_ip.bin",
             "searches": [
@@ -79,6 +80,7 @@
           }
         },
         "search": {
+          "range_filter": null,
           "knn": {
             "groundtruth": "groundtruth_ip.bin",
             "searches": [

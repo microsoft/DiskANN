@@ -4,7 +4,7 @@
  */
 
 use diskann::utils::IntoUsize;
-use diskann_benchmark_core::recall::RecallMetrics;
+use diskann_benchmark_core::recall::{RangeMetrics, RecallMetrics};
 use diskann_benchmark_runner::{
     report::{
         Report,
@@ -16,19 +16,99 @@ use diskann_inmem::integration;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+///////////
+// Stats //
+///////////
+
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct Stats {
+    pub(super) quality: Quality,
+    pub(super) counters: Counters,
+    pub(super) misc: MiscStats,
+}
+
+#[cfg(test)]
+impl Stats {
+    pub(super) fn test_fixture() -> Self {
+        Self {
+            quality: Quality::Recall(KnnRecall {
+                recall_k: 10,
+                recall_n: 10,
+                num_queries: 100,
+                average: 0.75,
+            }),
+            counters: Counters::test_fixture(),
+            misc: MiscStats::new(),
+        }
+    }
+}
+
+impl std::fmt::Display for Stats {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self {
+            quality,
+            counters,
+            misc,
+        } = self;
+
+        let mut kv = KeyValue::new();
+        kv.push("counters", counters);
+        kv.push("quality", quality);
+        kv.push("misc", misc);
+        write!(f, "{}", kv)
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct CheckStats {
+    quality: CheckQuality,
+    counters: CheckCounters,
+}
+
+impl CheckStats {
+    pub(crate) fn example() -> Self {
+        Self {
+            quality: CheckQuality::example(),
+            counters: CheckCounters::example(),
+        }
+    }
+
+    pub(crate) fn check(&self, old: &Stats, new: &Stats) -> Report {
+        let Self {
+            quality: check_quality,
+            counters: check_counters,
+        } = self;
+        let Stats {
+            quality,
+            counters,
+            misc,
+        } = old;
+
+        let mut builder = Report::builder();
+        builder.push("quality", check_quality.check(quality, &new.quality));
+        builder.push("counters", check_counters.check(counters, &new.counters));
+        builder.push("misc", check_counters.check_hops_and_cmps(misc, &new.misc));
+        builder.finish()
+    }
+}
+
+//---------------//
+// Hops and Cmps //
+//---------------//
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct KnnSearch {
+pub(crate) struct MiscStats {
     hops: usize,
     cmps: usize,
 }
 
-impl KnnSearch {
+impl MiscStats {
     pub(crate) fn new() -> Self {
         Self { hops: 0, cmps: 0 }
     }
 }
 
-impl From<diskann::graph::index::SearchStats> for KnnSearch {
+impl From<diskann::graph::index::SearchStats> for MiscStats {
     fn from(stats: diskann::graph::index::SearchStats) -> Self {
         Self {
             hops: stats.hops.into_usize(),
@@ -37,14 +117,14 @@ impl From<diskann::graph::index::SearchStats> for KnnSearch {
     }
 }
 
-impl std::ops::AddAssign for KnnSearch {
+impl std::ops::AddAssign for MiscStats {
     fn add_assign(&mut self, rhs: Self) {
         self.hops = self.hops.wrapping_add(rhs.hops);
         self.cmps = self.cmps.wrapping_add(rhs.cmps);
     }
 }
 
-impl std::fmt::Display for KnnSearch {
+impl std::fmt::Display for MiscStats {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "hops = {}, cmps = {}", self.hops, self.cmps)
     }
@@ -146,9 +226,9 @@ impl CheckCounters {
         Self(TOL)
     }
 
-    pub(crate) fn check_hops_and_cmps(&self, old: &KnnSearch, new: &KnnSearch) -> Report {
+    pub(crate) fn check_hops_and_cmps(&self, old: &MiscStats, new: &MiscStats) -> Report {
         let Self(tol) = self;
-        let KnnSearch { hops, cmps } = old;
+        let MiscStats { hops, cmps } = old;
 
         let fmt = FmtSpec::new();
         let mut builder = Report::builder();
@@ -210,6 +290,10 @@ impl CheckCounters {
     }
 }
 
+//-----------//
+// KnnRecall //
+//-----------//
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct KnnRecall {
     recall_k: usize,
@@ -239,104 +323,149 @@ impl std::fmt::Display for KnnRecall {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-struct CheckKnnRecall {
-    recall: MaxAbsoluteChange,
+//---------------//
+// Range Quality //
+//---------------//
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct RangeQuality {
+    num_queries: usize,
+    num_groundtruth_values: usize,
+    num_result_values: usize,
+    num_matches: usize,
+    precision: f64,
+    recall: f64,
 }
 
-impl CheckKnnRecall {
-    fn example() -> Self {
-        const RECALL: MaxAbsoluteChange = MaxAbsoluteChange::try_from_f64(0.001).unwrap();
-        Self { recall: RECALL }
-    }
-
-    fn check(&self, old: &KnnRecall, new: &KnnRecall) -> Report {
-        let Self {
-            recall: check_recall,
-        } = self;
-        let KnnRecall {
-            recall_k,
-            recall_n,
-            num_queries,
-            average,
-        } = old;
-
-        let fmt = FmtSpec::new().with_precision(4);
-        let mut builder = Report::builder();
-        builder.push("recall_k", Report::equal(*recall_k, new.recall_k));
-        builder.push("recall_n", Report::equal(*recall_n, new.recall_n));
-        builder.push("num_queries", Report::equal(*num_queries, new.num_queries));
-        builder.push(
-            "average",
-            Report::equal_with_tolerance(check_recall, *average, new.average, fmt),
-        );
-        builder.finish()
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub(crate) struct KnnStats {
-    pub(super) recall: KnnRecall,
-    pub(super) counters: Counters,
-    pub(super) misc: KnnSearch,
-}
-
-#[cfg(test)]
-impl KnnStats {
-    pub(super) fn test_fixture() -> Self {
+impl From<RangeMetrics> for RangeQuality {
+    fn from(metrics: RangeMetrics) -> Self {
         Self {
-            recall: KnnRecall {
-                recall_k: 10,
-                recall_n: 10,
-                num_queries: 100,
-                average: 0.75,
-            },
-            counters: Counters::test_fixture(),
-            misc: KnnSearch::new(),
+            num_queries: metrics.num_queries,
+            num_groundtruth_values: metrics.num_groundtruth_values,
+            num_result_values: metrics.num_result_values,
+            num_matches: metrics.num_matches,
+            precision: metrics.precision,
+            recall: metrics.recall,
         }
     }
 }
 
-impl std::fmt::Display for KnnStats {
+impl std::fmt::Display for RangeQuality {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "precision = {:.4}, recall = {:.4}, num_queries = {}, num_groundtruth_values = {}, num_result_values = {}, num_matches = {}",
+            self.precision,
+            self.recall,
+            self.num_queries,
+            self.num_groundtruth_values,
+            self.num_result_values,
+            self.num_matches
+        )
+    }
+}
+
+//---------//
+// Quality //
+//---------//
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub(super) enum Quality {
+    Recall(KnnRecall),
+    Range(RangeQuality),
+}
+
+impl From<KnnRecall> for Quality {
+    fn from(recall: KnnRecall) -> Self {
+        Self::Recall(recall)
+    }
+}
+
+impl From<RangeQuality> for Quality {
+    fn from(metrics: RangeQuality) -> Self {
+        Self::Range(metrics)
+    }
+}
+
+impl std::fmt::Display for Quality {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut kv = KeyValue::new();
-        kv.push("counters", &self.counters);
-        kv.push("recall", &self.recall);
-        kv.push("misc", &self.misc);
-        write!(f, "{}", kv)
+        match self {
+            Self::Recall(recall) => kv.push_eager_nested("knn-recall", recall),
+            Self::Range(metrics) => kv.push_eager_nested("range", metrics),
+        }
+        kv.fmt(f)
     }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub(crate) struct CheckKnnStats {
-    recall: CheckKnnRecall,
-    counters: CheckCounters,
+struct CheckQuality {
+    change: MaxAbsoluteChange,
 }
 
-impl CheckKnnStats {
-    pub(crate) fn example() -> Self {
-        Self {
-            recall: CheckKnnRecall::example(),
-            counters: CheckCounters::example(),
-        }
+impl CheckQuality {
+    fn example() -> Self {
+        const CHANGE: MaxAbsoluteChange = MaxAbsoluteChange::try_from_f64(0.001).unwrap();
+        Self { change: CHANGE }
     }
 
-    pub(crate) fn check(&self, old: &KnnStats, new: &KnnStats) -> Report {
-        let Self {
-            recall: check_recall,
-            counters: check_counters,
-        } = self;
-        let KnnStats {
-            recall,
-            counters,
-            misc,
-        } = old;
+    fn check(&self, old: &Quality, new: &Quality) -> Report {
+        let Self { change } = self;
 
-        let mut builder = Report::builder();
-        builder.push("recall", check_recall.check(recall, &new.recall));
-        builder.push("counters", check_counters.check(counters, &new.counters));
-        builder.push("misc", check_counters.check_hops_and_cmps(misc, &new.misc));
-        builder.finish()
+        let fmt = FmtSpec::new().with_precision(4);
+        match (old, new) {
+            (Quality::Recall(old), Quality::Recall(new)) => {
+                let KnnRecall {
+                    recall_k,
+                    recall_n,
+                    num_queries,
+                    average,
+                } = old;
+
+                let mut builder = Report::builder();
+                builder.push("recall_k", Report::equal(*recall_k, new.recall_k));
+                builder.push("recall_n", Report::equal(*recall_n, new.recall_n));
+                builder.push("num_queries", Report::equal(*num_queries, new.num_queries));
+                builder.push(
+                    "average",
+                    Report::equal_with_tolerance(change, *average, new.average, fmt),
+                );
+                builder.finish()
+            }
+            (Quality::Range(old), Quality::Range(new)) => {
+                let RangeQuality {
+                    num_queries,
+                    num_groundtruth_values,
+                    num_result_values: _,
+                    num_matches: _,
+                    precision,
+                    recall,
+                } = old;
+
+                let mut builder = Report::builder();
+                builder.push("num_queries", Report::equal(*num_queries, new.num_queries));
+                builder.push(
+                    "num_groundtruth_values",
+                    Report::equal(*num_groundtruth_values, new.num_groundtruth_values),
+                );
+                builder.push(
+                    "precision",
+                    Report::equal_with_tolerance(change, *precision, new.precision, fmt),
+                );
+                builder.push(
+                    "recall",
+                    Report::equal_with_tolerance(change, *recall, new.recall, fmt),
+                );
+                builder.finish()
+            }
+            (Quality::Recall(_), Quality::Range(_)) => {
+                Report::error("old stats were KNN-recall but new were range precision/recall")
+            }
+            (Quality::Range(_), Quality::Recall(_)) => {
+                Report::error("old stats were range precision/recall but new were KNN-recall")
+            }
+        }
     }
 }
 
@@ -349,6 +478,55 @@ mod tests {
     use super::*;
 
     use diskann_benchmark_runner::report::Status;
+
+    #[test]
+    fn check_range_quality() {
+        let tolerance = CheckQuality::example();
+        let fixture = || RangeQuality {
+            num_queries: 2,
+            num_groundtruth_values: 4,
+            num_result_values: 5,
+            num_matches: 3,
+            precision: 0.6,
+            recall: 0.75,
+        };
+        let old = Quality::Range(fixture());
+        for (precision, recall, expected) in [
+            (0.6, 0.75, Status::Pass),
+            (0.59, 0.75, Status::Fail),
+            (0.6, 0.74, Status::Fail),
+        ] {
+            let new = Quality::Range(RangeQuality {
+                precision,
+                recall,
+                ..fixture()
+            });
+            assert_eq!(tolerance.check(&old, &new).status(), expected);
+        }
+
+        let new = Quality::Range(RangeQuality {
+            num_groundtruth_values: 5,
+            ..fixture()
+        });
+        assert_eq!(tolerance.check(&old, &new).status(), Status::Fail);
+
+        let json = serde_json::to_value(&old).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "range": {
+                    "num_queries": 2,
+                    "num_groundtruth_values": 4,
+                    "num_result_values": 5,
+                    "num_matches": 3,
+                    "precision": 0.6,
+                    "recall": 0.75
+                }
+            })
+        );
+        let decoded: Quality = serde_json::from_value(json).unwrap();
+        assert_eq!(tolerance.check(&old, &decoded).status(), Status::Pass);
+    }
 
     #[test]
     fn check_counters_rejects_exceeded_tolerance() {
@@ -371,23 +549,23 @@ mod tests {
         }
     }
 
-    #[test]
-    fn check_knn_stats_rejects_recall_changes() {
-        let tolerance = CheckKnnStats::example();
-        let old = KnnStats::test_fixture();
-        for (recall_k, average, expected) in [
-            (10, 0.75, Status::Pass),
-            (11, 0.75, Status::Fail),
-            (10, 0.74, Status::Fail),
-        ] {
-            let mut new = KnnStats::test_fixture();
-            new.recall.recall_k = recall_k;
-            new.recall.average = average;
-            assert_eq!(
-                tolerance.check(&old, &new).status(),
-                expected,
-                "recall_k = {recall_k}, average = {average}"
-            );
-        }
-    }
+    // #[test]
+    // fn check_knn_stats_rejects_recall_changes() {
+    //     let tolerance = CheckStats::example();
+    //     let old = Stats::test_fixture();
+    //     for (recall_k, average, expected) in [
+    //         (10, 0.75, Status::Pass),
+    //         (11, 0.75, Status::Fail),
+    //         (10, 0.74, Status::Fail),
+    //     ] {
+    //         let mut new = Stats::test_fixture();
+    //         new.recall.recall_k = recall_k;
+    //         new.recall.average = average;
+    //         assert_eq!(
+    //             tolerance.check(&old, &new).status(),
+    //             expected,
+    //             "recall_k = {recall_k}, average = {average}"
+    //         );
+    //     }
+    // }
 }

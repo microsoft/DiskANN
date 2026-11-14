@@ -1052,6 +1052,20 @@ where
         let fut = self.index.search(params, &strategy, &Context, (), output);
         crate::poll(fut)
     }
+
+    /// Run [`diskann::graph::search::FilteredRange`] and store the results in `output`.
+    pub fn range_filtered<O>(
+        &mut self,
+        params: diskann::graph::search::FilteredRange,
+        output: &mut O,
+    ) -> ANNResult<diskann::graph::index::SearchStats>
+    where
+        O: diskann::graph::SearchOutputBuffer<M> + Send,
+    {
+        let strategy = Smuggle::new(&mut self.accessor);
+        let fut = self.index.search(params, &strategy, &Context, (), output);
+        crate::poll(fut)
+    }
 }
 
 //~~~~~~~~~~~~~~~~~//
