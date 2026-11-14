@@ -12,7 +12,10 @@ use diskann::{
 };
 use diskann_benchmark_runner::utils::MicroSeconds;
 use diskann_disk::{
-    build::builder::{backend::BuildElement, build::DiskIndexBuilder},
+    build::{
+        builder::{backend::BuildElement, build::DiskIndexBuilder},
+        configuration::DiskIndexBuildConfig,
+    },
     data_model::AdHoc,
     disk_index_build_parameter::{
         DiskIndexBuildParameters, MemoryBudget, NumPQChunks, DISK_SECTOR_LEN,
@@ -118,10 +121,9 @@ where
 
     let mut disk_index = DiskIndexBuilder::<AdHoc<T>, StorageProviderType>::new(
         storage_provider,
-        build_parameters,
-        index_configuration,
+        DiskIndexBuildConfig::from((index_configuration, build_parameters)),
         disk_index_writer,
-    )?;
+    );
 
     let span = {
         let tracer = opentelemetry::global::tracer("benchmark");

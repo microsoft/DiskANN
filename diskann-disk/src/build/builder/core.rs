@@ -563,7 +563,10 @@ pub(crate) mod disk_index_builder_tests {
 
     use super::*;
     use crate::{
-        build::builder::{backend::BuildElement, build::DiskIndexBuilder},
+        build::{
+            builder::{backend::BuildElement, build::DiskIndexBuilder},
+            configuration::DiskIndexBuildConfig,
+        },
         data_model::{CachingStrategy, GraphHeader},
         disk_index_build_parameter::{DiskIndexBuildParameters, MemoryBudget, NumPQChunks},
         search::provider::{
@@ -721,10 +724,9 @@ pub(crate) mod disk_index_builder_tests {
 
             let mut disk_index = DiskIndexBuilder::<T, _>::new(
                 self.storage_provider.as_ref(),
-                disk_index_build_parameters,
-                config,
+                DiskIndexBuildConfig::from((config, disk_index_build_parameters)),
                 disk_index_writer,
-            )?;
+            );
 
             let timer = Instant::now();
             disk_index.build()?;
@@ -935,7 +937,8 @@ pub(crate) mod disk_index_builder_tests {
             128,  // num_pq_chunks
             &storage_provider,
             build_quantization_type,
-        );
+        )
+        .and_then(|mut builder| builder.build());
 
         let err = disk_index_builder.err().unwrap();
         assert!(err.to_string().contains(error_message));
@@ -1152,12 +1155,14 @@ pub(crate) mod disk_index_builder_tests {
             DEFAULT_DISK_SECTOR_LEN,
         )?;
 
-        DiskIndexBuilder::<GraphDataF32VectorUnitData, VirtualStorageProvider<OverlayFS>>::new(
+        Ok(DiskIndexBuilder::<
+            GraphDataF32VectorUnitData,
+            VirtualStorageProvider<OverlayFS>,
+        >::new(
             storage_provider,
-            build_parameters,
-            index_configuration,
+            DiskIndexBuildConfig::from((index_configuration, build_parameters)),
             disk_index_writer,
-        )
+        ))
     }
 }
 

@@ -53,7 +53,24 @@ use crate::{
 /// * [`QuantizationType::PQ`]: The quantizer is saved according to [`PQPathNames`].
 /// * [`QuantizationType::SQ`]: The quantizer is saved according to [`SQStorage`].
 /// * All other types: No current side-effects.
+#[cfg(not(feature = "pipnn"))]
 pub trait BuildElement: std::fmt::Debug + Sized + Send + Sync + 'static {
+    fn backend<P>(
+        quantization: &QuantizationType,
+        index_path_prefix: &str,
+        index_configuration: &IndexConfiguration,
+        data_path: &str,
+        storage_provider: &P,
+    ) -> ANNResult<Backend<Self>>
+    where
+        P: StorageReadProvider + StorageWriteProvider;
+}
+
+/// Build-compatible elements with PiPNN row conversion and distance support.
+#[cfg(feature = "pipnn")]
+pub trait BuildElement:
+    std::fmt::Debug + Sized + Send + Sync + 'static + diskann::graph::pipnn::Element
+{
     fn backend<P>(
         quantization: &QuantizationType,
         index_path_prefix: &str,
