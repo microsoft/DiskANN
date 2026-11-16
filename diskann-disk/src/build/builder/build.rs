@@ -114,6 +114,10 @@ where
                 .with_data_compression_chunk_vector_count(
                     self.config.compression_chunk_vector_count,
                 );
+                info!(
+                    "Training quantizer for {} quantized builds.",
+                    build_quantization.to_string()
+                );
                 let backend = Backend::<Data::VectorDataType>::new(
                     build_quantization,
                     &self.index_writer.get_index_path_prefix(),
@@ -122,6 +126,13 @@ where
                     self.storage_provider,
                 )?;
                 let runtime = create_runtime(self.config.num_threads)?;
+                info!(
+                    "Starting index build: R={} L={} Indexing RAM budget={} T={}",
+                    graph.pruned_degree(),
+                    graph.l_build(),
+                    memory_budget.in_bytes(),
+                    self.config.num_threads
+                );
                 self.build_with(|pool| {
                     runtime.block_on(build_vamana_graph::<Data, _>(
                         &index,
