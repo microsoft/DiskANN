@@ -145,16 +145,25 @@ where
                 })
             }
             #[cfg(feature = "pipnn")]
-            GraphBuildConfig::Pipnn(graph) => self.build_with(|pool| {
-                super::pipnn::build_inmem_index::<Data::VectorDataType, _>(
-                    &self.config,
-                    graph,
-                    &self.index_writer.get_dataset_file(),
-                    &self.index_writer.get_mem_index_file(),
-                    self.storage_provider,
-                    pool,
-                )
-            }),
+            GraphBuildConfig::Pipnn(graph) => {
+                info!(
+                    "Starting index build: algorithm=PiPNN R={} c_max={} leaf_k={} T={}",
+                    graph.degree(),
+                    graph.c_max(),
+                    graph.leaf_k(),
+                    self.config.num_threads
+                );
+                self.build_with(|pool| {
+                    super::pipnn::build_inmem_index::<Data::VectorDataType, _>(
+                        &self.config,
+                        graph,
+                        &self.index_writer.get_dataset_file(),
+                        &self.index_writer.get_mem_index_file(),
+                        self.storage_provider,
+                        pool,
+                    )
+                })
+            }
         }
     }
 
@@ -182,11 +191,6 @@ where
         let max_block_size = parameters.compression_chunk_vector_count;
         validate_data_generation_input(self.storage_provider, &data_path, max_block_size)?;
         let num_chunks = parameters.search_pq_chunks;
-        info!(
-            "Compressing data into {} bytes per vector for disk search",
-            num_chunks.get()
-        );
-
         let quantizer_context = PQGenerationContext {
             pq_storage: self.pq_storage.clone(),
             num_chunks: num_chunks.get(),
@@ -199,6 +203,10 @@ where
             dim: parameters.dim,
             metric: parameters.metric,
         };
+        info!(
+            "Training search-PQ quantizer with {} chunks",
+            num_chunks.get()
+        );
         let generator = QuantDataGenerator::<
             Data::VectorDataType,
             PQGeneration<Data::VectorDataType, StorageProvider>,
@@ -207,6 +215,10 @@ where
             self.pq_storage.get_compressed_data_path().into(),
             &quantizer_context,
         )?;
+        info!(
+            "Compressing data into {} bytes per vector for disk search",
+            num_chunks.get()
+        );
         generator.generate_data(self.storage_provider, pool, max_block_size)
     }
 }
