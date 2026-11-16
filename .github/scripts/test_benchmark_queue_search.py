@@ -59,7 +59,9 @@ class ComparisonTests(unittest.TestCase):
                     result.update(length=2000, position="random")
                 else:
                     result["case"] = {"capacity": 2000, "initial_size": 2000, "input_size": 8}
-                raw_path.write_text(json.dumps([{"input": {"seed": 42}, "results": [result]}]))
+                raw_path.write_text(json.dumps([{
+                    "input": {"type": suite, "content": {"seed": 42}}, "results": [result]
+                }]))
                 entries.append({
                     "suite": suite, "variant": variant, "seed": 42, "fixtures": 8,
                     "repeat": repeat, "raw": raw_path.name, "input": input_path.name,

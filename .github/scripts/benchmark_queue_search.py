@@ -247,7 +247,7 @@ def summarize(args):
         if len(raw) != 1:
             raise ValueError("Expected exactly one benchmark job")
         job = raw[0]
-        source_input = json.loads((output / entry["input"]).read_text())["jobs"][0]["content"]
+        source_input = json.loads((output / entry["input"]).read_text())["jobs"][0]
         if job["input"] != source_input:
             raise ValueError("Recorded input differs from the executed input")
         if sha256(output / entry["input"]) != entry["input_sha256"]:

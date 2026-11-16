@@ -71,7 +71,8 @@ jobs:
       - name: Build and test fixed variants
         run: |
           python .github/scripts/benchmark_queue_search.py build \
-            --base "$QUEUE_BASE_SHA" --output benchmark-results
+            --base "$QUEUE_BASE_SHA" --output benchmark-results \
+            --variants simd binary hybrid512 insert_hybrid
       - name: Compare independent processes
         run: |
           python .github/scripts/benchmark_queue_search.py run --output benchmark-results
