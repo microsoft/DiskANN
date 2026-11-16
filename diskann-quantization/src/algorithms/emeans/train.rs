@@ -97,7 +97,7 @@ pub fn emeans<'a>(
     let data = data.into();
     let (recipe, norms) = prepare_training(data, centers.as_view(), config, cancel)?;
     initialize_centers(data, centers.as_view_mut(), rng);
-    train_simd(data, centers, config, recipe, &norms, rng, cancel)
+    train_default(data, centers, config, recipe, &norms, rng, cancel)
 }
 
 /// Refine caller-supplied centers, for warm starts or matched-initialization comparisons.
@@ -118,7 +118,7 @@ pub fn emeans_from_centers<'a>(
     let data = data.into();
     let (recipe, norms) = prepare_training(data, centers.as_view(), config, cancel)?;
     validate_centers(centers.as_view())?;
-    train_simd(data, centers, config, recipe, &norms, rng, cancel)
+    train_default(data, centers, config, recipe, &norms, rng, cancel)
 }
 
 /// Train from sampled centers using a caller-supplied nearest-center backend.
@@ -144,7 +144,7 @@ pub fn emeans_with_assignment<'a, A: Assignment + ?Sized>(
         .map_err(EmeansError::with_assignment_error)?;
     drop(norms);
     initialize_centers(data, centers.as_view_mut(), rng);
-    train_custom(data, centers, config, recipe, assignment, rng, cancel)
+    train_with_assignment(data, centers, config, recipe, assignment, rng, cancel)
 }
 
 /// Refine caller-supplied centers using a caller-supplied nearest-center backend.
@@ -167,7 +167,7 @@ pub fn emeans_from_centers_with_assignment<'a, A: Assignment + ?Sized>(
         .map_err(EmeansError::with_assignment_error)?;
     drop(norms);
     validate_centers(centers.as_view()).map_err(EmeansError::with_assignment_error)?;
-    train_custom(data, centers, config, recipe, assignment, rng, cancel)
+    train_with_assignment(data, centers, config, recipe, assignment, rng, cancel)
 }
 
 fn initialize_centers(
@@ -188,7 +188,7 @@ fn validate_centers(centers: rowmajor::Ref<'_, f32>) -> Result<(), EmeansError> 
     Ok(())
 }
 
-fn train_simd(
+fn train_default(
     data: Strided<'_, f32>,
     centers: rowmajor::Mut<'_, f32>,
     config: &EmeansConfig,
@@ -218,7 +218,7 @@ fn train_simd(
     )
 }
 
-fn train_custom<A: Assignment + ?Sized>(
+fn train_with_assignment<A: Assignment + ?Sized>(
     data: Strided<'_, f32>,
     centers: rowmajor::Mut<'_, f32>,
     config: &EmeansConfig,

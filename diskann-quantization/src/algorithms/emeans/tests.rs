@@ -18,12 +18,12 @@ use crate::cancel::{Cancelation, DontCancel};
 use super::*;
 
 #[derive(Default)]
-struct ScalarAssignment {
+struct ReferenceAssignment {
     batch_sizes: Vec<usize>,
     observed_centers: Vec<Vec<f32>>,
 }
 
-impl Assignment for ScalarAssignment {
+impl Assignment for ReferenceAssignment {
     type Error = std::convert::Infallible;
 
     fn assign(
@@ -91,7 +91,7 @@ fn strided_input_and_trait_objects_match_contiguous_simd_training() -> TestResul
     assert_eq!(native.as_slice(), baseline.as_slice());
     assert_eq!(native_result.assignments, expected.assignments);
 
-    let mut backend = ScalarAssignment::default();
+    let mut backend = ReferenceAssignment::default();
     let mut custom = initial;
     let mut rng = StdRng::seed_from_u64(13);
     let rng: &mut dyn rand::RngCore = &mut rng;
@@ -121,7 +121,7 @@ fn strided_input_and_trait_objects_match_contiguous_simd_training() -> TestResul
 #[test]
 fn sampled_custom_backend_matches_default_and_supports_reuse() -> TestResult {
     let mut data_rng = StdRng::seed_from_u64(3);
-    let mut backend = ScalarAssignment::default();
+    let mut backend = ReferenceAssignment::default();
     for (n, d, k, batch_size) in [(79, 6, 7, 11), (35, 3, 4, 16)] {
         let data = rowmajor::Owned::from_fn(n, d, |_| data_rng.random_range(-2.0_f32..2.0));
         let mut native = rowmajor::Owned::from_element(k, d, f32::NAN);
@@ -326,7 +326,7 @@ fn custom_backend_validation_and_cancellation_precede_assignment() {
     assert_eq!(backend.calls, 0);
     assert!(centers.as_slice().iter().all(|&x| x == 0.0));
 
-    let mut backend = ScalarAssignment::default();
+    let mut backend = ReferenceAssignment::default();
     let canceled = CancelAfter {
         polls: Cell::new(0),
         allowed: 4,
