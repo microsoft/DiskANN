@@ -247,8 +247,10 @@ build flags, generated inputs, exact commands, raw samples, and per-process
 comparisons. Lookup results consume the returned insertion index. Full `insert`
 and `batch_insert` measurements reuse the same fixtures and untimed reset, and
 report actual repetition counts. Candidate variants also run the queue regression
-tests. The experimental binary/hybrid variants apply on all runner architectures;
-the checked-in production strategy leaves the non-x86 path unchanged.
+tests. The experimental binary/hybrid variants apply on all runner architectures.
+The checked-in insertion candidate keeps the original SIMD/scalar lookup for
+small queues and for batch/remove, using a hybrid only for large single-item
+insertions. Its threshold is an experimental candidate, not a universal crossover.
 
 Run the driver's `build`, `run`, and `summarize` operations in that order, passing
 `--output <artifact-directory>` to each and `--base <fixed-base-SHA>` to `build`.

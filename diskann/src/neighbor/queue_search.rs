@@ -6,7 +6,7 @@
 #[cfg(target_arch = "x86_64")]
 use diskann_wide::{SIMDMask, SIMDPartialOrd, SIMDVector};
 
-// Kept private to the queue. The experimental benchmark compiles this same source.
+// Private insertion-search kernels; the CI experiment snapshots this source.
 #[inline]
 #[cfg(target_arch = "x86_64")]
 pub(super) fn linear(distances: &[f32], target: f32) -> usize {
@@ -91,7 +91,7 @@ mod tests {
     #[test]
     fn lower_bounds_preserve_ties_and_numeric_edges() {
         for len in [
-            0, 1, 7, 8, 15, 16, 17, 20, 40, 100, 200, 500, 1000, 2000, 8192,
+            0, 1, 7, 8, 15, 16, 17, 20, 40, 100, 200, 500, 1000, 1023, 1024, 1025, 2000, 8192,
         ] {
             let mut distances: Vec<_> = (0..len)
                 .map(|i| (i / 3) as f32 - len as f32 / 6.0)
@@ -130,6 +130,11 @@ mod tests {
                 );
                 assert_eq!(
                     hybrid::<512>(&distances, target),
+                    expected,
+                    "{len} {target}"
+                );
+                assert_eq!(
+                    hybrid::<1024>(&distances, target),
                     expected,
                     "{len} {target}"
                 );

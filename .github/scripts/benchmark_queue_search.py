@@ -42,7 +42,26 @@ def variant_source(current, baseline, variant):
     baseline = baseline.split(test_marker, 1)[0] + test_marker + current.split(test_marker, 1)[1]
     if variant == "simd":
         return baseline
-    if variant == "insert_hybrid":
+    if variant in ("binary", "hybrid512"):
+        source = baseline.replace(
+            "use diskann_wide::{SIMDMask, SIMDPartialOrd, SIMDVector};",
+            '#[path = "queue_search.rs"]\nmod search;', 1
+        ).replace(
+            '#[cfg(target_arch = "x86_64")]\n#[path = "queue_search.rs"]',
+            '#[path = "queue_search.rs"]', 1
+        )
+        start = source.index("    /// Get the lower bound of the neighbor")
+        end = source.index("    /// Get the neighbor at index - SAFETY:", start)
+        lookup = "binary" if variant == "binary" else "hybrid::<512>"
+        return (
+            source[:start]
+            + "    /// Return the first distance greater than or equal to the target.\n"
+            + "    fn get_lower_bound(&mut self, nbr: &Neighbor<I>) -> usize {\n"
+            + f"        search::{lookup}(&self.distances, nbr.distance)\n"
+            + "    }\n\n"
+            + source[end:]
+        )
+    if variant in ("insert_hybrid", "insert_guarded"):
         source = baseline.replace(
             "use diskann_wide::{SIMDMask, SIMDPartialOrd, SIMDVector};",
             'use diskann_wide::{SIMDMask, SIMDPartialOrd, SIMDVector};\n'
@@ -52,26 +71,17 @@ def variant_source(current, baseline, variant):
         old = "let insert_idx = if self.size > 0 {\n            self.get_lower_bound(&nbr)"
         if source.count(old) != 1:
             raise ValueError("Cannot identify the single-item insertion lookup")
+        if variant == "insert_hybrid":
+            return source.replace(
+                old, "let insert_idx = if self.size > 0 {\n"
+                "            search::hybrid::<512>(&self.distances, nbr.distance)", 1
+            )
         return source.replace(
-            old, "let insert_idx = if self.size > 0 {\n"
-            "            search::hybrid::<512>(&self.distances, nbr.distance)", 1
+            old, "let insert_idx = if self.size > 1024 {\n"
+            "            search::hybrid::<1024>(&self.distances, nbr.distance)\n"
+            "        } else if self.size > 0 {\n            self.get_lower_bound(&nbr)", 1
         )
-    source = current.replace(
-        '#[cfg(target_arch = "x86_64")]\n#[path = "queue_search.rs"]',
-        '#[path = "queue_search.rs"]',
-        1,
-    )
-    start = source.index("    /// Get the lower bound of the neighbor")
-    end = source.index("    /// Get the neighbor at index - SAFETY:", start)
-    lookup = "binary" if variant == "binary" else "hybrid::<512>"
-    return (
-        source[:start]
-        + "    /// Return the first distance greater than or equal to the target.\n"
-        + "    fn get_lower_bound(&mut self, nbr: &Neighbor<I>) -> usize {\n"
-        + f"        search::{lookup}(&self.distances, nbr.distance)\n"
-        + "    }\n\n"
-        + source[end:]
-    )
+    raise ValueError(f"Unknown strategy: {variant}")
 
 
 def build(args):
@@ -108,6 +118,8 @@ def build(args):
             directory = output / variant
             directory.mkdir(exist_ok=True)
             source = variant_source(current, baseline, variant)
+            if variant == "insert_guarded" and source != current:
+                raise ValueError("Checked-in source differs from the guarded candidate")
             QUEUE.write_text(source, encoding="utf-8", newline="\n")
             (directory / "queue.rs").write_text(source, encoding="utf-8")
             (directory / "queue_search.rs").write_bytes(SEARCH.read_bytes())
@@ -133,6 +145,8 @@ def build(args):
                 "search_sha256": sha256(directory / "queue_search.rs"),
                 "scope": "original SIMD/scalar" if variant == "simd" else
                          "hybrid insert; original SIMD/scalar batch/remove" if variant == "insert_hybrid"
+                         else "guarded >1024 hybrid insert; original small/batch/remove lookup"
+                         if variant == "insert_guarded"
                          else "same search strategy on all architectures (experiment only)",
             }
             (output / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
@@ -162,7 +176,7 @@ def cases():
         for placement in ("head", "middle", "tail"):
             add(length, 8, placement=placement)
         add(length, 8, survivors=0)
-    for length in (511, 512, 513):
+    for length in (511, 512, 513, 1023, 1024, 1025):
         add(length, 8)
     for order in ("ascending", "descending"):
         add(2000, 8, order=order)
@@ -194,7 +208,7 @@ def run(args):
                 write_input(lookup_input, "neighbor-queue-lookup", {
                     "seed": seed, "samples": 9, "fixtures": population,
                     "blocks_per_sample": 32768 // population,
-                    "lengths": [20, 40, 100, 200, 500, 511, 512, 513, 1000, 2000, 8192],
+                    "lengths": [20, 40, 100, 200, 500, 511, 512, 513, 1000, 1023, 1024, 1025, 2000, 8192],
                 })
                 write_input(update_input, "neighbor-queue", {
                     "seed": seed, "samples": 9, "queues_per_sample": population,
@@ -240,6 +254,11 @@ def summarize(args):
     expected = 3 * len(SEEDS) * len(POPULATIONS) * (1 + len(manifest["variants"]))
     if len(entries) != expected:
         raise ValueError(f"Incomplete experiment: {len(entries)} of {expected} processes")
+    identities = {
+        (e["suite"], e["variant"], e["seed"], e["fixtures"], e["repeat"]) for e in entries
+    }
+    if len(identities) != expected or any(e["repeat"] not in (0, 1, 2) for e in entries):
+        raise ValueError("Duplicate or invalid process repeat")
     groups = {}
     records = []
     for entry in entries:
@@ -351,7 +370,7 @@ def main():
     parser.add_argument("operation", choices=("build", "run", "summarize"))
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--base")
-    parser.add_argument("--variants", nargs="+", choices=(*VARIANTS, "insert_hybrid"), default=VARIANTS)
+    parser.add_argument("--variants", nargs="+", choices=(*VARIANTS, "insert_hybrid", "insert_guarded"), default=VARIANTS)
     args = parser.parse_args()
     if args.operation == "build" and not args.base:
         parser.error("build requires the fixed baseline --base SHA")

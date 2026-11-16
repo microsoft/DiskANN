@@ -70,15 +70,17 @@ enum Kernel {
     Hybrid128,
     Hybrid256,
     Hybrid512,
+    Hybrid1024,
     Hybrid512Prefix256,
 }
 
-const KERNELS: [Kernel; 6] = [
+const KERNELS: [Kernel; 7] = [
     Kernel::Linear,
     Kernel::Binary,
     Kernel::Hybrid128,
     Kernel::Hybrid256,
     Kernel::Hybrid512,
+    Kernel::Hybrid1024,
     Kernel::Hybrid512Prefix256,
 ];
 
@@ -174,6 +176,7 @@ impl Benchmark for LookupBenchmark {
                     ensure!(search::hybrid::<128, 16>(&f.distances, f.target) == expected);
                     ensure!(search::hybrid::<256, 16>(&f.distances, f.target) == expected);
                     ensure!(search::hybrid::<512, 16>(&f.distances, f.target) == expected);
+                    ensure!(search::hybrid::<1024, 16>(&f.distances, f.target) == expected);
                     ensure!(search::hybrid::<512, 256>(&f.distances, f.target) == expected);
                 }
                 let mut samples = Vec::new();
@@ -197,6 +200,9 @@ impl Benchmark for LookupBenchmark {
                             }
                             Kernel::Hybrid512 => {
                                 measure_lookup(&fixtures, blocks, search::hybrid::<512, 16>)
+                            }
+                            Kernel::Hybrid1024 => {
+                                measure_lookup(&fixtures, blocks, search::hybrid::<1024, 16>)
                             }
                             Kernel::Hybrid512Prefix256 => {
                                 measure_lookup(&fixtures, blocks, search::hybrid::<512, 256>)

@@ -72,7 +72,7 @@ jobs:
         run: |
           python .github/scripts/benchmark_queue_search.py build \
             --base "$QUEUE_BASE_SHA" --output benchmark-results \
-            --variants simd binary hybrid512 insert_hybrid
+            --variants simd binary hybrid512 insert_hybrid insert_guarded
       - name: Compare independent processes
         run: |
           python .github/scripts/benchmark_queue_search.py run --output benchmark-results

@@ -9,6 +9,8 @@ use std::{
 };
 
 #[cfg(target_arch = "x86_64")]
+use diskann_wide::{SIMDMask, SIMDPartialOrd, SIMDVector};
+
 #[path = "queue_search.rs"]
 mod search;
 
@@ -158,7 +160,9 @@ impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
             return;
         }
 
-        let insert_idx = if self.size > 0 {
+        let insert_idx = if self.size > 1024 {
+            search::hybrid::<1024>(&self.distances, nbr.distance)
+        } else if self.size > 0 {
             self.get_lower_bound(&nbr)
         } else {
             0
@@ -351,7 +355,56 @@ impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
     /// PERFORMANCE: This function is performance critical - please benchmark any changes
     #[cfg(target_arch = "x86_64")]
     fn get_lower_bound(&mut self, nbr: &Neighbor<I>) -> usize {
-        search::hybrid::<512>(&self.distances, nbr.distance)
+        diskann_wide::alias!(f32s = f32x8);
+        let target = f32s::splat(diskann_wide::ARCH, nbr.distance);
+
+        let mut index = 0;
+
+        // Check 16 items at a time
+        while index + 16 <= self.size {
+            let search =
+                unsafe { f32s::load_simd(diskann_wide::ARCH, self.distances.as_ptr().add(index)) };
+            let offset1 = search.ge_simd(target).first();
+            let search = unsafe {
+                f32s::load_simd(diskann_wide::ARCH, self.distances.as_ptr().add(index + 8))
+            };
+            let offset2 = search.ge_simd(target).first();
+
+            match (offset1, offset2) {
+                (Some(offset), _) => return index + offset,
+                (None, Some(offset)) => return index + 8 + offset,
+                _ => (),
+            }
+
+            index += 16;
+        }
+
+        // Check the remaining items
+        if index + 8 <= self.size {
+            let search =
+                unsafe { f32s::load_simd(diskann_wide::ARCH, self.distances.as_ptr().add(index)) };
+            let offset = search.ge_simd(target).first();
+            if let Some(offset) = offset {
+                return index + offset;
+            }
+            index += 8;
+        }
+
+        if index < self.size {
+            let search = unsafe {
+                f32s::load_simd_first(
+                    diskann_wide::ARCH,
+                    self.distances.as_ptr().add(index),
+                    self.size - index,
+                )
+            };
+            let offset = search.ge_simd(target).first();
+            if let Some(offset) = offset {
+                return index + offset;
+            }
+        }
+
+        self.size
     }
 
     /// Get the lower bound of the neighbor - the index of the first neighbor
@@ -772,6 +825,8 @@ mod neighbor_priority_queue_test {
             (128, 128, 3, &[63.5, -1.0, 200.0]),
             (512, 257, 129, &[128.0, -0.0, 128.0, f32::NAN]),
             (512, 512, 300, &[255.5, -1.0, f32::INFINITY]),
+            (2048, 1024, 500, &[512.0, -0.0, 512.0, f32::NAN]),
+            (2048, 1025, 500, &[512.0, -1.0, 512.0, f32::INFINITY]),
             (2000, 2000, 1000, &[1000.0, -1.0, 1000.0, 4000.0]),
         ];
         for resizable in [false, true] {

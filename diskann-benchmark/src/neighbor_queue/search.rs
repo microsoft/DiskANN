@@ -95,7 +95,7 @@ mod tests {
     fn lower_bounds_preserve_ties_and_numeric_edges() {
         for len in [
             0, 1, 7, 8, 15, 16, 17, 20, 40, 100, 127, 128, 129, 200, 255, 256, 257, 500, 511, 512,
-            513, 1000, 2000, 8192,
+            513, 1000, 1023, 1024, 1025, 2000, 8192,
         ] {
             let mut distances: Vec<_> = (0..len)
                 .map(|i| (i / 3) as f32 - len as f32 / 6.0)
@@ -134,6 +134,11 @@ mod tests {
                 );
                 assert_eq!(
                     hybrid::<512, 16>(&distances, target),
+                    expected,
+                    "{len} {target}"
+                );
+                assert_eq!(
+                    hybrid::<1024, 16>(&distances, target),
                     expected,
                     "{len} {target}"
                 );
