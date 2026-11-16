@@ -249,8 +249,10 @@ and `batch_insert` measurements reuse the same fixtures and untimed reset, and
 report actual repetition counts. Candidate variants also run the queue regression
 tests. The experimental binary/hybrid variants apply on all runner architectures.
 The checked-in insertion candidate keeps the original SIMD/scalar lookup for
-small queues and for batch/remove, using a hybrid only for large single-item
-insertions. Its threshold is an experimental candidate, not a universal crossover.
+small queues and for batch/remove, using an outlined hybrid only for large
+single-item insertions. The workflow compares this candidate against the original
+scan and the previous inlined hybrid without changing the workload matrix.
+Its threshold is an experimental candidate, not a universal crossover.
 
 Run the driver's `build`, `run`, and `summarize` operations in that order, passing
 `--output <artifact-directory>` to each and `--base <fixed-base-SHA>` to `build`.

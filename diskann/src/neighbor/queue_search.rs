@@ -84,6 +84,12 @@ pub(super) fn hybrid<const THRESHOLD: usize>(distances: &[f32], target: f32) -> 
     }
 }
 
+// Keep the binary-search code out of the small-queue insertion hot path.
+#[inline(never)]
+pub(super) fn large_insert(distances: &[f32], target: f32) -> usize {
+    hybrid::<1024>(distances, target)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

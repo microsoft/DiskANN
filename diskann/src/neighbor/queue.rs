@@ -160,10 +160,12 @@ impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
             return;
         }
 
-        let insert_idx = if self.size > 1024 {
-            search::hybrid::<1024>(&self.distances, nbr.distance)
-        } else if self.size > 0 {
-            self.get_lower_bound(&nbr)
+        let insert_idx = if self.size > 0 {
+            if self.size <= 1024 {
+                self.get_lower_bound(&nbr)
+            } else {
+                search::large_insert(&self.distances, nbr.distance)
+            }
         } else {
             0
         };

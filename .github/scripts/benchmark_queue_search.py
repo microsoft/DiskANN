@@ -61,7 +61,7 @@ def variant_source(current, baseline, variant):
             + "    }\n\n"
             + source[end:]
         )
-    if variant in ("insert_hybrid", "insert_guarded"):
+    if variant in ("insert_hybrid", "insert_guarded", "insert_outlined"):
         source = baseline.replace(
             "use diskann_wide::{SIMDMask, SIMDPartialOrd, SIMDVector};",
             'use diskann_wide::{SIMDMask, SIMDPartialOrd, SIMDVector};\n'
@@ -76,10 +76,19 @@ def variant_source(current, baseline, variant):
                 old, "let insert_idx = if self.size > 0 {\n"
                 "            search::hybrid::<512>(&self.distances, nbr.distance)", 1
             )
+        if variant == "insert_guarded":
+            return source.replace(
+                old, "let insert_idx = if self.size > 1024 {\n"
+                "            search::hybrid::<1024>(&self.distances, nbr.distance)\n"
+                "        } else if self.size > 0 {\n            self.get_lower_bound(&nbr)", 1
+            )
         return source.replace(
-            old, "let insert_idx = if self.size > 1024 {\n"
-            "            search::hybrid::<1024>(&self.distances, nbr.distance)\n"
-            "        } else if self.size > 0 {\n            self.get_lower_bound(&nbr)", 1
+            old, "let insert_idx = if self.size > 0 {\n"
+            "            if self.size <= 1024 {\n"
+            "                self.get_lower_bound(&nbr)\n"
+            "            } else {\n"
+            "                search::large_insert(&self.distances, nbr.distance)\n"
+            "            }", 1
         )
     raise ValueError(f"Unknown strategy: {variant}")
 
@@ -118,8 +127,8 @@ def build(args):
             directory = output / variant
             directory.mkdir(exist_ok=True)
             source = variant_source(current, baseline, variant)
-            if variant == "insert_guarded" and source != current:
-                raise ValueError("Checked-in source differs from the guarded candidate")
+            if variant == "insert_outlined" and source != current:
+                raise ValueError("Checked-in source differs from the outlined candidate")
             QUEUE.write_text(source, encoding="utf-8", newline="\n")
             (directory / "queue.rs").write_text(source, encoding="utf-8")
             (directory / "queue_search.rs").write_bytes(SEARCH.read_bytes())
@@ -147,6 +156,8 @@ def build(args):
                          "hybrid insert; original SIMD/scalar batch/remove" if variant == "insert_hybrid"
                          else "guarded >1024 hybrid insert; original small/batch/remove lookup"
                          if variant == "insert_guarded"
+                         else "outlined >1024 hybrid insert; original small/batch/remove lookup"
+                         if variant == "insert_outlined"
                          else "same search strategy on all architectures (experiment only)",
             }
             (output / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
@@ -370,7 +381,7 @@ def main():
     parser.add_argument("operation", choices=("build", "run", "summarize"))
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--base")
-    parser.add_argument("--variants", nargs="+", choices=(*VARIANTS, "insert_hybrid", "insert_guarded"), default=VARIANTS)
+    parser.add_argument("--variants", nargs="+", choices=(*VARIANTS, "insert_hybrid", "insert_guarded", "insert_outlined"), default=VARIANTS)
     args = parser.parse_args()
     if args.operation == "build" and not args.base:
         parser.error("build requires the fixed baseline --base SHA")
