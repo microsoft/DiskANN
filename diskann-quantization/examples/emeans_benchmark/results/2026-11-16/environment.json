@@ -1,0 +1,36 @@
+{
+  "date": "2026-11-16",
+  "timezone": "Asia/Singapore",
+  "benchmark_commit": "e4a1a57a635d2cbf8955c284de2e17a8df511ce8",
+  "implementation_commit": "8aff8b20c46fc7e2789c999b78519093071d3bbc",
+  "implementation_tree": "3347e0f46af0b44fcfb0bb2e03eeb314ae50f101",
+  "cpu": "Intel Core i9-10900X @ 3.70GHz",
+  "physical_cores": 10,
+  "logical_processors": 20,
+  "os": "Windows x86-64",
+  "memory_bytes": 34054590464,
+  "profile": "release",
+  "features": "no-default-features",
+  "parallelism": "sequential; no affinity pinning",
+  "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)\nbinary: rustc\ncommit-hash: 8bab26f4f68e0e26f0bb7960be334d5b520ea452\ncommit-date: 2026-07-14\nhost: x86_64-pc-windows-msvc\nrelease: 1.97.1\nLLVM version: 22.1.6\n",
+  "executable_sha256": "c745b06d81150191764bd5df37c3755f051405a2c9a022fdd24b497cd7d84acc",
+  "cargo_lock_sha256": "5efaa41271a69ae830a1f4236d198527a5d2f1481af7fd3b1f25766a7f931268",
+  "source_sha256": {
+    "diskann-quantization/examples/emeans_benchmark/data.rs": "4d8a077e03f7ff61a94c2ae5a99b105fa97c224ec0fbfeda95ac82aa149874d3",
+    "diskann-quantization/examples/emeans_benchmark/main.rs": "bc8a5f2b2da3e51d9454fd93fb56f34e73f4c4f438a14b526461759f7d7e3dec",
+    "diskann-quantization/examples/emeans_benchmark/metrics.rs": "8b9a9200169f22006ca72b0d6aaddfee4f2351882793a2a61e7fcdc44289bc67",
+    "diskann-quantization/examples/emeans_benchmark/train.rs": "7e10053ef535ee4600e379bdd5d7533c3e7a65fd442c1299ba4982329ab3a1c8"
+  },
+  "rustflags": [
+    "-C",
+    "target-cpu=x86-64-v3",
+    "-C",
+    "control-flow-guard"
+  ],
+  "completed_measurements": 360,
+  "validation": {
+    "scoring_tests_passed": 2,
+    "workspace_clippy": "passed with -D warnings",
+    "format": "cargo fmt --all passed"
+  }
+}
