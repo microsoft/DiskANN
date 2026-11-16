@@ -465,17 +465,36 @@ mod tests {
     #[test]
     fn inmem_integration() {
         let path = example_directory().join("inmem2.json");
-        let tempdir = tempfile::tempdir().unwrap();
-        let output_path = tempdir.path().join("output.json");
-        assert!(!output_path.exists());
+        #[cfg(not(all(feature = "inmem2", target_os = "linux")))]
+        let allocators = ["default"];
+        #[cfg(all(feature = "inmem2", target_os = "linux"))]
+        let allocators = ["default", "huge_page"];
 
-        let modified_input_path = tempdir.path().join("input.json");
+        for allocator in allocators {
+            let tempdir = tempfile::tempdir().unwrap();
+            let output_path = tempdir.path().join("output.json");
+            assert!(!output_path.exists());
+            let modified_input_path = tempdir.path().join("input.json");
 
-        let mut raw = value_from_file(&path);
-        prefix_search_directories(&mut raw, &root_directory());
-        save_to_file(&modified_input_path, &raw);
+            let mut raw = value_from_file(&path);
+            prefix_search_directories(&mut raw, &root_directory());
+            raw["jobs"][0]["content"]["allocator"] = serde_json::json!(allocator);
+            if allocator == "huge_page" {
+                raw["jobs"].as_array_mut().unwrap().truncate(1);
+            }
+            save_to_file(&modified_input_path, &raw);
+            run_inmem_integration(&modified_input_path, &output_path);
 
-        run_inmem_integration(&modified_input_path, &output_path)
+            #[cfg(feature = "inmem2")]
+            {
+                let saved = value_from_file(&output_path);
+                let content = &saved[0]["input"]["content"];
+                assert_eq!(content["allocator"], allocator);
+                let result = &saved[0]["results"];
+                let insertion = result["build"]["total_time"].as_u64().unwrap();
+                assert!(insertion > 0);
+            }
+        }
     }
 
     #[cfg(feature = "inmem2")]

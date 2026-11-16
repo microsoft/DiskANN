@@ -3,9 +3,12 @@
  * Licensed under the MIT license.
  */
 
-use std::{alloc::Layout, marker::PhantomData, ptr::NonNull};
+use std::{alloc::Layout, marker::PhantomData, ptr::NonNull, sync::Arc};
 
-use crate::num::{Align, Bytes};
+use crate::{
+    allocator::{Allocator, DefaultAllocator},
+    num::{Align, Bytes},
+};
 
 /// An unsynchronized row-store for raw data.
 ///
@@ -22,6 +25,7 @@ pub(crate) struct Buffer {
     stride: Bytes,
     entries: usize,
     layout: Layout,
+    allocator: Arc<dyn Allocator>,
 }
 
 impl Buffer {
@@ -29,14 +33,32 @@ impl Buffer {
     /// exactly `bytes_per_entry`. Subsequent entries are separated by exactly
     /// `bytes_per_entry` bytes. The base point will be aligned to at least `align`.
     ///
+    /// Uses [`DefaultAllocator`].
+    ///
     /// # Errors
     ///
     /// Returns an error if the number of bytes `bytes_per_entry * entries` rounded up to
     /// the next multiple of `align` exceeds `isize::MAX`.
+    /// Allocation failure invokes `handle_alloc_error`.
     pub(crate) fn new(
         entries: usize,
         bytes_per_entry: Bytes,
         align: Align,
+    ) -> Result<Self, BufferError> {
+        Self::new_with_allocator(entries, bytes_per_entry, align, Arc::new(DefaultAllocator))
+    }
+
+    /// Construct a buffer using `allocator`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same layout errors as [`Self::new`].
+    /// Allocation failure invokes `handle_alloc_error`.
+    pub(crate) fn new_with_allocator(
+        entries: usize,
+        bytes_per_entry: Bytes,
+        align: Align,
+        allocator: Arc<dyn Allocator>,
     ) -> Result<Self, BufferError> {
         // If we overflow `usize::MAX`, we will definitely overflow `isize::MAX`.
         let bytes = bytes_per_entry.checked_mul(entries).ok_or(BufferError)?;
@@ -47,15 +69,11 @@ impl Buffer {
             .map_err(|_: std::alloc::LayoutError| BufferError)?;
 
         let ptr = if layout.size() == 0 {
-            std::ptr::dangling_mut()
+            NonNull::dangling()
         } else {
-            // SAFETY: `layout.size()` is non-zero.
-            unsafe { std::alloc::alloc_zeroed(layout) }
-        };
-
-        let ptr = match NonNull::new(ptr) {
-            Some(ptr) => ptr,
-            None => std::alloc::handle_alloc_error(layout),
+            allocator
+                .allocate_zeroed(layout)
+                .unwrap_or_else(|| std::alloc::handle_alloc_error(layout))
         };
 
         Ok(Self {
@@ -63,6 +81,7 @@ impl Buffer {
             stride: bytes_per_entry,
             entries,
             layout,
+            allocator,
         })
     }
 
@@ -124,9 +143,8 @@ impl Drop for Buffer {
     fn drop(&mut self) {
         // If the layout size is zero, there's nothing to do because we hold a dangling pointer.
         if self.layout.size() != 0 {
-            // SAFETY: This is the same pointer and allocation that was previously returned
-            // from a successful `alloc_zeroed`.
-            unsafe { std::alloc::dealloc(self.ptr.as_ptr(), self.layout) }
+            // SAFETY: This is the same allocator, pointer, and layout used for allocation.
+            unsafe { self.allocator.deallocate(self.ptr, self.layout) }
         }
     }
 }
@@ -143,12 +161,10 @@ impl std::fmt::Display for BufferError {
 
 impl std::error::Error for BufferError {}
 
-// SAFETY: We're safe to pass around the `Buffer`. It's just use of the returned `RawSlice`
-// that needs to be arbitrated.
+// SAFETY: The allocator supports cross-thread deallocation; users arbitrate RawSlice access.
 unsafe impl Send for Buffer {}
 
-// SAFETY: We're safe to pass around the `Buffer`. It's just use of the returned `RawSlice`
-// that needs to be arbitrated.
+// SAFETY: The allocator is Sync; users arbitrate RawSlice access.
 unsafe impl Sync for Buffer {}
 
 /// A raw entry in [`Buffer`].
@@ -311,13 +327,24 @@ mod tests {
         }
     }
 
-    fn test_buffer_inner(entries: usize, bytes_per_entry: Bytes, align: Align) {
+    fn test_buffer_inner(
+        entries: usize,
+        bytes_per_entry: Bytes,
+        align: Align,
+        allocator: Option<Arc<dyn Allocator>>,
+    ) {
         let ctx = Ctx {
             entries,
             bytes_per_entry,
             align,
         };
-        let mut buffer = Buffer::new(entries, bytes_per_entry, align).unwrap();
+        let mut buffer = match allocator {
+            Some(allocator) => {
+                Buffer::new_with_allocator(entries, bytes_per_entry, align, allocator)
+            }
+            None => Buffer::new(entries, bytes_per_entry, align),
+        }
+        .unwrap();
 
         // Initial Checks
         assert_eq!(buffer.len(), entries, "{}", ctx);
@@ -517,7 +544,7 @@ mod tests {
         for entries in entries {
             for bytes_per_entry in bytes_per_entry {
                 for align in align {
-                    test_buffer_inner(entries, bytes_per_entry, align);
+                    test_buffer_inner(entries, bytes_per_entry, align, None);
                 }
             }
         }
@@ -535,5 +562,72 @@ mod tests {
         // Total size exceeds isize::MAX (Layout rejects this).
         let result = Buffer::new(isize::MAX as usize, Bytes::new(2), Align::_1);
         assert!(result.is_err());
+    }
+
+    #[cfg(all(target_os = "linux", not(miri)))]
+    #[test]
+    fn test_huge_page_buffer() {
+        let allocator = Arc::new(crate::allocator::HugePageAllocator::new().unwrap());
+        for entries in [0, 1, 5] {
+            for bytes in [0, 1, 513, 8193].map(Bytes::new) {
+                test_buffer_inner(entries, bytes, Align::_64, Some(allocator.clone()));
+            }
+        }
+    }
+
+    #[test]
+    fn test_allocator_lifetime_and_deallocation() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        #[derive(Debug, Default)]
+        struct TrackingAllocator {
+            allocations: AtomicUsize,
+            deallocations: AtomicUsize,
+        }
+
+        // SAFETY: Allocation delegates to DefaultAllocator; counters are atomic.
+        unsafe impl Allocator for TrackingAllocator {
+            fn allocate_zeroed(&self, layout: Layout) -> Option<NonNull<u8>> {
+                assert_eq!(layout, Layout::from_size_align(128, 64).unwrap());
+                let ptr = DefaultAllocator.allocate_zeroed(layout)?;
+                self.allocations.fetch_add(1, Ordering::Relaxed);
+                Some(ptr)
+            }
+
+            unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
+                assert_eq!(layout, Layout::from_size_align(128, 64).unwrap());
+                self.deallocations.fetch_add(1, Ordering::Relaxed);
+                // SAFETY: Inherited from caller.
+                unsafe { DefaultAllocator.deallocate(ptr, layout) };
+            }
+        }
+
+        let allocator = Arc::new(TrackingAllocator::default());
+        for (entries, bytes) in [(0, 64), (2, 0)] {
+            let empty = Buffer::new_with_allocator(
+                entries,
+                Bytes::new(bytes),
+                Align::_64,
+                allocator.clone(),
+            )
+            .unwrap();
+            drop(empty);
+        }
+        assert_eq!(allocator.allocations.load(Ordering::Relaxed), 0);
+        assert_eq!(allocator.deallocations.load(Ordering::Relaxed), 0);
+
+        let buffer =
+            Buffer::new_with_allocator(2, Bytes::new(64), Align::_64, allocator.clone()).unwrap();
+        thread::spawn(move || drop(buffer)).join().unwrap();
+        assert_eq!(allocator.allocations.load(Ordering::Relaxed), 1);
+        assert_eq!(allocator.deallocations.load(Ordering::Relaxed), 1);
+
+        let weak = Arc::downgrade(&allocator);
+        let buffer =
+            Buffer::new_with_allocator(2, Bytes::new(64), Align::_64, allocator.clone()).unwrap();
+        drop(allocator);
+        assert!(weak.upgrade().is_some());
+        drop(buffer);
+        assert!(weak.upgrade().is_none());
     }
 }
