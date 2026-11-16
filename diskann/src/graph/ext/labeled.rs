@@ -159,6 +159,26 @@ where
     type Id = A::Id;
 }
 
+impl<A: glue::SearchAccessor> glue::FilterClassifier for FilteredAccessor<'_, A> {
+    fn classify(&self, id: Self::Id) -> Decision<Self::Id> {
+        decide(self.labels, id)
+    }
+
+    fn expand_beam_preclassified<Itr, P, F>(
+        &mut self,
+        ids: Itr,
+        pred: P,
+        on_neighbors: F,
+    ) -> impl std::future::Future<Output = ANNResult<()>> + Send
+    where
+        Itr: Iterator<Item = Self::Id> + Send,
+        P: glue::HybridPredicate<Self::Id> + Send + Sync,
+        F: FnMut(Self::Id, f32) + Send,
+    {
+        self.inner.expand_beam(ids, pred, on_neighbors)
+    }
+}
+
 impl<'a, A> glue::FilteredAccessor for FilteredAccessor<'a, A>
 where
     A: glue::SearchAccessor,

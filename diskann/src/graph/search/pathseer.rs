@@ -19,7 +19,7 @@ use crate::{
     error::IntoANNResult,
     graph::{
         AdjacencyList,
-        glue::{self, FilteredAccessor, SearchPostProcess, SearchStrategy},
+        glue::{self, FilterClassifier, FilteredAccessor, SearchPostProcess, SearchStrategy},
         index::{DiskANNIndex, SearchStats},
         search_output_buffer::SearchOutputBuffer,
     },
@@ -34,7 +34,7 @@ pub enum PathSeerMethod {
     /// Original PathSeer.
     #[default]
     Original,
-    /// First what-if variant, currently identical to original.
+    /// Limit total and per-parent matching second-order checks; visit all classified IDs.
     WhatIf1,
     /// Second what-if variant, currently identical to original.
     WhatIf2,
@@ -149,6 +149,23 @@ impl<I: VectorId> glue::PredicateMut<glue::Accept<I>> for SelectedNotVisited<'_,
         self.selected.contains(id.get()) && self.visited.insert(*id.get())
     }
 }
+
+// Selected IDs are already visited. Remove each after admitting it for scoring.
+struct SelectedForScoring<'a, I>(&'a mut HashSet<I>);
+
+impl<I: VectorId> glue::Predicate<I> for SelectedForScoring<'_, I> {
+    fn eval(&self, id: &I) -> bool {
+        self.0.contains(id)
+    }
+}
+
+impl<I: VectorId> glue::PredicateMut<I> for SelectedForScoring<'_, I> {
+    fn eval_mut(&mut self, id: &I) -> bool {
+        self.0.remove(id)
+    }
+}
+
+impl<I: VectorId> glue::HybridPredicate<I> for SelectedForScoring<'_, I> {}
 
 async fn search_original<'a, DP, S, T, O, PP, OB>(
     inner: Knn,
@@ -313,7 +330,7 @@ async fn search_what_if_1<'a, DP, S, T, O, PP, OB>(
 ) -> ANNResult<SearchStats>
 where
     DP: PathSeerGraph,
-    S: SearchStrategy<'a, DP, T, SearchAccessor: FilteredAccessor<Id = DP::InternalId>>,
+    S: SearchStrategy<'a, DP, T, SearchAccessor: FilterClassifier<Id = DP::InternalId>>,
     T: Copy + Send + Sync,
     O: Send,
     PP: SearchPostProcess<S::SearchAccessor, T, O> + Send + Sync,
@@ -341,9 +358,13 @@ where
         admit(point, l, &mut candidates, &mut results);
     }
     let budget = index.max_degree_with_slack();
+    // DiskANN's adjacency bound plays the role of HNSW's layer-zero 2M bound.
+    let max_second_order = ((budget as f64).ln().round() as usize).max(1);
     let mut direct = AdjacencyList::with_capacity(budget);
     let mut second = AdjacencyList::with_capacity(budget);
     let mut scored = Vec::with_capacity(budget * 2);
+    let mut selected = HashSet::with_capacity(max_second_order);
+    let mut expanded_second = HashSet::new();
 
     while let Some(Reverse(candidate)) = candidates.pop() {
         if accessor.terminate_early() {
@@ -400,29 +421,60 @@ where
         }
 
         if !phase_two {
+            // All parents share one raw classification budget per candidate.
             let mut remaining = budget;
             for &parent in direct.iter() {
                 if remaining == 0 || accessor.terminate_early() {
                     break;
                 }
+                // With a fixed query filter, a parent's matching prefix is fixed.
+                // Its entire scanned prefix was visited on the first expansion, so
+                // another expansion cannot discover a new point to score.
+                if expanded_second.contains(&parent) {
+                    continue;
+                }
+                second.clear();
                 index
                     .data_provider
                     .pathseer_neighbors(parent, &mut second)?;
                 scratch.hops += 1;
-                let count = remaining.min(second.len());
-                remaining -= count;
-                let selected: HashSet<_> = second.iter().take(count).copied().collect();
+                let mut satisfactory_count = 0;
+                selected.clear();
+                let mut checked = 0;
+                for &id in second.iter() {
+                    if remaining == 0 || satisfactory_count == max_second_order {
+                        break;
+                    }
+                    // Classify even visited IDs: matching IDs consume this parent's
+                    // quota regardless of whether they need a distance computation.
+                    remaining -= 1;
+                    checked += 1;
+                    let accepted = accessor.classify(id).is_accept();
+                    let unvisited = scratch.visited.insert(id);
+                    if accepted {
+                        satisfactory_count += 1;
+                        if unvisited {
+                            selected.insert(id);
+                        }
+                    }
+                }
+                // A budget-truncated prefix may still have useful entries later.
+                // Cache only parents scanned to the end or to their matching quota.
+                if checked == second.len() || satisfactory_count == max_second_order {
+                    expanded_second.insert(parent);
+                }
+                // Do not reread an adjacency list with no work left.
+                if selected.is_empty() {
+                    continue;
+                }
                 scored.clear();
                 accessor
-                    .expand_beam_accept_only(
+                    .expand_beam_preclassified(
                         std::iter::once(parent),
-                        SelectedNotVisited {
-                            selected: &selected,
-                            visited: &mut scratch.visited,
-                        },
+                        SelectedForScoring(&mut selected),
                         |id, distance| {
                             scored.push(Scored {
-                                id: id.into_inner(),
+                                id,
                                 distance,
                                 accepted: true,
                             })
@@ -1065,7 +1117,7 @@ where
 impl<'a, DP, S, T> Search<'a, DP, S, T> for PathSeer
 where
     DP: PathSeerGraph,
-    S: SearchStrategy<'a, DP, T, SearchAccessor: FilteredAccessor<Id = DP::InternalId>>,
+    S: SearchStrategy<'a, DP, T, SearchAccessor: FilterClassifier<Id = DP::InternalId>>,
     T: Copy + Send + Sync,
 {
     type Output = SearchStats;
