@@ -68,9 +68,7 @@ pub trait BuildElement: std::fmt::Debug + Sized + Send + Sync + 'static {
 
 /// Build-compatible elements with PiPNN row conversion and distance support.
 #[cfg(feature = "pipnn")]
-pub trait BuildElement:
-    std::fmt::Debug + Sized + Send + Sync + 'static + diskann::graph::pipnn::Element
-{
+pub trait BuildElement: diskann::graph::pipnn::Element {
     fn backend<P>(
         quantization: &QuantizationType,
         index_path_prefix: &str,
