@@ -8,7 +8,10 @@
 //! Implements the EMA updates, scaling laws, cosine schedule, cluster splitting and
 //! last-epoch finalization described by [Bessa et al.](https://arxiv.org/abs/2611.09501).
 //! Recipe constants follow the [Faiss implementation](https://github.com/facebookresearch/faiss/tree/65a4e3880ece1494c9d79e06f886c89810a1f85a/contrib/e_means).
-//! Assignment reuses the SIMD kernel used by [super::kmeans::lloyds]; sums and masses use f64.
+//! Default assignment reuses the SIMD kernel used by [super::kmeans::lloyds]; sums and masses
+//! use f64. Custom [Assignment] backends receive contiguous mini-batches and current centers.
+//! Source data may be a borrowed [diskann_utils::strided::Strided] PQ partition; only a batch
+//! is packed for custom backends, while the default path gathers directly into SIMD blocks.
 //! Runs are sequential and use only the caller's RNG.
 //!
 //! # Example
@@ -31,8 +34,19 @@
 //! # }
 //! ```
 
+mod assignment;
+mod config;
+mod error;
+mod revival;
 mod train;
 
+#[cfg(test)]
+mod tests;
+
+pub use assignment::Assignment;
+pub use config::{BatchSizePolicy, EmeansConfig};
+pub use error::EmeansError;
 pub use train::{
-    BatchSizePolicy, EmeansConfig, EmeansError, EmeansResult, emeans, emeans_from_centers,
+    EmeansResult, emeans, emeans_from_centers, emeans_from_centers_with_assignment,
+    emeans_with_assignment,
 };
