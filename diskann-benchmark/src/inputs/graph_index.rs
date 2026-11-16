@@ -169,8 +169,9 @@ pub(crate) struct RangeSearchPhase {
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct FilteredRangeSearchPhase {
     pub(crate) queries: InputFile,
-    pub(crate) query_predicates: InputFile,
-    pub(crate) data_labels: InputFile,
+    pub(crate) query_predicates: Option<InputFile>,
+    pub(crate) data_labels: Option<InputFile>,
+    pub(crate) filter_bitmaps: Option<InputFile>,
     pub(crate) groundtruth: InputFile,
     pub(crate) reps: NonZeroUsize,
     // Enable sweeping threads
@@ -178,11 +179,40 @@ pub(crate) struct FilteredRangeSearchPhase {
     pub(crate) runs: Vec<GraphRangeSearch>,
 }
 
+fn resolve_filter_input(
+    query_predicates: &mut Option<InputFile>,
+    data_labels: &mut Option<InputFile>,
+    filter_bitmaps: &mut Option<InputFile>,
+    checker: &mut Checker,
+) -> anyhow::Result<()> {
+    match (
+        query_predicates.as_mut(),
+        data_labels.as_mut(),
+        filter_bitmaps.as_mut(),
+    ) {
+        (Some(query), Some(data), None) => {
+            query.resolve(checker)?;
+            data.resolve(checker)?;
+        }
+        (None, None, Some(bitmaps)) => bitmaps.resolve(checker)?,
+        _ => {
+            return Err(anyhow!(
+                "provide either query_predicates and data_labels, or filter_bitmaps"
+            ))
+        }
+    }
+    Ok(())
+}
+
 impl FilteredRangeSearchPhase {
     pub(crate) fn validate(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
         self.queries.resolve(checker)?;
-        self.query_predicates.resolve(checker)?;
-        self.data_labels.resolve(checker)?;
+        resolve_filter_input(
+            &mut self.query_predicates,
+            &mut self.data_labels,
+            &mut self.filter_bitmaps,
+            checker,
+        )?;
         self.groundtruth.resolve(checker)?;
         for (i, run) in self.runs.iter_mut().enumerate() {
             run.validate(checker)
@@ -209,11 +239,12 @@ impl RangeSearchPhase {
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct BetaSearchPhase {
     pub(crate) queries: InputFile,
-    pub(crate) query_predicates: InputFile,
+    pub(crate) query_predicates: Option<InputFile>,
     pub(crate) groundtruth: InputFile,
     pub(crate) reps: NonZeroUsize,
     pub(crate) beta: f32,
-    pub(crate) data_labels: InputFile,
+    pub(crate) data_labels: Option<InputFile>,
+    pub(crate) filter_bitmaps: Option<InputFile>,
     // Enable sweeping threads
     pub(crate) num_threads: Vec<NonZeroUsize>,
     pub(crate) runs: Vec<GraphSearch>,
@@ -222,8 +253,12 @@ pub(crate) struct BetaSearchPhase {
 impl BetaSearchPhase {
     pub(crate) fn validate(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
         self.queries.resolve(checker)?;
-        self.query_predicates.resolve(checker)?;
-        self.data_labels.resolve(checker)?;
+        resolve_filter_input(
+            &mut self.query_predicates,
+            &mut self.data_labels,
+            &mut self.filter_bitmaps,
+            checker,
+        )?;
 
         if self.beta <= 0.0 || self.beta > 1.0 {
             return Err(anyhow::anyhow!(
@@ -245,10 +280,11 @@ impl BetaSearchPhase {
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct MultihopFilterSearchPhase {
     pub(crate) queries: InputFile,
-    pub(crate) query_predicates: InputFile,
+    pub(crate) query_predicates: Option<InputFile>,
     pub(crate) groundtruth: InputFile,
     pub(crate) reps: NonZeroUsize,
-    pub(crate) data_labels: InputFile,
+    pub(crate) data_labels: Option<InputFile>,
+    pub(crate) filter_bitmaps: Option<InputFile>,
     // Enable sweeping threads
     pub(crate) num_threads: Vec<NonZeroUsize>,
     pub(crate) runs: Vec<GraphSearch>,
@@ -257,14 +293,67 @@ pub(crate) struct MultihopFilterSearchPhase {
 impl MultihopFilterSearchPhase {
     pub(crate) fn validate(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
         self.queries.resolve(checker)?;
-        self.query_predicates.resolve(checker)?;
-        self.data_labels.resolve(checker)?;
+        resolve_filter_input(
+            &mut self.query_predicates,
+            &mut self.data_labels,
+            &mut self.filter_bitmaps,
+            checker,
+        )?;
         self.groundtruth.resolve(checker)?;
         for (i, run) in self.runs.iter_mut().enumerate() {
             run.validate(checker)
                 .with_context(|| format!("search run {}", i))?;
         }
 
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum PathSeerMethodId {
+    #[default]
+    Original,
+    #[serde(rename = "what-if-1")]
+    WhatIf1,
+    #[serde(rename = "what-if-2")]
+    WhatIf2,
+    #[serde(rename = "what-if-3")]
+    WhatIf3,
+    #[serde(rename = "what-if-4")]
+    WhatIf4,
+    #[serde(rename = "what-if-5")]
+    WhatIf5,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct PathSeerSearchPhase {
+    #[serde(default, rename = "method-id")]
+    pub(crate) method_id: PathSeerMethodId,
+    pub(crate) queries: InputFile,
+    pub(crate) query_predicates: Option<InputFile>,
+    pub(crate) groundtruth: InputFile,
+    pub(crate) reps: NonZeroUsize,
+    pub(crate) data_labels: Option<InputFile>,
+    pub(crate) filter_bitmaps: Option<InputFile>,
+    pub(crate) num_threads: Vec<NonZeroUsize>,
+    pub(crate) runs: Vec<GraphSearch>,
+}
+
+impl PathSeerSearchPhase {
+    pub(crate) fn validate(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
+        self.queries.resolve(checker)?;
+        resolve_filter_input(
+            &mut self.query_predicates,
+            &mut self.data_labels,
+            &mut self.filter_bitmaps,
+            checker,
+        )?;
+        self.groundtruth.resolve(checker)?;
+        for (i, run) in self.runs.iter_mut().enumerate() {
+            run.validate(checker)
+                .with_context(|| format!("search run {}", i))?;
+        }
         Ok(())
     }
 }
@@ -286,10 +375,11 @@ impl AdaptiveL {
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct InlineFilterSearchPhase {
     pub(crate) queries: InputFile,
-    pub(crate) query_predicates: InputFile,
+    pub(crate) query_predicates: Option<InputFile>,
     pub(crate) groundtruth: InputFile,
     pub(crate) reps: NonZeroUsize,
-    pub(crate) data_labels: InputFile,
+    pub(crate) data_labels: Option<InputFile>,
+    pub(crate) filter_bitmaps: Option<InputFile>,
     pub(crate) num_threads: Vec<NonZeroUsize>,
     pub(crate) runs: Vec<GraphSearch>,
     #[serde(deserialize_with = "Deserialize::deserialize")]
@@ -299,8 +389,12 @@ pub(crate) struct InlineFilterSearchPhase {
 impl InlineFilterSearchPhase {
     pub(crate) fn validate(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
         self.queries.resolve(checker)?;
-        self.query_predicates.resolve(checker)?;
-        self.data_labels.resolve(checker)?;
+        resolve_filter_input(
+            &mut self.query_predicates,
+            &mut self.data_labels,
+            &mut self.filter_bitmaps,
+            checker,
+        )?;
         self.groundtruth.resolve(checker)?;
         for (i, run) in self.runs.iter_mut().enumerate() {
             run.validate(checker)
@@ -434,6 +528,7 @@ pub(crate) enum SearchPhase {
     FilteredRange(FilteredRangeSearchPhase),
     TopkBetaFilter(BetaSearchPhase),
     TopkMultihopFilter(MultihopFilterSearchPhase),
+    TopkPathseerFilter(PathSeerSearchPhase),
     TopkInlineFilter(InlineFilterSearchPhase),
     TopkDeterminantDiversity(TopkDeterminantDiversityPhase),
 }
@@ -463,6 +558,7 @@ impl SearchPhase {
             Self::FilteredRange(_) => SearchPhaseKind::FilteredRange,
             Self::TopkBetaFilter(_) => SearchPhaseKind::TopkBetaFilter,
             Self::TopkMultihopFilter(_) => SearchPhaseKind::TopkMultihopFilter,
+            Self::TopkPathseerFilter(_) => SearchPhaseKind::TopkPathseerFilter,
             Self::TopkInlineFilter(_) => SearchPhaseKind::TopkInlineFilter,
             Self::TopkDeterminantDiversity(_) => SearchPhaseKind::TopkDeterminantDiversity,
         }
@@ -522,6 +618,18 @@ impl SearchPhase {
         }
     }
 
+    pub(crate) fn as_topk_pathseer_filter(
+        &self,
+    ) -> Result<&PathSeerSearchPhase, WrongSearchPhaseKind> {
+        match self {
+            Self::TopkPathseerFilter(phase) => Ok(phase),
+            _ => Err(WrongSearchPhaseKind::new(
+                SearchPhaseKind::TopkPathseerFilter,
+                self.kind(),
+            )),
+        }
+    }
+
     pub(crate) fn as_topk_inline_filter(
         &self,
     ) -> Result<&InlineFilterSearchPhase, WrongSearchPhaseKind> {
@@ -555,6 +663,7 @@ impl SearchPhase {
             SearchPhase::FilteredRange(phase) => phase.validate(checker),
             SearchPhase::TopkBetaFilter(phase) => phase.validate(checker),
             SearchPhase::TopkMultihopFilter(phase) => phase.validate(checker),
+            SearchPhase::TopkPathseerFilter(phase) => phase.validate(checker),
             SearchPhase::TopkInlineFilter(phase) => phase.validate(checker),
             SearchPhase::TopkDeterminantDiversity(phase) => phase.validate(checker),
         }
@@ -568,6 +677,7 @@ pub(crate) enum SearchPhaseKind {
     FilteredRange,
     TopkBetaFilter,
     TopkMultihopFilter,
+    TopkPathseerFilter,
     TopkInlineFilter,
     TopkDeterminantDiversity,
 }
@@ -580,6 +690,7 @@ impl SearchPhaseKind {
             Self::FilteredRange => "filtered-range",
             Self::TopkBetaFilter => "topk-beta-filter",
             Self::TopkMultihopFilter => "topk-multihop-filter",
+            Self::TopkPathseerFilter => "topk-pathseer-filter",
             Self::TopkInlineFilter => "topk-inline-filter",
             Self::TopkDeterminantDiversity => "topk-determinant-diversity",
         }

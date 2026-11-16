@@ -4,7 +4,11 @@
  */
 
 use bit_set::BitSet;
-use std::fmt::Debug;
+use std::{
+    fmt::Debug,
+    fs::File,
+    io::{BufReader, Read},
+};
 
 use diskann::{
     graph::ext::labeled::QueryLabelProvider,
@@ -98,6 +102,118 @@ pub(crate) fn generate_bitmaps(
         }
     };
     Ok(bit_maps)
+}
+
+/// Per-query allow lists. Format: b"DANFILT1", little-endian u32 query count,
+/// little-endian u32 base count, then for each query a u8 mode and u32 count.
+/// Mode 0 is `count` sorted u32 IDs; mode 1 is `count` packed bytes, with
+/// vector ID zero in the high bit of the first byte. A prefix of query rows may
+/// be read when the benchmark uses the first N queries of a dataset.
+pub(crate) fn load_filter_bitmaps(
+    path: &InputFile,
+    query_count: usize,
+) -> anyhow::Result<Vec<BitSet>> {
+    let mut file = BufReader::new(File::open(path.to_str().unwrap())?);
+    let mut magic = [0u8; 8];
+    file.read_exact(&mut magic)?;
+    anyhow::ensure!(&magic == b"DANFILT1", "invalid filter bitmap magic");
+    let mut word = [0u8; 4];
+    file.read_exact(&mut word)?;
+    let rows = u32::from_le_bytes(word) as usize;
+    file.read_exact(&mut word)?;
+    let points = u32::from_le_bytes(word) as usize;
+    anyhow::ensure!(
+        rows >= query_count,
+        "filter bitmap count {} is smaller than query count {}",
+        rows,
+        query_count
+    );
+    anyhow::ensure!(points > 0, "filter bitmap base count must be positive");
+    let mut bitmaps = Vec::with_capacity(query_count);
+    for row in 0..query_count {
+        let mut mode = [0u8; 1];
+        file.read_exact(&mut mode)?;
+        file.read_exact(&mut word)?;
+        let count = u32::from_le_bytes(word) as usize;
+        let bitmap = match mode[0] {
+            0 => {
+                anyhow::ensure!(count <= points, "too many IDs in filter row {}", row);
+                let mut bitmap = BitSet::new();
+                for _ in 0..count {
+                    file.read_exact(&mut word)?;
+                    let id = u32::from_le_bytes(word) as usize;
+                    anyhow::ensure!(id < points, "out-of-range ID {} in filter row {}", id, row);
+                    bitmap.insert(id);
+                }
+                bitmap
+            }
+            1 => {
+                anyhow::ensure!(
+                    count == points.div_ceil(8),
+                    "invalid packed filter length in row {}",
+                    row
+                );
+                let mut bytes = vec![0u8; count];
+                file.read_exact(&mut bytes)?;
+                BitSet::from_bytes(&bytes)
+            }
+            _ => anyhow::bail!("invalid filter mode {} in row {}", mode[0], row),
+        };
+        bitmaps.push(bitmap);
+    }
+    if rows == query_count {
+        let mut extra = [0u8; 1];
+        anyhow::ensure!(
+            file.read(&mut extra)? == 0,
+            "trailing bytes in filter bitmap file"
+        );
+    }
+    Ok(bitmaps)
+}
+
+pub(crate) fn get_filter_bitmaps(
+    query_predicates: &Option<InputFile>,
+    data_labels: &Option<InputFile>,
+    filter_bitmaps: &Option<InputFile>,
+    query_count: usize,
+) -> anyhow::Result<Vec<BitSet>> {
+    if let Some(path) = filter_bitmaps {
+        load_filter_bitmaps(path, query_count)
+    } else {
+        generate_bitmaps(
+            query_predicates.as_ref().unwrap(),
+            data_labels.as_ref().unwrap(),
+        )
+    }
+}
+
+#[cfg(test)]
+mod filter_file_tests {
+    use super::*;
+
+    #[test]
+    fn reads_sparse_and_packed_allow_lists() {
+        let path = std::env::temp_dir().join(format!("diskann-filter-{}.bin", std::process::id()));
+        let mut bytes = b"DANFILT1".to_vec();
+        bytes.extend_from_slice(&2u32.to_le_bytes());
+        bytes.extend_from_slice(&10u32.to_le_bytes());
+        bytes.push(0);
+        bytes.extend_from_slice(&2u32.to_le_bytes());
+        bytes.extend_from_slice(&1u32.to_le_bytes());
+        bytes.extend_from_slice(&9u32.to_le_bytes());
+        bytes.push(1);
+        bytes.extend_from_slice(&2u32.to_le_bytes());
+        bytes.extend_from_slice(&[0b1000_0001, 0b0100_0000]);
+        std::fs::write(&path, bytes).unwrap();
+        let result = load_filter_bitmaps(&InputFile::new(&path), 2);
+        let prefix = load_filter_bitmaps(&InputFile::new(&path), 1).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        let bitmaps = result.unwrap();
+        assert_eq!(prefix.len(), 1);
+        assert_eq!(prefix[0].iter().collect::<Vec<_>>(), vec![1, 9]);
+        assert_eq!(bitmaps[0].iter().collect::<Vec<_>>(), vec![1, 9]);
+        assert_eq!(bitmaps[1].iter().collect::<Vec<_>>(), vec![0, 7, 9]);
+    }
 }
 
 pub(crate) fn setup_filter_strategies<I, S>(

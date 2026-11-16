@@ -224,6 +224,20 @@ impl TopkBetaFilter {
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct TopkMultihopFilter;
 
+/// A search plugin for PathSeer filtered search.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TopkPathseerFilter;
+
+impl TopkPathseerFilter {
+    pub(crate) fn is_match(phase: &SearchPhase) -> bool {
+        phase.as_topk_pathseer_filter().is_ok()
+    }
+
+    pub(crate) const fn as_str() -> &'static str {
+        "topk + pathseer filter"
+    }
+}
+
 impl TopkMultihopFilter {
     pub(crate) fn is_match(phase: &SearchPhase) -> bool {
         phase.as_topk_multihop_filter().is_ok()

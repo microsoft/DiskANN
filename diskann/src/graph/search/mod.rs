@@ -120,7 +120,7 @@ pub use filtered_range_search::FilteredRange;
 pub use inline_filter_search::{AdaptiveL, InlineFilterSearch};
 pub use knn_search::{Knn, KnnSearchError, RecordedKnn};
 pub use multihop_filter_search::MultihopFilterSearch;
-pub use pathseer::PathSeer;
+pub use pathseer::{PathSeer, PathSeerMethod};
 pub use range_search::{Range, RangeBuilder, RangeSearchError};
 
 // Feature-gated diverse search.

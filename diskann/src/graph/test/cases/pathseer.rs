@@ -9,7 +9,7 @@ use crate::{
     graph::{
         self, AdjacencyList,
         ext::labeled,
-        search::{Knn, PathSeer},
+        search::{Knn, PathSeer, PathSeerMethod},
         test::provider as test_provider,
     },
     neighbor::Neighbor,
@@ -32,11 +32,20 @@ fn run(
     matches: &[u32],
     l: usize,
 ) -> (graph::index::SearchStats, Vec<Neighbor<u32>>) {
+    run_with_method(index, matches, l, PathSeerMethod::Original)
+}
+
+fn run_with_method(
+    index: &graph::DiskANNIndex<test_provider::Provider>,
+    matches: &[u32],
+    l: usize,
+    method: PathSeerMethod,
+) -> (graph::index::SearchStats, Vec<Neighbor<u32>>) {
     let filter = MatchIds(matches.iter().copied().collect());
     let mut neighbors = Vec::new();
     let stats = current_thread_runtime()
         .block_on(index.search_with(
-            PathSeer::new(Knn::new_default(l).unwrap()),
+            PathSeer::new(Knn::new_default(l).unwrap()).with_method(method),
             &labeled::Filtered::new(test_provider::Strategy::new(), &filter),
             graph::glue::CopyIds,
             &test_provider::Context::new(),
@@ -64,6 +73,22 @@ fn finds_matches_two_hops_away_before_heap_is_full() {
     let (stats, results) = run(&index, &[3, 4], 2);
     assert_eq!(stats.result_count, 2);
     assert_eq!(results.iter().map(|n| *n.id()).collect::<Vec<_>>(), [3, 4]);
+
+    for method in [
+        PathSeerMethod::WhatIf1,
+        PathSeerMethod::WhatIf2,
+        PathSeerMethod::WhatIf3,
+        PathSeerMethod::WhatIf4,
+        PathSeerMethod::WhatIf5,
+    ] {
+        let (variant_stats, variant_results) = run_with_method(&index, &[3, 4], 2, method);
+        assert_eq!(variant_stats.result_count, stats.result_count);
+        assert_eq!(variant_stats.cmps, stats.cmps);
+        assert_eq!(
+            variant_results.iter().map(|n| *n.id()).collect::<Vec<_>>(),
+            results.iter().map(|n| *n.id()).collect::<Vec<_>>()
+        );
+    }
 
     let (stats, results) = run(&index, &[], 2);
     assert_eq!(stats.result_count, 0);
