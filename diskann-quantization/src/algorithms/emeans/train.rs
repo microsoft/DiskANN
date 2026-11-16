@@ -7,7 +7,7 @@ use super::{
     Assignment, EmeansConfig, EmeansError,
     assignment::AssignmentBatch,
     config::{ResolvedParameters, scheduled_step_size},
-    revival::revive_underused_clusters,
+    revival::{REVIVAL_CHECK_INTERVAL, REVIVAL_DISABLED_MAX_DIMENSION, revive_underused_clusters},
 };
 use crate::{algorithms::kmeans::common::square_norm, cancel::Cancelation};
 use diskann_utils::{
@@ -15,6 +15,17 @@ use diskann_utils::{
     views::rowmajor::{self, Matrix, MatrixMut},
 };
 use rand::{Rng, seq::SliceRandom};
+
+// Faiss's 2^-16 pseudo-count gives initial centers a small positive prior mass.
+// Preserve this published choice (the paper uses 1e-10); see the source in config.rs.
+const INITIAL_CLUSTER_MASS: f64 = 1.0 / 65_536.0;
+
+// Local numerical guard, not a fitted parameter: squared L2 is at most 4L when
+// both squared norms are <= L. This leaves headroom for rounding and donor splits.
+const MAX_SQUARED_NORM: f32 = f32::MAX / 8.0;
+// Local polling policy: keep input validation cooperatively cancellable without
+// invoking a potentially dynamic cancellation callback for every row.
+const CANCELLATION_POLL_ROWS: usize = 4096;
 
 /// Assignments and resolved recipe for a completed run.
 #[derive(Debug)]
@@ -42,8 +53,7 @@ fn check_canceled(cancel: &(impl Cancelation + ?Sized)) -> Result<(), EmeansErro
 
 fn checked_squared_norm(row: &[f32]) -> Result<f32, EmeansError> {
     let norm = square_norm(row);
-    // This leaves headroom for the dot-product distance expansion and cluster splits.
-    if !norm.is_finite() || norm > f32::MAX / 8.0 {
+    if !norm.is_finite() || norm > MAX_SQUARED_NORM {
         Err(EmeansError::NumericalRange)
     } else {
         Ok(norm)
@@ -69,7 +79,7 @@ fn prepare_training(
     let recipe = config.resolve_parameters(n, k, d)?;
     let mut norms = Vec::with_capacity(n);
     for (i, row) in data.rows().enumerate() {
-        if i.is_multiple_of(4096) {
+        if i.is_multiple_of(CANCELLATION_POLL_ROWS) {
             check_canceled(cancel)?;
         }
         norms.push(checked_squared_norm(row)?);
@@ -270,7 +280,7 @@ where
     let mut order: Vec<_> = (0..n).collect();
     let mut assignments = vec![0; n];
     let mut center_norms = vec![0.0; k];
-    let mut masses = vec![1.0 / 65536.0; k];
+    let mut masses = vec![INITIAL_CLUSTER_MASS; k];
     let mut counts = vec![0_usize; k];
     let mut sums = vec![0.0; k * d];
     let mut last_epoch_counts = vec![0_usize; k];
@@ -334,7 +344,10 @@ where
                 }
             }
             step += 1;
-            if config.revive && d > 2 && step.is_multiple_of(5) {
+            if config.revive
+                && d > REVIVAL_DISABLED_MAX_DIMENSION
+                && step.is_multiple_of(REVIVAL_CHECK_INTERVAL)
+            {
                 revived_clusters +=
                     revive_underused_clusters(centers.as_view_mut(), &mut masses, rng);
             }

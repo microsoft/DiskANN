@@ -5,6 +5,46 @@
 
 use super::EmeansError;
 
+// Versioned empirical recipe, not parameters fitted by DiskANN:
+// https://github.com/facebookresearch/faiss/blob/65a4e3880ece1494c9d79e06f886c89810a1f85a/contrib/e_means/base.py
+// Faiss reports full-pass batch fits on 100K-10M rows; the step fit also includes
+// 100M rows and was fitted with a zero-ending cosine. These shipped coefficients
+// differ from Table 2 of arXiv:2611.09501v1; execution uses the nonzero floor below.
+
+// B = C_B * k^b_k * n^b_n * T^b_T: k centers, n samples, T epochs.
+// The quality recipe divides the raw batch by eight for more frequent updates;
+// rounding and the distinct caps can change the ratio of the final batch sizes.
+const BATCH_SIZE_THROUGHPUT_COEFFICIENT: f64 = 0.035134;
+const BATCH_SIZE_QUALITY_COEFFICIENT: f64 = BATCH_SIZE_THROUGHPUT_COEFFICIENT / 8.0;
+const BATCH_SIZE_CLUSTER_EXPONENT: f64 = 0.134749;
+const BATCH_SIZE_SAMPLE_EXPONENT: f64 = 0.876473;
+const BATCH_SIZE_EPOCH_EXPONENT: f64 = 0.813344;
+
+// alpha0 = C_alpha * k^a_k * B^a_B * n^a_n * T^a_T, using the resolved B.
+// alpha weights incoming EMA counts/sums; it is not the centroid interpolation weight.
+const INITIAL_STEP_COEFFICIENT: f64 = 0.8244;
+const INITIAL_STEP_CLUSTER_EXPONENT: f64 = -0.4617;
+const INITIAL_STEP_BATCH_EXPONENT: f64 = 0.9003;
+const INITIAL_STEP_SAMPLE_EXPONENT: f64 = -0.4498;
+const INITIAL_STEP_EPOCH_EXPONENT: f64 = -0.1057;
+
+// Reference API budget, independently overridable by the caller.
+const DEFAULT_EPOCHS: usize = 5;
+// Faiss's low-dimensional ablations favor more frequent updates at d <= 16.
+const AUTO_QUALITY_MAX_DIMENSION: usize = 16;
+// Preserve Faiss's two caps based on half the dataset: quality floors this value,
+// throughput rounds it to a power of two (so its cap can exceed n/2).
+const AUTO_BATCH_CAP_DIVISOR: usize = 2;
+// The lower clamp belongs to the automatic recipe only. The upper bound keeps
+// both EMA weights, alpha and 1-alpha, nonnegative, including explicit overrides.
+const MIN_AUTO_STEP_SIZE: f64 = 1e-4;
+const MAX_STEP_SIZE: f64 = 1.0;
+
+// Equation 5 anneals toward one tenth of the initial step. The half-range cosine
+// weight is derived from that floor rather than an independent fitted parameter.
+const COSINE_MIN_STEP_FACTOR: f64 = 0.1;
+const COSINE_STEP_WEIGHT: f64 = (1.0 - COSINE_MIN_STEP_FACTOR) / 2.0;
+
 /// Scaling law for automatic batch-size selection from the dataset size, cluster count
 /// and epoch budget. Ignored when [EmeansConfig::batch_size] is supplied explicitly.
 /// The resolved batch size also determines the default [EmeansConfig::step_size].
@@ -38,7 +78,7 @@ pub struct EmeansConfig {
 impl Default for EmeansConfig {
     fn default() -> Self {
         Self {
-            epochs: 5,
+            epochs: DEFAULT_EPOCHS,
             batch_size: None,
             step_size: None,
             batch_size_policy: BatchSizePolicy::Auto,
@@ -69,38 +109,42 @@ impl EmeansConfig {
         }
         if self
             .step_size
-            .is_some_and(|x| !x.is_finite() || x <= 0.0 || x > 1.0)
+            .is_some_and(|x| !x.is_finite() || x <= 0.0 || x > MAX_STEP_SIZE)
         {
             return Err(EmeansError::InvalidConfig("step_size must be in (0, 1]"));
         }
         let quality = match self.batch_size_policy {
-            BatchSizePolicy::Auto => d <= 16,
+            BatchSizePolicy::Auto => d <= AUTO_QUALITY_MAX_DIMENSION,
             BatchSizePolicy::Quality => true,
             BatchSizePolicy::Throughput => false,
         };
         let batch_size = self.batch_size.map_or_else(
             || {
-                let coefficient = if quality { 0.00439175 } else { 0.035134 };
-                let raw = coefficient
-                    * (k as f64).powf(0.134749)
-                    * (n as f64).powf(0.876473)
-                    * (self.epochs as f64).powf(0.813344);
-                let cap = if quality {
-                    n / 2
+                let coefficient = if quality {
+                    BATCH_SIZE_QUALITY_COEFFICIENT
                 } else {
-                    round_power_of_two(n as f64 / 2.0)
+                    BATCH_SIZE_THROUGHPUT_COEFFICIENT
+                };
+                let raw = coefficient
+                    * (k as f64).powf(BATCH_SIZE_CLUSTER_EXPONENT)
+                    * (n as f64).powf(BATCH_SIZE_SAMPLE_EXPONENT)
+                    * (self.epochs as f64).powf(BATCH_SIZE_EPOCH_EXPONENT);
+                let cap = if quality {
+                    n / AUTO_BATCH_CAP_DIVISOR
+                } else {
+                    round_power_of_two(n as f64 / AUTO_BATCH_CAP_DIVISOR as f64)
                 };
                 round_power_of_two(raw).min(cap).clamp(1, n)
             },
             |b| b.min(n),
         );
         let initial_step_size = self.step_size.unwrap_or_else(|| {
-            (0.8244
-                * (k as f64).powf(-0.4617)
-                * (batch_size as f64).powf(0.9003)
-                * (n as f64).powf(-0.4498)
-                * (self.epochs as f64).powf(-0.1057))
-            .clamp(1e-4, 1.0)
+            (INITIAL_STEP_COEFFICIENT
+                * (k as f64).powf(INITIAL_STEP_CLUSTER_EXPONENT)
+                * (batch_size as f64).powf(INITIAL_STEP_BATCH_EXPONENT)
+                * (n as f64).powf(INITIAL_STEP_SAMPLE_EXPONENT)
+                * (self.epochs as f64).powf(INITIAL_STEP_EPOCH_EXPONENT))
+            .clamp(MIN_AUTO_STEP_SIZE, MAX_STEP_SIZE)
         });
         let total_updates = n
             .div_ceil(batch_size)
@@ -124,8 +168,8 @@ pub(super) fn scheduled_step_size(
     total_updates: usize,
 ) -> f64 {
     initial_step_size
-        * (0.1
-            + 0.45
+        * (COSINE_MIN_STEP_FACTOR
+            + COSINE_STEP_WEIGHT
                 * (1.0 + (std::f64::consts::PI * update_index as f64 / total_updates as f64).cos()))
 }
 

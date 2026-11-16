@@ -6,12 +6,24 @@
 use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
 use rand::{Rng, distr::Open01};
 
+// Revival defaults from the pinned Faiss recipe cited in config.rs.
+// Algorithm 1 checks every five mini-batch updates, not every five epochs.
+pub(super) const REVIVAL_CHECK_INTERVAL: usize = 5;
+// Faiss disables revival at d <= 2 because its low-dimensional ablations showed
+// worse held-out error when splitting was enabled there.
+pub(super) const REVIVAL_DISABLED_MAX_DIMENSION: usize = 2;
+// A cluster is underused when its EMA mass is below one tenth of the mean mass.
+const REVIVAL_MASS_FRACTION: f64 = 0.1;
+// Small, relative coordinate perturbations separate donor and child locally.
+// Keep this f32 to match the centroid arithmetic and the reference split rule.
+const SPLIT_PERTURBATION: f32 = 1e-4;
+
 pub(super) fn revive_underused_clusters(
     mut centers: rowmajor::Mut<'_, f32>,
     masses: &mut [f64],
     rng: &mut (impl Rng + ?Sized),
 ) -> usize {
-    let threshold = 0.1 * masses.iter().sum::<f64>() / masses.len() as f64;
+    let threshold = REVIVAL_MASS_FRACTION * masses.iter().sum::<f64>() / masses.len() as f64;
     let underused: Vec<_> = masses
         .iter()
         .enumerate()
@@ -39,9 +51,9 @@ pub(super) fn revive_underused_clusters(
         for coordinate in 0..centers.ncols() {
             let value = centers.row(source)[coordinate];
             let delta = if coordinate.is_multiple_of(2) {
-                1e-4
+                SPLIT_PERTURBATION
             } else {
-                -1e-4
+                -SPLIT_PERTURBATION
             };
             centers.row_mut(source)[coordinate] = value * (1.0 - delta);
             centers.row_mut(target)[coordinate] = value * (1.0 + delta);

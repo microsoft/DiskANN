@@ -7,6 +7,9 @@ use super::EmeansError;
 use crate::{algorithms::kmeans::lloyds::distances_in_place, multi_vector::BlockTransposed};
 use diskann_utils::{strided::Strided, views::rowmajor};
 
+// Required by lloyds::distances_in_place's transposed layout, not a tuning parameter.
+const ASSIGNMENT_BLOCK_ROWS: usize = 16;
+
 /// Batch nearest-center assignment, independent of e-means' centroid updates.
 ///
 /// The trainer supplies a contiguous batch even when its source data is strided.
@@ -26,7 +29,7 @@ pub trait Assignment {
 }
 
 pub(super) struct AssignmentBatch {
-    transpose: BlockTransposed<f32, 16>,
+    transpose: BlockTransposed<f32, ASSIGNMENT_BLOCK_ROWS>,
     norms: Vec<f32>,
 }
 
@@ -52,12 +55,12 @@ impl AssignmentBatch {
         for (block, rows) in self
             .transpose
             .as_mut_slice()
-            .chunks_mut(16 * d)
-            .zip(indices.chunks(16))
+            .chunks_mut(ASSIGNMENT_BLOCK_ROWS * d)
+            .zip(indices.chunks(ASSIGNMENT_BLOCK_ROWS))
         {
             for (lane, &index) in rows.iter().enumerate() {
                 for (coordinate, &value) in data.row(index).iter().enumerate() {
-                    block[16 * coordinate + lane] = value;
+                    block[ASSIGNMENT_BLOCK_ROWS * coordinate + lane] = value;
                 }
             }
         }
