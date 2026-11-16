@@ -9,7 +9,8 @@ use std::{
 };
 
 #[cfg(target_arch = "x86_64")]
-use diskann_wide::{SIMDMask, SIMDPartialOrd, SIMDVector};
+#[path = "queue_search.rs"]
+mod search;
 
 use super::Neighbor;
 
@@ -350,56 +351,7 @@ impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
     /// PERFORMANCE: This function is performance critical - please benchmark any changes
     #[cfg(target_arch = "x86_64")]
     fn get_lower_bound(&mut self, nbr: &Neighbor<I>) -> usize {
-        diskann_wide::alias!(f32s = f32x8);
-        let target = f32s::splat(diskann_wide::ARCH, nbr.distance);
-
-        let mut index = 0;
-
-        // Check 16 items at a time
-        while index + 16 <= self.size {
-            let search =
-                unsafe { f32s::load_simd(diskann_wide::ARCH, self.distances.as_ptr().add(index)) };
-            let offset1 = search.ge_simd(target).first();
-            let search = unsafe {
-                f32s::load_simd(diskann_wide::ARCH, self.distances.as_ptr().add(index + 8))
-            };
-            let offset2 = search.ge_simd(target).first();
-
-            match (offset1, offset2) {
-                (Some(offset), _) => return index + offset,
-                (None, Some(offset)) => return index + 8 + offset,
-                _ => (),
-            }
-
-            index += 16;
-        }
-
-        // Check the remaining items
-        if index + 8 <= self.size {
-            let search =
-                unsafe { f32s::load_simd(diskann_wide::ARCH, self.distances.as_ptr().add(index)) };
-            let offset = search.ge_simd(target).first();
-            if let Some(offset) = offset {
-                return index + offset;
-            }
-            index += 8;
-        }
-
-        if index < self.size {
-            let search = unsafe {
-                f32s::load_simd_first(
-                    diskann_wide::ARCH,
-                    self.distances.as_ptr().add(index),
-                    self.size - index,
-                )
-            };
-            let offset = search.ge_simd(target).first();
-            if let Some(offset) = offset {
-                return index + offset;
-            }
-        }
-
-        self.size
+        search::hybrid::<512>(&self.distances, nbr.distance)
     }
 
     /// Get the lower bound of the neighbor - the index of the first neighbor
@@ -765,6 +717,45 @@ mod neighbor_priority_queue_test {
     }
 
     #[test]
+    fn lower_bound_uses_filled_length_and_preserves_numeric_order() {
+        for size in [
+            0, 7, 8, 15, 16, 17, 127, 128, 129, 255, 256, 257, 511, 512, 513, 2000,
+        ] {
+            let mut queue = NeighborPriorityQueue::new(8192);
+            for id in 0..size {
+                let distance = match id {
+                    0 => f32::NEG_INFINITY,
+                    i if i + 1 == size => f32::INFINITY,
+                    i => (i / 3) as f32 - size as f32 / 6.0,
+                };
+                queue.insert(Neighbor::new(id, distance));
+            }
+            for _ in 0..size / 2 {
+                queue.closest_notvisited();
+            }
+            let before = queue.clone();
+            let mut targets = queue.distances.clone();
+            targets.extend([f32::NAN, f32::NEG_INFINITY, -0.0, 0.0, f32::INFINITY]);
+            for target in targets {
+                let expected = queue
+                    .distances
+                    .iter()
+                    .position(|distance| *distance >= target)
+                    .unwrap_or(size);
+                assert_eq!(
+                    queue.get_lower_bound(&Neighbor::new(size, target)),
+                    expected,
+                    "size={size}, target={target}"
+                );
+            }
+            if size > 0 {
+                assert!(!queue.remove(Neighbor::new(0, f32::NAN)));
+            }
+            assert_same_queue(&queue, &before);
+        }
+    }
+
+    #[test]
     fn batch_insert_matches_sequential_insertion() {
         let cases: &[(usize, usize, usize, &[f32])] = &[
             (16, 0, 0, &[2.0, 1.0]),
@@ -779,6 +770,9 @@ mod neighbor_priority_queue_test {
                 &[f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -0.0],
             ),
             (128, 128, 3, &[63.5, -1.0, 200.0]),
+            (512, 257, 129, &[128.0, -0.0, 128.0, f32::NAN]),
+            (512, 512, 300, &[255.5, -1.0, f32::INFINITY]),
+            (2000, 2000, 1000, &[1000.0, -1.0, 1000.0, 4000.0]),
         ];
         for resizable in [false, true] {
             for &(capacity, initial, visited, distances) in cases {

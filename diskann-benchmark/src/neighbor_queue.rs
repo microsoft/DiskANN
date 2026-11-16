@@ -18,8 +18,11 @@ use serde::{Deserialize, Serialize};
 
 type Queue = NeighborPriorityQueue<u32>;
 
+mod lookup;
+
 pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
     registry.register("neighbor-queue", QueueBenchmark)?;
+    lookup::register(registry)?;
     Ok(())
 }
 
@@ -201,6 +204,7 @@ struct CaseResult {
 #[derive(Debug, Serialize)]
 struct Sample {
     round: usize,
+    blocks: usize,
     first_method: Method,
     timings: Vec<Timing>,
 }
@@ -238,6 +242,7 @@ fn insert(queue: &mut Queue, buffer: &mut Vec<Neighbor<u32>>) {
 struct Fixture {
     base: Queue,
     queue: Queue,
+    reset_buffer: Vec<Neighbor<u32>>,
     input: Vec<Neighbor<u32>>,
     buffer: Vec<Neighbor<u32>>,
 }
@@ -245,9 +250,8 @@ struct Fixture {
 impl Fixture {
     fn reset(&mut self) {
         self.queue.clear();
-        for neighbor in self.base.iter() {
-            self.queue.insert(neighbor);
-        }
+        self.reset_buffer.extend(self.base.iter());
+        self.queue.batch_insert(&mut self.reset_buffer);
     }
 }
 
@@ -256,9 +260,8 @@ fn fixture(case: &Case, rng: &mut StdRng) -> Fixture {
     let offset = rng.random_range(0.0f32..0.25);
     let mut base = Queue::new(capacity);
     let neighbor = |i| Neighbor::new(i as u32, offset + 1.0 + (i + 1) as f32 / capacity as f32);
-    for i in 0..case.initial_size {
-        base.insert(neighbor(i));
-    }
+    let mut reset_buffer = (0..case.initial_size).map(neighbor).collect();
+    base.batch_insert(&mut reset_buffer);
 
     let best = base.iter().next().map_or(offset + 1.0, |n| *n.distance());
     let worst = base.iter().last().map_or(offset + 2.0, |n| *n.distance());
@@ -287,6 +290,7 @@ fn fixture(case: &Case, rng: &mut StdRng) -> Fixture {
     }
     Fixture {
         queue: Queue::new(capacity),
+        reset_buffer,
         buffer: Vec::with_capacity(case.input_size),
         base,
         input,
@@ -360,9 +364,11 @@ fn verify(f: &Fixture) -> anyhow::Result<[usize; 4]> {
             .eq(expected.iter().map(|(_, d)| *d)),
         "scalar work model disagrees with production queue"
     );
+    // Fixture IDs occupy disjoint consecutive ranges.
+    let first_new_id = f.base.size() as u32;
     let new_entries = expected
         .iter()
-        .filter(|(id, _)| candidates.iter().any(|n| n.id() == id))
+        .filter(|(id, _)| *id >= first_new_id)
         .count();
     Ok([survivors, admissions, moves, new_entries])
 }
@@ -406,6 +412,17 @@ fn run_case(
             *total += count;
         }
     }
+    // Bound large-N/L experiments using the untimed scalar work model.
+    // Every executable uses the same fixtures, hence the same repetition count.
+    let final_size = case
+        .capacity
+        .get()
+        .min(case.initial_size.saturating_add(case.input_size));
+    let scalar_work = work[2].saturating_add(work[1].saturating_mul(final_size / 16));
+    let blocks = input
+        .blocks_per_sample
+        .get()
+        .min((1_000_000 / scalar_work.max(1)).max(1));
     // Warm up all paths, including allocation, outside recorded samples.
     for method in METHODS {
         measure(&mut fixtures, 1, |q, b| method.update(q, b));
@@ -416,7 +433,6 @@ fn run_case(
         let mut timings = Vec::with_capacity(METHODS.len());
         for offset in 0..METHODS.len() {
             let method = METHODS[(first + offset) % METHODS.len()];
-            let blocks = input.blocks_per_sample.get();
             // Dispatch outside the timed loop so each method can inline its update.
             let ns_per_update = match method {
                 Method::Insert => measure(&mut fixtures, blocks, insert),
@@ -429,6 +445,7 @@ fn run_case(
         }
         samples.push(Sample {
             round,
+            blocks,
             first_method: METHODS[first],
             timings,
         });
@@ -483,6 +500,30 @@ mod tests {
                         }
                     }
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn untimed_reset_restores_the_fixture_before_each_update() {
+        let mut rng = StdRng::seed_from_u64(42);
+        for initial_size in [0, 10, 20] {
+            let case = Case {
+                capacity: NonZeroUsize::new(20).unwrap(),
+                initial_size,
+                input_size: 8,
+                initial_cutoff_survivors: 8,
+                placement: Placement::Uniform,
+                order: Order::Shuffled,
+            };
+            let mut f = fixture(&case, &mut rng);
+            for _ in 0..3 {
+                f.reset();
+                assert_eq!(contents(&f.queue), contents(&f.base));
+                assert_eq!(unvisited(&mut f.queue), unvisited(&mut f.base.clone()));
+                assert!(f.reset_buffer.is_empty());
+                f.buffer.extend_from_slice(&f.input);
+                f.queue.batch_insert(&mut f.buffer);
             }
         }
     }
@@ -561,11 +602,36 @@ mod tests {
     }
 
     #[test]
+    fn large_updates_bound_repetitions_and_record_actual_blocks() {
+        let mut input = QueueInput::example();
+        input.samples = NonZeroUsize::new(1).unwrap();
+        input.queues_per_sample = NonZeroUsize::new(1).unwrap();
+        input.blocks_per_sample = NonZeroUsize::new(100).unwrap();
+        input.cases[0] = Case {
+            capacity: NonZeroUsize::new(128).unwrap(),
+            initial_size: 128,
+            input_size: 2000,
+            initial_cutoff_survivors: 2000,
+            placement: Placement::Head,
+            order: Order::Descending,
+        };
+        let mut rng = StdRng::seed_from_u64(input.seed);
+        let result = run_case(&input, &input.cases[0], 0, &mut rng).unwrap();
+        assert!(result.samples[0].blocks > 0);
+        assert!(result.samples[0].blocks < input.blocks_per_sample.get());
+        assert!(result.samples[0]
+            .timings
+            .iter()
+            .all(|t| t.ns_per_update > 0.0));
+    }
+
+    #[test]
     fn cutoff_work_counts_and_measurement_output() {
         let mut input = QueueInput::example();
         input.samples = NonZeroUsize::new(3).unwrap();
-        input.queues_per_sample = NonZeroUsize::new(2).unwrap();
-        input.blocks_per_sample = NonZeroUsize::new(1).unwrap();
+        // Keep the reject-only interval above Windows timer granularity.
+        input.queues_per_sample = NonZeroUsize::new(64).unwrap();
+        input.blocks_per_sample = NonZeroUsize::new(2).unwrap();
         input.cases[0].initial_cutoff_survivors = 0;
         let mut rng = StdRng::seed_from_u64(input.seed);
         let result = run_case(&input, &input.cases[0], 0, &mut rng).unwrap();

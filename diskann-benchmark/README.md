@@ -39,8 +39,28 @@ replication and reproducibility rather than workload semantics. See the
 [benchmark source](src/neighbor_queue.rs) for validation and measurement details. Results
 are warm-data microbenchmarks, not end-to-end search measurements.
 
+`blocks_per_sample` is a ceiling: high-work cases use fewer blocks according to the
+untimed scalar work model, with the actual count recorded in each sample. This keeps
+large-N/L experiments bounded and uses the same repetition count for all executables
+given identical fixtures.
+
 The [CI workflow](../.github/workflows/neighbor-queue-benchmark.yml) publishes results
 and raw samples from shared Linux and Windows runners.
+
+For insertion-point experiments, the `neighbor-queue-lookup` input measures the private
+lookup kernels directly: the existing SIMD scan on x86-64 (scalar scan elsewhere),
+binary search, and length-based hybrids with bounded linear prefixes. The linear kernel
+reproduces the production scan; the experimental kernels stay private to the benchmark,
+without exposing queue internals as public API. Generate its input
+with `inputs neighbor-queue-lookup`. The input controls actual filled `lengths`, independent
+fixture count, seed, samples, and repetitions. Each lookup result is consumed by `black_box`.
+Head, middle, tail, random, equal-distance, and beyond-tail probes are recorded separately.
+Kernels rotate measurement order within each process.
+
+Use the complete `neighbor-queue` update benchmark as the acceptance criterion: lookup-only
+speedups can disappear behind shifting or batch sorting/merging. Its reset uses an untimed
+batch to restore the same initial queue without quadratic per-item setup. Neither benchmark
+establishes a hardware-independent crossover or measures end-to-end search.
 
 ### Input files
 
@@ -212,6 +232,36 @@ Any number of inputs can be used.
   for benchmarking later.
 
 ### Finding Benchmarks
+
+#### Queue insertion-search experiments
+
+The private `neighbor-queue-lookup` kernels compare SIMD linear scan, binary search,
+and filled-length hybrids. The stacked-PR
+[workflow](../.github/workflows/queue-search-benchmark.yml) uses
+[the experiment driver](../.github/scripts/benchmark_queue_search.py) to build the
+exact base implementation and each candidate before any timing starts. The original
+`neighbor-queue.json` example is unchanged.
+
+The artifact includes source snapshots, executable hashes and binaries, verbose
+build flags, generated inputs, exact commands, raw samples, and per-process
+comparisons. Lookup results consume the returned insertion index. Full `insert`
+and `batch_insert` measurements reuse the same fixtures and untimed reset, and
+report actual repetition counts. Candidate variants also run the queue regression
+tests. The experimental binary/hybrid variants apply on all runner architectures;
+the checked-in production strategy leaves the non-x86 path unchanged.
+
+Run the driver's `build`, `run`, and `summarize` operations in that order, passing
+`--output <artifact-directory>` to each and `--base <fixed-base-SHA>` to `build`.
+The fixed input matrix, seeds, populations, and process order are defined in the
+driver. Do not run builds or other benchmarks during `run`. Compilation temporarily
+selects a private search implementation and restores the working file on exit;
+it does not add production configuration or a public API.
+
+Each population and seed has three independent processes and nine rounds. The
+report's repeatability screen requires the same direction in all paired repeats
+and an effect larger than the observed relative process range. It is not a
+confidence interval or an end-to-end ANN score. Hosted CI is not presumed to be
+quieter than local hardware, and a crossover is not assumed to transfer across CPUs.
 
 Registered benchmarks are queries using the following.
 ```sh
