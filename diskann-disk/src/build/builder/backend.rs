@@ -7,6 +7,8 @@
 
 use std::num::NonZeroUsize;
 
+#[cfg(feature = "pipnn")]
+use diskann::graph::pipnn::Element;
 use diskann::{ANNError, ANNResult, utils::VectorRepr};
 use diskann_inmem::{self as di, repr::quantized};
 use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
@@ -68,7 +70,7 @@ pub trait BuildElement: std::fmt::Debug + Sized + Send + Sync + 'static {
 
 /// Build-compatible elements with PiPNN row conversion and distance support.
 #[cfg(feature = "pipnn")]
-pub trait BuildElement: diskann::graph::pipnn::Element {
+pub trait BuildElement: Element {
     fn backend<P>(
         quantization: &QuantizationType,
         index_path_prefix: &str,
