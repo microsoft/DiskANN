@@ -63,6 +63,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Validate checked-in implementation and benchmark
         run: |
+          rustup component add rustfmt clippy
           python .github/scripts/test_benchmark_queue_search.py
           cargo fmt --all -- --check
           cargo test --locked --release -p diskann-benchmark neighbor_queue
