@@ -25,10 +25,11 @@ use crate::{
 pub(super) fn register_benchmarks(registry: &mut dbr::Registry) -> anyhow::Result<()> {
     registry.register_regression(
         "inmem2-f32",
-        RunBuildAndSearch::<f32>::new(Some(save_provider)),
+        RunBuildSearchAndSave::<f32>::new(Some(save_provider)),
     )?;
-    registry.register_regression("inmem2-f16", RunBuildAndSearch::<half::f16>::new(None))?;
-    registry.register_regression("inmem2-u8", RunBuildAndSearch::<u8>::new(None))?;
+    // Persistence only for f32; f16 and u8 can come in a future PR with other save impls
+    registry.register_regression("inmem2-f16", RunBuildSearchAndSave::<half::f16>::new(None))?;
+    registry.register_regression("inmem2-u8", RunBuildSearchAndSave::<u8>::new(None))?;
 
     registry.register("inmem2-f32-search", RunLoadAndSearch)?;
     registry.register("inmem2-f32-stream", RunStream::<f32>::new())?;
@@ -46,21 +47,20 @@ mod dto {
 
     #[derive(Debug, Serialize, Deserialize)]
     #[serde(deny_unknown_fields)]
-    pub(super) struct BuildAndSearch {
+    pub(super) struct BuildSearchAndSave {
         pub(super) data: inmem2::common::dto::Data,
         pub(super) build: inmem2::benchmark::build::dto::Config,
         pub(super) search: inmem2::benchmark::knn::dto::Knn,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub(super) save_path: Option<PathBuf>,
+        pub(super) save_path: PathBuf,
     }
 
-    impl BuildAndSearch {
+    impl BuildSearchAndSave {
         pub(super) fn example() -> Self {
             Self {
                 data: inmem2::common::dto::Data::example(),
                 build: inmem2::benchmark::build::dto::Config::example(),
                 search: inmem2::benchmark::knn::dto::Knn::example(),
-                save_path: None,
+                save_path: PathBuf::new(),
             }
         }
     }
@@ -85,28 +85,28 @@ mod dto {
     }
 }
 
-//--------------//
-// Static Build //
-//--------------//
+//-------------------//
+// Build/Search/Save //
+//-------------------//
 
 #[derive(Debug)]
-struct BuildAndSearch {
+struct BuildSearchAndSave {
     data: inmem2::common::Data,
     build: inmem2::benchmark::build::Config,
     search: inmem2::benchmark::knn::Knn,
-    save_path: Option<PathBuf>,
+    save_path: PathBuf,
     // The raw input.
     raw: serde_json::Value,
 }
 
-impl FromRawWith for BuildAndSearch {
-    type Raw = dto::BuildAndSearch;
+impl FromRawWith for BuildSearchAndSave {
+    type Raw = dto::BuildSearchAndSave;
 
     fn from_raw_with(
-        raw: &dto::BuildAndSearch,
+        raw: &dto::BuildSearchAndSave,
         mut checker: Option<&mut dbr::Checker>,
     ) -> anyhow::Result<Self> {
-        let dto::BuildAndSearch {
+        let dto::BuildSearchAndSave {
             data,
             build,
             search,
@@ -115,20 +115,20 @@ impl FromRawWith for BuildAndSearch {
 
         let data = inmem2::common::Data::from_raw_with(data, checker.as_deref_mut())?;
         let build = inmem2::benchmark::build::Config::from_raw(build, data.distance())?;
-        let save_path = if let Some(path) = save_path {
+        let save_path = if save_path.as_os_str().is_empty() {
+            PathBuf::new()
+        } else {
             anyhow::ensure!(
                 data.data_type() == dbr::utils::datatype::DataType::Float32,
                 "inmem2 persistence currently supports only float32 vectors",
             );
-            let filename = path
+            let filename = save_path
                 .file_name()
                 .ok_or_else(|| anyhow::anyhow!("save_path must name a manifest file"))?;
-            Some(match checker.as_deref_mut() {
-                Some(checker) => checker.register_output(path.parent())?.join(filename),
-                None => path.clone(),
-            })
-        } else {
-            None
+            match checker.as_deref_mut() {
+                Some(checker) => checker.register_output(save_path.parent())?.join(filename),
+                None => save_path.clone(),
+            }
         };
         let search = inmem2::benchmark::knn::Knn::from_raw_with(search, checker)?;
 
@@ -142,7 +142,7 @@ impl FromRawWith for BuildAndSearch {
     }
 }
 
-impl std::fmt::Display for BuildAndSearch {
+impl std::fmt::Display for BuildSearchAndSave {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let Self {
             data,
@@ -155,16 +155,16 @@ impl std::fmt::Display for BuildAndSearch {
         kv.push("data", &data);
         kv.push("build", &build);
         kv.push("search", &search);
-        let save_path = save_path.as_ref().map(|path| path.display());
-        if let Some(save_path) = &save_path {
-            kv.push("save_path", save_path);
+        let formatted_save_path = save_path.display();
+        if !save_path.as_os_str().is_empty() {
+            kv.push("save_path", &formatted_save_path);
         }
         write!(f, "{}", kv)
     }
 }
 
-impl dbr::Input for BuildAndSearch {
-    type Raw = dto::BuildAndSearch;
+impl dbr::Input for BuildSearchAndSave {
+    type Raw = dto::BuildSearchAndSave;
     fn tag() -> &'static str {
         "inmem2-fp-static"
     }
@@ -199,26 +199,26 @@ fn save_provider(
 }
 
 #[derive(Debug)]
-struct RunBuildAndSearch<T: 'static> {
+struct RunBuildSearchAndSave<T: 'static> {
     save: Option<SaveProvider<T>>,
 }
 
-impl<T: 'static> RunBuildAndSearch<T> {
+impl<T: 'static> RunBuildSearchAndSave<T> {
     fn new(save: Option<SaveProvider<T>>) -> Self {
         Self { save }
     }
 }
 
-impl<T> dbr::Benchmark for RunBuildAndSearch<T>
+impl<T> dbr::Benchmark for RunBuildSearchAndSave<T>
 where
     T: di::repr::FullPrecision + diskann::graph::SampleableForStart + AsDataType,
 {
-    type Input = BuildAndSearch;
+    type Input = BuildSearchAndSave;
     type Output = inmem2::benchmark::BuildAndSearchStats;
 
     fn try_match(
         &self,
-        input: &BuildAndSearch,
+        input: &BuildSearchAndSave,
         context: &dbr::benchmark::MatchContext,
     ) -> dbr::benchmark::Score {
         let mut score = context.success(0);
@@ -229,7 +229,7 @@ where
     fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "full-precision static build+search with data type {}",
+            "full-precision static build+search+save with data type {}",
             Quote(T::DATA_TYPE)
         )?;
 
@@ -238,7 +238,7 @@ where
 
     fn run(
         &self,
-        input: &BuildAndSearch,
+        input: &BuildSearchAndSave,
         _checkpoint: dbr::Checkpoint<'_>,
         mut output: &mut dyn dbr::Output,
     ) -> anyhow::Result<Self::Output> {
@@ -259,12 +259,12 @@ where
         let provider = di::Provider::<_, u32>::new(config)?;
         let engine = input.build.engine(provider)?;
         let build = engine.build(data, Some(output))?;
-        if let Some(path) = &input.save_path {
+        if !input.save_path.as_os_str().is_empty() {
             let save = self
                 .save
                 .ok_or_else(|| anyhow::anyhow!("saving this data type is not supported"))?;
-            save(engine.index().provider(), path)?;
-            writeln!(output, "Saved provider to {}", path.display())?;
+            save(engine.index().provider(), &input.save_path)?;
+            writeln!(output, "Saved provider to {}", input.save_path.display())?;
         }
         let search = input
             .search
@@ -274,7 +274,7 @@ where
     }
 }
 
-impl<T> dbr::benchmark::Regression for RunBuildAndSearch<T>
+impl<T> dbr::benchmark::Regression for RunBuildSearchAndSave<T>
 where
     T: di::repr::FullPrecision + diskann::graph::SampleableForStart + AsDataType,
 {
@@ -569,7 +569,9 @@ mod tests {
 
     #[test]
     fn test_example_parses() {
-        assert!(BuildAndSearch::from_raw_with(&dto::BuildAndSearch::example(), None,).is_ok());
+        assert!(
+            BuildSearchAndSave::from_raw_with(&dto::BuildSearchAndSave::example(), None,).is_ok()
+        );
         assert!(LoadAndSearch::from_raw_with(&dto::LoadAndSearch::example(), None).is_ok());
         let example: serde_json::Value = serde_json::from_str(include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -581,24 +583,26 @@ mod tests {
     }
 
     #[test]
-    fn test_save_path_is_optional_and_float32_only() {
-        let mut raw = dto::BuildAndSearch::example();
-        let json = serde_json::to_value(&raw).unwrap();
-        assert!(json.get("save_path").is_none());
-        assert!(serde_json::from_value::<dto::BuildAndSearch>(json)
-            .unwrap()
-            .save_path
-            .is_none());
-        raw.save_path = Some("index.json".into());
-        assert!(BuildAndSearch::from_raw_with(&raw, None).is_ok());
+    fn test_save_path_is_required_and_float32_only() {
+        let mut json = serde_json::to_value(dto::BuildSearchAndSave::example()).unwrap();
+        assert_eq!(json["save_path"], "");
+
+        let mut missing = json.clone();
+        missing.as_object_mut().unwrap().remove("save_path");
+        assert!(serde_json::from_value::<dto::BuildSearchAndSave>(missing).is_err());
+
         for data_type in [
             dbr::utils::datatype::DataType::Float16,
             dbr::utils::datatype::DataType::UInt8,
         ] {
-            let mut json = serde_json::to_value(&raw).unwrap();
             json["data"]["data_type"] = serde_json::to_value(data_type).unwrap();
-            let raw = serde_json::from_value(json).unwrap();
-            assert!(BuildAndSearch::from_raw_with(&raw, None).is_err());
+            let raw = serde_json::from_value(json.clone()).unwrap();
+            assert!(BuildSearchAndSave::from_raw_with(&raw, None).is_ok());
+
+            json["save_path"] = serde_json::json!("index.json");
+            let raw = serde_json::from_value(json.clone()).unwrap();
+            assert!(BuildSearchAndSave::from_raw_with(&raw, None).is_err());
+            json["save_path"] = serde_json::json!("");
         }
     }
 }
