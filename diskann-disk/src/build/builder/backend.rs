@@ -15,7 +15,7 @@ use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::{
     common::MinMaxElement,
     index::diskann_async::train_pq,
-    model::{IndexConfiguration, MAX_PQ_TRAINING_SET_SIZE},
+    model::MAX_PQ_TRAINING_SET_SIZE,
     storage::{PQStorage, SQStorage},
     utils::{BridgeErr, PQPathNames, create_thread_pool, gen_random_slice},
 };
@@ -26,12 +26,14 @@ use diskann_quantization::{
     spherical::{PreScale, SphericalQuantizer, SupportedMetric},
 };
 use diskann_utils::views::rowmajor;
+use diskann_vector::distance::Metric;
 use tracing::info;
 
 use crate::{
     QuantizationType, SphericalBits,
     build::builder::inmem_builder::{self, CreateBuilder},
     error::{ErrorKind, diskann_error},
+    storage::DiskIndexWriter,
 };
 
 /// Backend build compatibility for "full precision" element types.
@@ -47,7 +49,7 @@ use crate::{
 ///
 /// # Side Effects
 ///
-/// Training data will be pulled from `data_path` and interpreted with `Self` as the element
+/// Training data will be pulled from the writer's dataset file and interpreted with `Self` as the element
 /// type.
 ///
 /// There are occasionaly side-effects as a result of training depending on `quantization`.
@@ -59,9 +61,11 @@ use crate::{
 pub trait BuildElement: std::fmt::Debug + Sized + Send + Sync + 'static {
     fn backend<P>(
         quantization: &QuantizationType,
-        index_path_prefix: &str,
-        index_configuration: &IndexConfiguration,
-        data_path: &str,
+        metric: Metric,
+        num_threads: usize,
+        seed: Option<u64>,
+        num_points: usize,
+        writer: &DiskIndexWriter,
         storage_provider: &P,
     ) -> ANNResult<Backend<Self>>
     where
@@ -73,9 +77,11 @@ pub trait BuildElement: std::fmt::Debug + Sized + Send + Sync + 'static {
 pub trait BuildElement: Element {
     fn backend<P>(
         quantization: &QuantizationType,
-        index_path_prefix: &str,
-        index_configuration: &IndexConfiguration,
-        data_path: &str,
+        metric: Metric,
+        num_threads: usize,
+        seed: Option<u64>,
+        num_points: usize,
+        writer: &DiskIndexWriter,
         storage_provider: &P,
     ) -> ANNResult<Backend<Self>>
     where
@@ -92,9 +98,11 @@ impl<T> Backend<T> {
     /// Construct a new [`Backend`] using [`BuildElement`].
     pub fn new<P>(
         quantization: &QuantizationType,
-        index_path_prefix: &str,
-        index_configuration: &IndexConfiguration,
-        data_path: &str,
+        metric: Metric,
+        num_threads: usize,
+        seed: Option<u64>,
+        num_points: usize,
+        writer: &DiskIndexWriter,
         storage_provider: &P,
     ) -> ANNResult<Self>
     where
@@ -103,9 +111,11 @@ impl<T> Backend<T> {
     {
         T::backend(
             quantization,
-            index_path_prefix,
-            index_configuration,
-            data_path,
+            metric,
+            num_threads,
+            seed,
+            num_points,
+            writer,
             storage_provider,
         )
     }
@@ -143,18 +153,22 @@ macro_rules! full_precision {
         impl BuildElement for $T {
             fn backend<P>(
                 quantization: &QuantizationType,
-                index_path_prefix: &str,
-                index_configuration: &IndexConfiguration,
-                data_path: &str,
+                metric: Metric,
+                num_threads: usize,
+                seed: Option<u64>,
+                num_points: usize,
+                writer: &DiskIndexWriter,
                 storage_provider: &P,
             ) -> ANNResult<Backend<$T>>
             where
                 P: StorageReadProvider + StorageWriteProvider {
                 full_precision::<$T, _>(
                     quantization,
-                    index_path_prefix,
-                    index_configuration,
-                    data_path,
+                    metric,
+                    num_threads,
+                    seed,
+                    num_points,
+                    writer,
                     storage_provider,
                 )
             }
@@ -169,9 +183,11 @@ full_precision!(f32, half::f16, u8, i8);
 
 fn full_precision<T, P>(
     quantization: &QuantizationType,
-    index_path_prefix: &str,
-    index_configuration: &IndexConfiguration,
-    data_path: &str,
+    metric: Metric,
+    num_threads: usize,
+    seed: Option<u64>,
+    num_points: usize,
+    writer: &DiskIndexWriter,
     storage_provider: &P,
 ) -> ANNResult<Backend<T>>
 where
@@ -180,14 +196,16 @@ where
 {
     match train_quantizer::<T, _>(
         quantization,
-        index_path_prefix,
-        index_configuration,
-        data_path,
+        metric,
+        num_threads,
+        seed,
+        num_points,
+        writer,
         storage_provider,
     )? {
         Some(backend) => Ok(backend),
         None => Ok(Backend::from_factory(inmem_builder::FullPrecision::new(
-            index_configuration.dist_metric,
+            metric,
         ))),
     }
 }
@@ -202,9 +220,11 @@ where
 {
     fn backend<P>(
         quantization: &QuantizationType,
-        index_path_prefix: &str,
-        index_configuration: &IndexConfiguration,
-        data_path: &str,
+        metric: Metric,
+        num_threads: usize,
+        seed: Option<u64>,
+        num_points: usize,
+        writer: &DiskIndexWriter,
         storage_provider: &P,
     ) -> ANNResult<Backend<Self>>
     where
@@ -212,9 +232,11 @@ where
     {
         match train_quantizer::<Self, _>(
             quantization,
-            index_path_prefix,
-            index_configuration,
-            data_path,
+            metric,
+            num_threads,
+            seed,
+            num_points,
+            writer,
             storage_provider,
         )? {
             Some(backend) => Ok(backend),
@@ -293,39 +315,41 @@ impl inmem_builder::QuantizedBackend for Product {
 /// Returns `None` if `quantization` is [`QuantizationType::FP`].
 fn train_quantizer<T, StorageProvider>(
     quantization: &QuantizationType,
-    index_path_prefix: &str,
-    index_configuration: &IndexConfiguration,
-    data_path: &str,
+    metric: Metric,
+    num_threads: usize,
+    seed: Option<u64>,
+    num_points: usize,
+    writer: &DiskIndexWriter,
     storage_provider: &StorageProvider,
 ) -> ANNResult<Option<Backend<T>>>
 where
     T: VectorRepr,
     StorageProvider: StorageReadProvider + StorageWriteProvider,
 {
-    let num_points = index_configuration.max_points;
+    let data_path = writer.get_dataset_file();
+    let index_path_prefix = writer.get_index_path_prefix();
     let p_val = MAX_PQ_TRAINING_SET_SIZE / (num_points as f64);
     match *quantization {
         QuantizationType::FP => Ok(None),
         QuantizationType::PQ { num_chunks } => {
             let table = {
                 //generate pq pivots.
-                let seed = index_configuration.random_seed;
                 let mut rnd =
                     diskann_providers::utils::create_rnd_provider_from_optional_seed(seed)
                         .create_rnd();
                 let (train_data, train_size, train_dim) =
-                    gen_random_slice::<T, _>(data_path, p_val, storage_provider, &mut rnd)?;
+                    gen_random_slice::<T, _>(&data_path, p_val, storage_provider, &mut rnd)?;
                 train_pq(
                     rowmajor::Ref::try_from_data(&train_data, train_size, train_dim)
                         .bridge_err()?,
                     num_chunks,
                     &mut rnd,
-                    create_thread_pool(index_configuration.num_threads)?.as_ref(),
+                    create_thread_pool(num_threads)?.as_ref(),
                 )?
             };
             // The compressed data path and pivots path are derived from the index prefix.
             // are different than the ones used in quant vector generation.
-            let pq_paths = PQPathNames::new(index_path_prefix);
+            let pq_paths = PQPathNames::new(&index_path_prefix);
             let pq_build_storage =
                 PQStorage::new(&pq_paths.pivots, &pq_paths.compressed_data, None);
             pq_build_storage.write_pivot_data(
@@ -337,14 +361,10 @@ where
                 storage_provider,
             )?;
 
-            let metric = index_configuration.dist_metric;
             let quantizer =
                 quantized::product::Product::new(table.into_table(), metric.into(), None)?;
 
-            let backend = Product::new(
-                quantizer,
-                NonZeroUsize::new(index_configuration.num_threads),
-            );
+            let backend = Product::new(quantizer, NonZeroUsize::new(num_threads));
 
             Ok(Some(Backend::from_factory(inmem_builder::Quantized::new(
                 backend,
@@ -360,11 +380,9 @@ where
                     "SQ quantization is only supported for 1 bit",
                 ));
             }
-            let rng = diskann_providers::utils::create_rnd_provider_from_optional_seed(
-                index_configuration.random_seed,
-            );
+            let rng = diskann_providers::utils::create_rnd_provider_from_optional_seed(seed);
             let (train_data_vector, train_size, train_dim) = gen_random_slice::<T, _>(
-                data_path,
+                &data_path,
                 p_val,
                 storage_provider,
                 &mut rng.create_rnd(),
@@ -382,27 +400,21 @@ where
             );
 
             info!("Now quantizer is trained and saving to file");
-            let sq_storage = SQStorage::new(index_path_prefix);
+            let sq_storage = SQStorage::new(&index_path_prefix);
             sq_storage.save_quantizer(&quantizer, storage_provider)?;
 
-            let quantizer = quantized::scalar::Scalar::<1>::new(
-                quantizer,
-                index_configuration.dist_metric.try_into()?,
-            );
+            let quantizer = quantized::scalar::Scalar::<1>::new(quantizer, metric.try_into()?);
 
             Ok(Some(Backend::from_factory(inmem_builder::Quantized::new(
                 quantizer,
             ))))
         }
         QuantizationType::Spherical(SphericalBits::One) => {
-            let metric: SupportedMetric =
-                index_configuration.dist_metric.try_into().bridge_err()?;
-            let rng = diskann_providers::utils::create_rnd_provider_from_optional_seed(
-                index_configuration.random_seed,
-            );
+            let metric: SupportedMetric = metric.try_into().bridge_err()?;
+            let rng = diskann_providers::utils::create_rnd_provider_from_optional_seed(seed);
             let mut rnd = rng.create_rnd();
             let (train_data, train_size, train_dim) =
-                gen_random_slice::<T, _>(data_path, p_val, storage_provider, &mut rnd)?;
+                gen_random_slice::<T, _>(&data_path, p_val, storage_provider, &mut rnd)?;
             let train_data =
                 rowmajor::Ref::try_from_data(&train_data, train_size, train_dim).bridge_err()?;
             let quantizer = SphericalQuantizer::train(

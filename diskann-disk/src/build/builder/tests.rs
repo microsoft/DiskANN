@@ -279,12 +279,10 @@ mod disk_index_build_tests {
                     configuration::{DiskIndexBuildConfig, GraphBuildConfig, NumPQChunks},
                 };
                 use crate::storage::DiskIndexWriter;
-                use diskann_providers::utils::load_metadata_from_file;
                 use std::num::NonZeroUsize;
 
                 let params = &fixture.params;
                 let storage = fixture.storage_provider.as_ref();
-                let metadata = load_metadata_from_file(storage, &params.data_path)?;
                 let graph = diskann::graph::pipnn::Config::builder(
                     NonZeroUsize::new(params.max_degree as usize).unwrap(),
                 )
@@ -294,8 +292,6 @@ mod disk_index_build_tests {
                 .build()?;
                 let mut config = DiskIndexBuildConfig::new(
                     params.metric,
-                    params.dim,
-                    metadata.npoints(),
                     params.num_threads,
                     NumPQChunks::new_with(params.num_pq_chunks, params.full_dim)?,
                     GraphBuildConfig::Pipnn(graph),

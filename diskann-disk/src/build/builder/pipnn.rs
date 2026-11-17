@@ -20,19 +20,18 @@ use diskann_providers::{
     utils::RayonThreadPoolRef,
 };
 use diskann_utils::{io::read_bin, views::rowmajor::Matrix};
+use diskann_vector::distance::Metric;
 
 use super::build::start_point_from_medoid;
-use crate::{
-    build::configuration::DiskIndexBuildConfig,
-    error::{ErrorKind, diskann_error},
-};
+use crate::error::{ErrorKind, diskann_error};
 
 /// Build the PiPNN graph of the dataset at `data_path` and write it to
 /// `save_path` as an in-memory index file.
 ///
 /// The start point is the medoid of a storage sample, as in the Vamana build.
 pub(super) fn build_inmem_index<T, StorageProvider>(
-    index_configuration: &DiskIndexBuildConfig,
+    metric: Metric,
+    seed: Option<u64>,
     config: &pipnn::Config,
     data_path: &str,
     save_path: &str,
@@ -43,16 +42,8 @@ where
     T: VectorRepr + pipnn::Element,
     StorageProvider: StorageReadProvider + StorageWriteProvider,
 {
-    let start_point =
-        start_point_from_medoid::<T, _>(data_path, index_configuration.seed, storage_provider)?
-            .id();
-    let graph = build_graph::<T, _>(
-        index_configuration,
-        config,
-        data_path,
-        storage_provider,
-        pool,
-    )?;
+    let start_point = start_point_from_medoid::<T, _>(data_path, seed, storage_provider)?.id();
+    let graph = build_graph::<T, _>(metric, config, data_path, storage_provider, pool)?;
     save_graph(&graph, config, start_point, save_path, storage_provider)
 }
 
@@ -61,7 +52,7 @@ where
 /// The dataset is dropped on return, so only the graph stays in memory while
 /// it is written.
 fn build_graph<T, StorageProvider>(
-    index_configuration: &DiskIndexBuildConfig,
+    metric: Metric,
     config: &pipnn::Config,
     data_path: &str,
     storage_provider: &StorageProvider,
@@ -72,19 +63,7 @@ where
     StorageProvider: StorageReadProvider,
 {
     let data = read_bin::<T>(&mut storage_provider.open_reader(data_path)?)?;
-    // PiPNN builds one graph row for each dataset row. The other build steps
-    // size their work by the index configuration, so the shapes must agree.
-    let (points, dimensions) = (data.nrows(), data.ncols());
-    if (points, dimensions) != (index_configuration.num_points, index_configuration.dim) {
-        return Err(diskann_error!(
-            ErrorKind::IndexError,
-            "the dataset has {points} points of {dimensions} dimensions, but the index \
-             configuration has {} points of {} dimensions",
-            index_configuration.num_points,
-            index_configuration.dim
-        ));
-    }
-    let rows = pipnn::Rows::new(data.as_view(), index_configuration.metric)?;
+    let rows = pipnn::Rows::new(data.as_view(), metric)?;
     pool.install(|| pipnn::build_graph(&rows, config))
 }
 
@@ -143,24 +122,11 @@ mod tests {
     use vfs::MemoryFS;
 
     use super::*;
-    use crate::build::configuration::{GraphBuildConfig, NumPQChunks};
 
     const DATA: &str = "/data.fbin";
     const GRAPH: &str = "/graph";
     const DEGREE: usize = 32;
     const SEED: u64 = 42;
-
-    fn common_configuration(points: usize, dimensions: usize) -> DiskIndexBuildConfig {
-        DiskIndexBuildConfig::new(
-            Metric::L2,
-            dimensions,
-            points,
-            1,
-            NumPQChunks::new_with(1, dimensions).unwrap(),
-            GraphBuildConfig::Pipnn(pipnn_config()),
-        )
-        .with_seed(SEED)
-    }
 
     fn pipnn_config() -> pipnn::Config {
         pipnn::Config::builder(std::num::NonZeroUsize::new(DEGREE).unwrap())
@@ -182,13 +148,11 @@ mod tests {
         storage
     }
 
-    fn build(
-        storage: &VirtualStorageProvider<MemoryFS>,
-        index_configuration: &DiskIndexBuildConfig,
-    ) -> ANNResult<()> {
+    fn build(storage: &VirtualStorageProvider<MemoryFS>) -> ANNResult<()> {
         let pool = create_thread_pool(1)?;
         build_inmem_index::<f32, _>(
-            index_configuration,
+            Metric::L2,
+            Some(SEED),
             &pipnn_config(),
             DATA,
             GRAPH,
@@ -198,23 +162,11 @@ mod tests {
     }
 
     #[test]
-    fn build_rejects_a_dataset_that_does_not_match_the_configuration() {
-        let (points, dimensions) = (2, 8);
-        for (configured_points, configured_dimensions) in [(3, dimensions), (points, 4)] {
-            let storage = storage_with_data(points, dimensions);
-            let config = common_configuration(configured_points, configured_dimensions);
-            let error = build(&storage, &config).unwrap_err();
-            assert!(error.to_string().contains("has 2 points of 8"), "{error}");
-            assert!(!storage.exists(GRAPH));
-        }
-    }
-
-    #[test]
     fn build_writes_the_graph_in_the_inmem_index_format() {
         let (points, dimensions) = (256, 8);
         let storage = storage_with_data(points, dimensions);
 
-        build(&storage, &common_configuration(points, dimensions)).unwrap();
+        build(&storage).unwrap();
 
         let mut file = Vec::new();
         std::io::Read::read_to_end(&mut storage.open_reader(GRAPH).unwrap(), &mut file).unwrap();

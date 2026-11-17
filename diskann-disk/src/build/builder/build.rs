@@ -17,20 +17,20 @@ use diskann::{
 };
 use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::{
-    model::{IndexConfiguration, MAX_PQ_TRAINING_SET_SIZE, NUM_KMEANS_REPS_PQ, NUM_PQ_CENTROIDS},
+    model::{MAX_PQ_TRAINING_SET_SIZE, NUM_KMEANS_REPS_PQ, NUM_PQ_CENTROIDS},
     storage::PQStorage,
     utils::{
         MAX_MEDOID_SAMPLE_SIZE, RayonThreadPoolRef, VectorDataIterator, create_thread_pool,
-        find_medoid_with_sampling,
+        find_medoid_with_sampling, load_metadata_from_file,
     },
 };
+use diskann_utils::io::Metadata;
 use tokio::task::JoinSet;
 #[cfg(debug_assertions)]
 use tracing::debug;
 use tracing::info;
 
 use crate::{
-    DiskIndexBuildParameters,
     build::builder::{
         backend::{Backend, BuildElement},
         core::{IndexBuildStrategy, MergedVamanaIndexBuilder, determine_build_strategy},
@@ -91,38 +91,26 @@ where
     /// # Errors
     /// Returns compression, graph-construction or storage errors.
     pub fn build(&mut self) -> ANNResult<()> {
+        let metadata =
+            load_metadata_from_file(self.storage_provider, &self.index_writer.get_dataset_file())?;
         match &self.config.graph {
             GraphBuildConfig::Vamana {
                 graph,
                 memory_budget,
                 build_quantization,
-                frozen_points,
                 prefetch_lookahead,
-                prefetch_cache_line_level,
             } => {
-                let index = self.config.index_configuration(
-                    graph.clone(),
-                    *frozen_points,
-                    *prefetch_lookahead,
-                    *prefetch_cache_line_level,
-                );
-                let parameters = DiskIndexBuildParameters::new(
-                    *memory_budget,
-                    *build_quantization,
-                    self.config.search_pq_chunks,
-                )
-                .with_data_compression_chunk_vector_count(
-                    self.config.compression_chunk_vector_count,
-                );
                 info!(
                     "Training quantizer for {} quantized builds.",
                     build_quantization.to_string()
                 );
                 let backend = Backend::<Data::VectorDataType>::new(
                     build_quantization,
-                    &self.index_writer.get_index_path_prefix(),
-                    &index,
-                    &self.index_writer.get_dataset_file(),
+                    self.config.metric,
+                    self.config.num_threads,
+                    self.config.seed,
+                    metadata.npoints(),
+                    &self.index_writer,
                     self.storage_provider,
                 )?;
                 let runtime = create_runtime(self.config.num_threads)?;
@@ -133,15 +121,49 @@ where
                     memory_budget.in_bytes(),
                     self.config.num_threads
                 );
-                self.build_with(|pool| {
-                    runtime.block_on(build_vamana_graph::<Data, _>(
-                        &index,
-                        &parameters,
-                        &backend,
-                        &self.index_writer,
-                        self.storage_provider,
-                        pool,
-                    ))
+                self.build_with(metadata, |pool| {
+                    runtime.block_on(async {
+                        match determine_build_strategy::<Data>(
+                            metadata,
+                            graph,
+                            memory_budget.in_bytes() as f64,
+                            build_quantization,
+                        ) {
+                            IndexBuildStrategy::Merged => {
+                                MergedVamanaIndexBuilder::<Data, _>::new(
+                                    &self.config,
+                                    &self.index_writer,
+                                    &backend,
+                                    self.storage_provider,
+                                )
+                                .build(
+                                    graph,
+                                    metadata,
+                                    *memory_budget,
+                                    build_quantization,
+                                    *prefetch_lookahead,
+                                    pool,
+                                )
+                                .await
+                            }
+                            IndexBuildStrategy::OneShot => {
+                                build_inmem_index::<Data::VectorDataType, _>(
+                                    graph.clone(),
+                                    inmem_builder::Config::new(
+                                        metadata.npoints(),
+                                        self.config.num_threads,
+                                        *prefetch_lookahead,
+                                    )?,
+                                    self.config.seed,
+                                    &backend,
+                                    &self.index_writer.get_dataset_file(),
+                                    &self.index_writer.get_mem_index_file(),
+                                    self.storage_provider,
+                                )
+                                .await
+                            }
+                        }
+                    })
                 })
             }
             #[cfg(feature = "pipnn")]
@@ -153,9 +175,10 @@ where
                     graph.leaf_k(),
                     self.config.num_threads
                 );
-                self.build_with(|pool| {
+                self.build_with(metadata, |pool| {
                     super::pipnn::build_inmem_index::<Data::VectorDataType, _>(
-                        &self.config,
+                        self.config.metric,
+                        self.config.seed,
                         graph,
                         &self.index_writer.get_dataset_file(),
                         &self.index_writer.get_mem_index_file(),
@@ -169,11 +192,12 @@ where
 
     fn build_with(
         &self,
+        metadata: Metadata,
         build_graph: impl FnOnce(RayonThreadPoolRef<'_>) -> ANNResult<()>,
     ) -> ANNResult<()> {
         let mut logger = PerfLogger::new_disk_index_build_logger();
         let pool = create_thread_pool(self.config.num_threads)?;
-        self.generate_compressed_data(pool.as_ref())?;
+        self.generate_compressed_data(metadata, pool.as_ref())?;
         logger.log_checkpoint(DiskIndexBuildCheckpoint::PqConstruction);
         build_graph(pool.as_ref())?;
         logger.log_checkpoint(DiskIndexBuildCheckpoint::InmemIndexBuild);
@@ -185,7 +209,11 @@ where
         Ok(())
     }
 
-    fn generate_compressed_data(&self, pool: RayonThreadPoolRef<'_>) -> ANNResult<()> {
+    fn generate_compressed_data(
+        &self,
+        metadata: Metadata,
+        pool: RayonThreadPoolRef<'_>,
+    ) -> ANNResult<()> {
         let parameters = &self.config;
         let data_path = self.index_writer.get_dataset_file();
         let max_block_size = parameters.compression_chunk_vector_count;
@@ -197,10 +225,10 @@ where
             max_kmeans_reps: NUM_KMEANS_REPS_PQ,
             num_centers: NUM_PQ_CENTROIDS,
             seed: parameters.seed,
-            p_val: MAX_PQ_TRAINING_SET_SIZE / (parameters.num_points as f64),
+            p_val: MAX_PQ_TRAINING_SET_SIZE / (metadata.npoints() as f64),
             storage_provider: self.storage_provider,
             pool,
-            dim: parameters.dim,
+            dim: metadata.ndims(),
             metric: parameters.metric,
         };
         info!(
@@ -223,45 +251,10 @@ where
     }
 }
 
-async fn build_vamana_graph<Data, StorageProvider>(
-    index: &IndexConfiguration,
-    parameters: &DiskIndexBuildParameters,
-    backend: &Backend<Data::VectorDataType>,
-    writer: &DiskIndexWriter,
-    storage: &StorageProvider,
-    pool: RayonThreadPoolRef<'_>,
-) -> ANNResult<()>
-where
-    Data: GraphDataType<VectorIdType = u32>,
-    Data::VectorDataType: VectorRepr,
-    StorageProvider: StorageReadProvider + StorageWriteProvider + 'static,
-    StorageProvider::Reader: Send,
-{
-    match determine_build_strategy::<Data>(
-        index,
-        parameters.build_memory_limit().in_bytes() as f64,
-        parameters.build_quantization(),
-    ) {
-        IndexBuildStrategy::Merged => {
-            MergedVamanaIndexBuilder::<Data, _>::new(index, parameters, writer, backend, storage)
-                .build(pool)
-                .await
-        }
-        IndexBuildStrategy::OneShot => {
-            build_inmem_index::<Data::VectorDataType, _>(
-                index.clone(),
-                backend,
-                &writer.get_dataset_file(),
-                &writer.get_mem_index_file(),
-                storage,
-            )
-            .await
-        }
-    }
-}
-
 pub(super) async fn build_inmem_index<T, StorageProvider>(
-    config: IndexConfiguration,
+    graph_config: diskann::graph::Config,
+    provider_config: inmem_builder::Config,
+    seed: Option<u64>,
     backend: &Backend<T>,
     data_path: &str,
     save_path: &str,
@@ -272,15 +265,7 @@ where
     StorageProvider: StorageReadProvider + StorageWriteProvider + 'static,
     <StorageProvider as StorageReadProvider>::Reader: std::marker::Send,
 {
-    // use either user-specified number of threads or default to available parallelism
-    let num_tasks = NonZeroUsize::new(config.num_threads)
-        .or_else(|| std::thread::available_parallelism().ok())
-        .ok_or_else(|| {
-            diskann_error!(
-                ErrorKind::IndexError,
-                "Failed to determine number of threads"
-            )
-        })?;
+    let num_tasks = provider_config.num_threads;
 
     // Associated data will only be used in the write_disk_layout function which only requires the none-partitioned associated data stream.
     let dataset_iter = Arc::new(Mutex::new({
@@ -288,23 +273,7 @@ where
         iter.enumerate()
     }));
 
-    let graph_config = config.config.clone();
-
-    let non_frozen_points = config.max_points.checked_sub(1).ok_or_else(|| {
-        diskann_error!(
-            ErrorKind::IndexError,
-            "expected `max_points` to be at least 1"
-        )
-    })?;
-
-    let provider_config = inmem_builder::Config {
-        non_frozen_points,
-        prefetch_lookahead: config.prefetch_lookahead,
-        num_threads: num_tasks,
-    };
-
-    let start_point =
-        start_point_from_medoid::<T, _>(data_path, config.random_seed, storage_provider)?;
+    let start_point = start_point_from_medoid::<T, _>(data_path, seed, storage_provider)?;
 
     let mut index = backend.builder(graph_config, provider_config, start_point)?;
 
