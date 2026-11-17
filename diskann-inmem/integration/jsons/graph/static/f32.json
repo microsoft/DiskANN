@@ -5,7 +5,7 @@
   "output_directory": null,
   "jobs": [
     {
-      "type": "integration-test",
+      "type": "partial-integration-test",
       "content": {
         "build": {
           "alpha": 1.2000000476837158,
@@ -16,15 +16,15 @@
         },
         "data": {
           "data": "yfcc_10k.fbin",
+          "labels": "yfcc_metadata.json",
           "data_type": "f32",
-          "groundtruth": "groundtruth.bin",
           "metric": "l2",
           "queries": "yfcc_query_100.fbin",
           "preprocess": []
         },
-        "representation": "static-build",
         "search": {
-          "knn": [
+          "groundtruth": "groundtruth.bin",
+          "searches": [
             {
               "beam_width": null,
               "knn": 10,

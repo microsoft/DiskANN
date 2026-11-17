@@ -1424,7 +1424,6 @@ impl<'a> ReadGuard<'a> {
     ///
     /// The epoch associated with the original [`ReadGuard`] will be released only when all
     /// transitively shared guards are dropped.
-    #[cfg(any(test, feature = "quantization"))]
     #[inline]
     pub(crate) fn share(&self) -> ReadGuard<'a> {
         let ref_count = self.slot.references.fetch_add(1, Ordering::Relaxed);

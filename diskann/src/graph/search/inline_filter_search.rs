@@ -58,6 +58,16 @@ impl AdaptiveL {
             scale_factor,
         })
     }
+
+    /// Return the sample count.
+    pub fn sample_count(&self) -> usize {
+        self.sample_count
+    }
+
+    /// Return the scale factor.
+    pub fn scale_factor(&self) -> f64 {
+        self.scale_factor
+    }
 }
 
 /// Inline filtered search: a standard k-NN search with an additional step
@@ -77,7 +87,7 @@ impl AdaptiveL {
 ///     specificity = 1%   (10/1000)  → 4× L
 ///     specificity = 0.1% (1/1000)   → 8× L
 ///   and so on up to a pre-set maximum multiplier
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct InlineFilterSearch {
     /// Base graph search parameters.
     pub inner: Knn,

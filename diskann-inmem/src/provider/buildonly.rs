@@ -174,6 +174,7 @@ where
             &provider.representation,
             query,
             provider,
+            None,
             provider.local_counters(),
         )
     }
@@ -221,6 +222,7 @@ where
             &provider.representation,
             vector,
             provider,
+            None,
             provider.local_counters(),
         )
     }

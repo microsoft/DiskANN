@@ -9,14 +9,18 @@
 
 pub mod num;
 
+mod bitvector;
 mod buffer;
 mod counters;
 mod epoch;
 mod freelist;
 mod ids;
 mod neighbors;
+mod poll;
 mod prefetch;
 mod tag;
+
+pub(crate) use poll::poll;
 
 pub mod provider;
 pub mod repr;

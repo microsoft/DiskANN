@@ -12,7 +12,7 @@
         "data": {
           "data": "/yfcc/yfcc_10k.fbin",
           "data_type": "f32",
-          "groundtruth": "/yfcc/groundtruth_ip.bin",
+          "labels": "/yfcc/yfcc_metadata.json",
           "metric": "inner-product",
           "preprocess": [],
           "queries": "/yfcc/yfcc_query_100.fbin"
@@ -25,23 +25,28 @@
           }
         },
         "search": {
-          "knn": [
-            {
-              "beam_width": 1,
-              "knn": 10,
-              "search_l": 50
-            },
-            {
-              "beam_width": 3,
-              "knn": 10,
-              "search_l": 50
-            },
-            {
-              "beam_width": 3,
-              "knn": 10,
-              "search_l": 100
-            }
-          ]
+          "inline_filter": null,
+          "knn": {
+            "groundtruth": "/yfcc/groundtruth_ip.bin",
+            "searches": [
+              {
+                "beam_width": 1,
+                "knn": 10,
+                "search_l": 50
+              },
+              {
+                "beam_width": 3,
+                "knn": 10,
+                "search_l": 50
+              },
+              {
+                "beam_width": 3,
+                "knn": 10,
+                "search_l": 100
+              }
+            ]
+          },
+          "multihop_filter": null
         }
       },
       "type": "integration-test"
@@ -56,6 +61,7 @@
         "set_neighbors": 41661,
         "set_vector": 10000
       },
+      "inline_filter": [],
       "knn": [
         {
           "counters": {
@@ -120,7 +126,8 @@
             "recall_n": 10
           }
         }
-      ]
+      ],
+      "multihop_filter": []
     }
   }
 ]
