@@ -815,7 +815,6 @@ where
             PathSeerMethodId::WhatIf2 => diskann::graph::search::PathSeerMethod::WhatIf2,
             PathSeerMethodId::WhatIf3 => diskann::graph::search::PathSeerMethod::WhatIf3,
             PathSeerMethodId::WhatIf4 => diskann::graph::search::PathSeerMethod::WhatIf4,
-            PathSeerMethodId::WhatIf5 => diskann::graph::search::PathSeerMethod::WhatIf5,
         };
 
         let queries: Arc<rowmajor::Owned<DP::Element>> = Arc::new(datafiles::load_dataset(

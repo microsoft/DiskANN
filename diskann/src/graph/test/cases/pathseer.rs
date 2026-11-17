@@ -83,21 +83,6 @@ fn finds_matches_two_hops_away_before_heap_is_full() {
     assert_eq!(stats.result_count, 2);
     assert_eq!(results.iter().map(|n| *n.id()).collect::<Vec<_>>(), [3, 4]);
 
-    for method in [
-        PathSeerMethod::WhatIf2,
-        PathSeerMethod::WhatIf3,
-        PathSeerMethod::WhatIf4,
-        PathSeerMethod::WhatIf5,
-    ] {
-        let (variant_stats, variant_results) = run_with_method(&index, &[3, 4], 2, method);
-        assert_eq!(variant_stats.result_count, stats.result_count);
-        assert_eq!(variant_stats.cmps, stats.cmps);
-        assert_eq!(
-            variant_results.iter().map(|n| *n.id()).collect::<Vec<_>>(),
-            results.iter().map(|n| *n.id()).collect::<Vec<_>>()
-        );
-    }
-
     let (stats, results) = run(&index, &[], 2);
     assert_eq!(stats.result_count, 0);
     assert!(results.is_empty());
@@ -302,4 +287,315 @@ fn what_if_1_can_resume_a_budget_truncated_parent() {
     // Parent 2 was cut off after ID 6 on the first expansion. Reaching it via
     // candidate 5 must classify 6 again (using budget) and then discover ID 7.
     assert_eq!(stats.hops, 6);
+}
+
+#[test]
+fn what_if_2_keeps_more_than_l_unmatched_candidates() {
+    let index = build_1d_index(
+        0,
+        0.0,
+        AdjacencyList::from_iter_untrusted([1, 2]),
+        vec![
+            (1, vec![2.0], AdjacencyList::new()),
+            (2, vec![5.0], AdjacencyList::from_iter_untrusted([3])),
+            (3, vec![3.0], AdjacencyList::new()),
+        ],
+        2,
+    );
+    // With L=1, the farther rejected candidate 2 must survive candidate 1.
+    let (stats, results) = run_with_method(&index, &[3], 1, PathSeerMethod::WhatIf2);
+    assert_eq!(results.iter().map(|n| *n.id()).collect::<Vec<_>>(), [3]);
+    assert_eq!(stats.cmps, 3);
+    assert_eq!(stats.hops, 4);
+}
+
+#[test]
+fn what_if_2_stops_at_matching_gate_without_two_hop_expansion() {
+    let index = build_1d_index(
+        0,
+        0.0,
+        AdjacencyList::from_iter_untrusted([1, 2]),
+        vec![
+            (1, vec![4.0], AdjacencyList::new()),
+            (2, vec![100.0], AdjacencyList::from_iter_untrusted([3])),
+            (3, vec![3.0], AdjacencyList::new()),
+        ],
+        2,
+    );
+    let (stats, results) = run_with_method(&index, &[1, 3], 1, PathSeerMethod::WhatIf2);
+    // Candidate 2 is beyond the matching-result gate. Its neighbor 3 is never seen.
+    assert_eq!(results.iter().map(|n| *n.id()).collect::<Vec<_>>(), [1]);
+    assert_eq!(stats.cmps, 2);
+    assert_eq!(stats.hops, 2);
+}
+
+#[test]
+fn what_if_2_scores_rejected_neighbors_even_with_full_results() {
+    let index = build_1d_index(
+        0,
+        10.0,
+        AdjacencyList::from_iter_untrusted([1]),
+        vec![
+            (1, vec![2.0], AdjacencyList::from_iter_untrusted([2, 3])),
+            (2, vec![4.0], AdjacencyList::new()),
+            (3, vec![3.0], AdjacencyList::new()),
+        ],
+        2,
+    );
+    let (stats, results) = run_with_method(&index, &[0, 3], 1, PathSeerMethod::WhatIf2);
+    assert_eq!(results.iter().map(|n| *n.id()).collect::<Vec<_>>(), [3]);
+    // Start 0 already fills results. Both rejected IDs 1 and 2 are still scored.
+    assert_eq!(stats.cmps, 3);
+    assert_eq!(stats.hops, 3);
+}
+
+#[test]
+fn what_if_2_expands_candidates_equal_to_the_gate() {
+    let index = build_1d_index(
+        0,
+        2.0,
+        AdjacencyList::from_iter_untrusted([1]),
+        vec![
+            (1, vec![4.0], AdjacencyList::from_iter_untrusted([2])),
+            (2, vec![3.0], AdjacencyList::new()),
+        ],
+        2,
+    );
+    let (stats, results) = run_with_method(&index, &[0, 2], 1, PathSeerMethod::WhatIf2);
+    // Rejected candidate 1 ties accepted start 0, so strict > must allow expansion.
+    assert_eq!(results.iter().map(|n| *n.id()).collect::<Vec<_>>(), [2]);
+    assert_eq!(stats.cmps, 2);
+}
+
+#[test]
+fn what_if_2_keeps_only_l_nearest_matching_results() {
+    let index = build_1d_index(
+        0,
+        100.0,
+        AdjacencyList::from_iter_untrusted([1, 2, 3, 4]),
+        vec![
+            (1, vec![3.0], AdjacencyList::new()),
+            (2, vec![4.0], AdjacencyList::new()),
+            (3, vec![5.0], AdjacencyList::new()),
+            (4, vec![6.0], AdjacencyList::new()),
+        ],
+        4,
+    );
+    let (stats, results) = run_with_method(&index, &[1, 2, 3], 2, PathSeerMethod::WhatIf2);
+    assert_eq!(results.iter().map(|n| *n.id()).collect::<Vec<_>>(), [1, 2]);
+    assert_eq!(stats.result_count, 2);
+    assert_eq!(stats.cmps, 4);
+    assert_eq!(stats.hops, 3);
+}
+
+#[test]
+fn what_if_2_exhausts_candidates_when_fewer_than_l_match() {
+    let index = build_1d_index(
+        0,
+        0.0,
+        AdjacencyList::from_iter_untrusted([1]),
+        vec![(1, vec![1.0], AdjacencyList::from_iter_untrusted([0]))],
+        2,
+    );
+    let (stats, results) = run_with_method(&index, &[], 2, PathSeerMethod::WhatIf2);
+    assert!(results.is_empty());
+    assert_eq!(stats.cmps, 1);
+    assert_eq!(stats.hops, 2);
+}
+
+#[test]
+fn what_if_3_finds_two_hop_matches_before_distant_parents_are_expanded() {
+    let index = build_1d_index(
+        0,
+        0.0,
+        AdjacencyList::from_iter_untrusted([1, 2]),
+        vec![
+            (1, vec![4.0], AdjacencyList::new()),
+            (2, vec![100.0], AdjacencyList::from_iter_untrusted([3])),
+            (3, vec![3.0], AdjacencyList::new()),
+        ],
+        2,
+    );
+    let (_, single_hop) = run_with_method(&index, &[1, 3], 1, PathSeerMethod::WhatIf2);
+    let (stats, results) = run_with_method(&index, &[1, 3], 1, PathSeerMethod::WhatIf3);
+    assert_eq!(single_hop.iter().map(|n| *n.id()).collect::<Vec<_>>(), [1]);
+    // The phase is selected before direct neighbor 1 fills results. Second-hop
+    // ID 3 is still scored this round, before distant parent 2 can be popped.
+    assert_eq!(results.iter().map(|n| *n.id()).collect::<Vec<_>>(), [3]);
+    assert_eq!(stats.cmps, 3);
+}
+
+#[test]
+fn what_if_3_leaves_rejected_second_neighbors_unvisited() {
+    let index = build_1d_index(
+        0,
+        0.0,
+        AdjacencyList::from_iter_untrusted([1]),
+        vec![
+            (1, vec![100.0], AdjacencyList::from_iter_untrusted([2, 3])),
+            (2, vec![2.0], AdjacencyList::new()),
+            (3, vec![3.0], AdjacencyList::new()),
+        ],
+        4,
+    );
+    let (stats, results) = run_with_method(&index, &[3], 3, PathSeerMethod::WhatIf3);
+    assert_eq!(results.iter().map(|n| *n.id()).collect::<Vec<_>>(), [3]);
+    // ID 2 is rejected during the second hop, then scored when parent 1 is popped.
+    // ID 3, already scored in the second hop, must not be scored a second time.
+    assert_eq!(stats.cmps, 3);
+}
+
+#[test]
+fn what_if_3_shares_raw_second_order_budget_across_parents() {
+    let index = build_1d_index(
+        0,
+        0.0,
+        AdjacencyList::from_iter_untrusted([1, 2]),
+        vec![
+            (1, vec![100.0], AdjacencyList::from_iter_untrusted([3, 4])),
+            (2, vec![200.0], AdjacencyList::from_iter_untrusted([5])),
+            (3, vec![2.0], AdjacencyList::new()),
+            (4, vec![4.0], AdjacencyList::new()),
+            (5, vec![3.0], AdjacencyList::new()),
+        ],
+        2,
+    );
+    let (stats, results) = run_with_method(&index, &[4, 5], 1, PathSeerMethod::WhatIf3);
+    // Rejected ID 3 and matching ID 4 exhaust the budget of two. Parent 2's
+    // closer matching neighbor 5 remains unseen when the distance gate stops us.
+    assert_eq!(results.iter().map(|n| *n.id()).collect::<Vec<_>>(), [4]);
+    assert_eq!(stats.cmps, 3);
+    assert_eq!(stats.hops, 3);
+}
+
+#[test]
+fn what_if_3_full_results_disable_second_hop_but_not_direct_scoring() {
+    let index = build_1d_index(
+        0,
+        10.0,
+        AdjacencyList::from_iter_untrusted([1]),
+        vec![
+            (1, vec![2.0], AdjacencyList::from_iter_untrusted([2, 3])),
+            (2, vec![4.0], AdjacencyList::new()),
+            (3, vec![3.0], AdjacencyList::new()),
+        ],
+        2,
+    );
+    let (stats, results) = run_with_method(&index, &[0, 3], 1, PathSeerMethod::WhatIf3);
+    assert_eq!(results.iter().map(|n| *n.id()).collect::<Vec<_>>(), [3]);
+    // Start 0 fills results before expansion. There are no second-hop reads;
+    // rejected parent 1 still scores both its rejected and matching neighbors.
+    assert_eq!(stats.cmps, 3);
+    assert_eq!(stats.hops, 3);
+}
+
+#[test]
+fn what_if_4_has_no_second_order_expansion_even_before_results_fill() {
+    let index = build_1d_index(
+        0,
+        0.0,
+        AdjacencyList::from_iter_untrusted([1, 2]),
+        vec![
+            (1, vec![4.0], AdjacencyList::new()),
+            (2, vec![100.0], AdjacencyList::from_iter_untrusted([3])),
+            (3, vec![3.0], AdjacencyList::new()),
+        ],
+        2,
+    );
+    let (_, original) = run(&index, &[1, 3], 1);
+    let (stats, results) = run_with_method(&index, &[1, 3], 1, PathSeerMethod::WhatIf4);
+    assert_eq!(original.iter().map(|n| *n.id()).collect::<Vec<_>>(), [3]);
+    // Original PathSeer reaches ID 3 in two hops. Here parent 2 is beyond
+    // the distance gate, so its closer matching neighbor is never discovered.
+    assert_eq!(results.iter().map(|n| *n.id()).collect::<Vec<_>>(), [1]);
+    assert_eq!(stats.cmps, 2);
+    assert_eq!(stats.hops, 2);
+}
+
+#[test]
+fn parent_fail_variants_prefilter_rejected_parents_after_results_fill() {
+    let index = build_1d_index(
+        0,
+        10.0,
+        AdjacencyList::from_iter_untrusted([1]),
+        vec![
+            (1, vec![2.0], AdjacencyList::from_iter_untrusted([2, 3])),
+            (2, vec![4.0], AdjacencyList::new()),
+            (3, vec![3.0], AdjacencyList::new()),
+        ],
+        2,
+    );
+    for method in [PathSeerMethod::WhatIf4] {
+        let (stats, results) = run_with_method(&index, &[0, 3], 1, method);
+        assert_eq!(results.iter().map(|n| *n.id()).collect::<Vec<_>>(), [3]);
+        // Unlike method 3, rejected parent 1 prefilters ID 2 instead of scoring it.
+        assert_eq!(stats.cmps, 2);
+        assert_eq!(stats.hops, 3);
+    }
+}
+
+#[test]
+fn what_if_3_gates_direct_candidates_when_results_are_full() {
+    let index = build_1d_index(
+        0,
+        2.0,
+        AdjacencyList::from_iter_untrusted([1]),
+        vec![
+            (1, vec![4.0], AdjacencyList::from_iter_untrusted([2])),
+            (2, vec![3.0], AdjacencyList::new()),
+        ],
+        2,
+    );
+    let (_, unbounded) = run_with_method(&index, &[0, 2], 1, PathSeerMethod::WhatIf2);
+    let (stats, results) = run_with_method(&index, &[0, 2], 1, PathSeerMethod::WhatIf3);
+    assert_eq!(unbounded.iter().map(|n| *n.id()).collect::<Vec<_>>(), [2]);
+    // Start 0 fills results. Direct candidate 1 ties its distance, so admission
+    // rejects it; a gate applied only at pop (strict >) would have expanded it.
+    assert_eq!(results.iter().map(|n| *n.id()).collect::<Vec<_>>(), [0]);
+    assert_eq!(stats.cmps, 1);
+    assert_eq!(stats.hops, 1);
+}
+
+#[test]
+fn what_if_3_also_gates_scored_second_order_candidates() {
+    let index = build_1d_index(
+        0,
+        0.0,
+        AdjacencyList::from_iter_untrusted([1, 2]),
+        vec![
+            (1, vec![4.0], AdjacencyList::from_iter_untrusted([3])),
+            (2, vec![100.0], AdjacencyList::new()),
+            (3, vec![2.0], AdjacencyList::from_iter_untrusted([4])),
+            (4, vec![3.0], AdjacencyList::new()),
+        ],
+        2,
+    );
+    let (stats, results) = run_with_method(&index, &[1, 3, 4], 1, PathSeerMethod::WhatIf3);
+    // Direct ID 1 fills results. Matching second-hop ID 3 is scored and visited,
+    // but ties the gate and cannot enter candidates to expose closer ID 4.
+    assert_eq!(results.iter().map(|n| *n.id()).collect::<Vec<_>>(), [1]);
+    assert_eq!(stats.cmps, 3);
+    assert_eq!(stats.hops, 4);
+}
+
+#[test]
+fn what_if_4_switches_from_scoring_all_neighbors_to_parent_fail() {
+    let index = build_1d_index(
+        0,
+        0.0,
+        AdjacencyList::from_iter_untrusted([1, 2]),
+        vec![
+            (1, vec![6.0], AdjacencyList::new()),
+            (2, vec![4.0], AdjacencyList::from_iter_untrusted([3, 4])),
+            (3, vec![2.0], AdjacencyList::new()),
+            (4, vec![3.0], AdjacencyList::new()),
+        ],
+        2,
+    );
+    let (stats, results) = run_with_method(&index, &[1, 4], 1, PathSeerMethod::WhatIf4);
+    assert_eq!(results.iter().map(|n| *n.id()).collect::<Vec<_>>(), [4]);
+    // Phase 1 scores matching ID 1 and rejected ID 2. Result fullness then
+    // switches rejected parent 2 to prefiltering: ID 3 is skipped, ID 4 scored.
+    assert_eq!(stats.cmps, 3);
+    assert_eq!(stats.hops, 3);
 }

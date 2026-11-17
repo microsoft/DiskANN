@@ -322,8 +322,6 @@ pub(crate) enum PathSeerMethodId {
     WhatIf3,
     #[serde(rename = "what-if-4")]
     WhatIf4,
-    #[serde(rename = "what-if-5")]
-    WhatIf5,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
