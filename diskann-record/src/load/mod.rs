@@ -100,8 +100,8 @@ where
 /// Reload a saved value using caller-supplied settings or resources.
 ///
 /// NOTE:: The loader must work for any metadata lifetime: the result cannot borrow from
-/// the disk context (dropped before returning), and may borrow resources
-/// supplied by the caller. Those resources need not be `'static`.
+/// the disk context (dropped before returning), but may borrow resources
+/// supplied by the caller (which need not be `'static`).
 ///
 /// # Errors
 ///

@@ -8,20 +8,19 @@
 //! `f32`, and each graph row contains a `u32` degree followed by that many `u32` targets.
 //! Vector and graph rows include frozen points first; external IDs include only live nodes.
 
-use diskann_record::{Version, load};
+use diskann_record::{Version, load, save};
 
-use super::Provider;
+use super::{super::Provider, common};
 use crate::{
     counters::Counters,
-    ids::IdMap,
     num::Capacity,
-    repr::{Full, Representation, full},
+    repr::{Full, Representation},
     store,
 };
 
 pub(super) const VERSION: Version = Version::new(1, 0);
 
-/// Runtime settings for loading a [`super::Provider`] with `f32` full-precision vectors
+/// Runtime settings for loading a [`crate::Provider`] with `f32` full-precision vectors
 /// and `u32` external IDs.
 ///
 /// Frozen points precede live nodes in saved artifacts. Increasing capacity only adds
@@ -54,19 +53,13 @@ impl FullProviderLoader {
     fn load_object(self, object: load::Object<'_>) -> load::Result<Provider<Full<f32>, u32>> {
         let live_count: u32 = object.field("live_count")?;
         let frozen_count: u32 = object.field("frozen_count")?;
-        let mut external_ids = full::load::artifact(
-            &object,
-            "external_ids",
-            u64::from(live_count) * size_of::<u32>() as u64,
-        )?;
         let representation = Full::load(&object, self.capacity, self.store)?;
-        let mapping = IdMap::new(representation.id_limit());
-        for offset in 0..live_count {
-            let external = full::load::read_u32(&mut external_ids)?;
-            mapping
-                .insert(external, frozen_count + offset)
-                .map_err(load::Error::new)?;
-        }
+        let mapping = common::load_external_ids(
+            &object,
+            live_count,
+            frozen_count,
+            representation.id_limit(),
+        )?;
         Ok(Provider {
             representation,
             mapping,
@@ -90,6 +83,22 @@ impl<'a> load::Loader<'a> for FullProviderLoader {
 impl<'a> load::Loadable<'a> for Provider<Full<f32>, u32> {
     fn load(context: load::Context<'a>) -> load::Result<Self> {
         load::Loader::load(FullProviderLoader::default(), context)
+    }
+}
+
+impl save::Save for Provider<Full<f32>, u32> {
+    const VERSION: Version = VERSION;
+
+    fn save(&self, context: save::Context<'_>) -> save::Result<save::Record<'_>> {
+        let representation = &self.representation;
+        let _writers = representation
+            .try_exclude_writers()
+            .ok_or_else(|| save::Error::message("could not exclude writers while saving"))?;
+        let compact = common::compact(self, representation.frozen_count())?;
+        let mut record =
+            representation.save(context.clone(), compact.renaming(), compact.live_count())?;
+        record.insert("external_ids", compact.save_external_ids(self, context)?)?;
+        Ok(record)
     }
 }
 
@@ -354,7 +363,7 @@ mod tests {
         let provider = Fixture::default()
             .load(FullProviderLoader::new().capacity(Capacity::new(6)))
             .unwrap();
-        let context = super::super::Context;
+        let context = crate::provider::Context;
         for (external, vector) in [(30, [5.0, 6.0]), (40, [7.0, 8.0]), (50, [9.0, 10.0])] {
             provider
                 .set_element(&context, &external, &vector[..])
@@ -476,7 +485,7 @@ mod tests {
         let provider = Fixture::default()
             .load(FullProviderLoader::default())
             .unwrap();
-        let context = super::super::Context;
+        let context = crate::provider::Context;
         for external in [10, 20] {
             provider.delete(&context, &external).await.unwrap();
         }
@@ -505,7 +514,7 @@ mod tests {
                     .store(store),
             )
             .unwrap();
-        let context = super::super::Context;
+        let context = crate::provider::Context;
         provider
             .set_element(&context, &30, &[5.0f32, 6.0][..])
             .await

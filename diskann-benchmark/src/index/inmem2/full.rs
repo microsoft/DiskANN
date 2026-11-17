@@ -14,7 +14,7 @@ use diskann_benchmark_runner::{
     report::Finished,
     utils::{datatype::AsDataType, fmt::Quote},
 };
-use diskann_inmem::{self as di};
+use diskann_inmem::{self as di, provider::FullProviderLoader};
 use diskann_utils::views::rowmajor::Matrix;
 
 use crate::{
@@ -372,7 +372,7 @@ impl<'a> diskann_record::load::Loader<'a> for LoadIndex {
         use diskann_record::load::{error::Kind, Error};
 
         let start = std::time::Instant::now();
-        let mut loader = di::FullProviderLoader::new();
+        let mut loader = FullProviderLoader::new();
         if let Some(capacity) = self.capacity {
             loader = loader.capacity(di::num::Capacity::new(capacity));
         }

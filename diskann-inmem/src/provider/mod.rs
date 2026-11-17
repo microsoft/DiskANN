@@ -39,10 +39,9 @@
 //! NOTE: Slots can still be acquired and insertions published while writers are blocked.
 //! Callers must prevent concurrent insertions to obtain a consistent snapshot.
 
-mod load;
-mod save;
+mod persist;
 
-pub use load::FullProviderLoader;
+pub use persist::FullProviderLoader;
 
 use std::hash::Hash;
 
