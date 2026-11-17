@@ -185,7 +185,18 @@ where
     let mut accessor = strategy
         .search_accessor(&index.data_provider, context, query)
         .into_ann_result()?;
-    let l = inner.l_value().get();
+    let requested_l = inner.l_value().get();
+    let l = accessor
+        .match_count()
+        .map_or(requested_l, |count| requested_l.min(count));
+    if l == 0 {
+        return Ok(SearchStats {
+            cmps: 0,
+            hops: 0,
+            result_count: 0,
+            range_search_second_round: false,
+        });
+    }
     let mut scratch = index.search_scratch(l, accessor.num_starting_points().await?);
     let mut candidates = BinaryHeap::new();
     let mut results = BinaryHeap::new();
@@ -337,7 +348,18 @@ where
     let mut accessor = strategy
         .search_accessor(&index.data_provider, context, query)
         .into_ann_result()?;
-    let l = inner.l_value().get();
+    let requested_l = inner.l_value().get();
+    let l = accessor
+        .match_count()
+        .map_or(requested_l, |count| requested_l.min(count));
+    if l == 0 {
+        return Ok(SearchStats {
+            cmps: 0,
+            hops: 0,
+            result_count: 0,
+            range_search_second_round: false,
+        });
+    }
     let mut scratch = index.search_scratch(l, accessor.num_starting_points().await?);
     let mut candidates = BinaryHeap::new();
     let mut results = BinaryHeap::new();
@@ -524,7 +546,18 @@ where
     let mut accessor = strategy
         .search_accessor(&index.data_provider, context, query)
         .into_ann_result()?;
-    let l = inner.l_value().get();
+    let requested_l = inner.l_value().get();
+    let l = accessor
+        .match_count()
+        .map_or(requested_l, |count| requested_l.min(count));
+    if l == 0 {
+        return Ok(SearchStats {
+            cmps: 0,
+            hops: 0,
+            result_count: 0,
+            range_search_second_round: false,
+        });
+    }
     let mut scratch = index.search_scratch(l, accessor.num_starting_points().await?);
     let mut candidates = BinaryHeap::new();
     let mut results = BinaryHeap::with_capacity(l);
@@ -642,7 +675,18 @@ where
     let mut accessor = strategy
         .search_accessor(&index.data_provider, context, query)
         .into_ann_result()?;
-    let l = inner.l_value().get();
+    let requested_l = inner.l_value().get();
+    let l = accessor
+        .match_count()
+        .map_or(requested_l, |count| requested_l.min(count));
+    if l == 0 {
+        return Ok(SearchStats {
+            cmps: 0,
+            hops: 0,
+            result_count: 0,
+            range_search_second_round: false,
+        });
+    }
     let mut scratch = index.search_scratch(l, accessor.num_starting_points().await?);
     let mut candidates = BinaryHeap::new();
     let mut results = BinaryHeap::with_capacity(l);
@@ -791,7 +835,18 @@ where
     let mut accessor = strategy
         .search_accessor(&index.data_provider, context, query)
         .into_ann_result()?;
-    let l = inner.l_value().get();
+    let requested_l = inner.l_value().get();
+    let l = accessor
+        .match_count()
+        .map_or(requested_l, |count| requested_l.min(count));
+    if l == 0 {
+        return Ok(SearchStats {
+            cmps: 0,
+            hops: 0,
+            result_count: 0,
+            range_search_second_round: false,
+        });
+    }
     let mut scratch = index.search_scratch(l, accessor.num_starting_points().await?);
     let mut candidates = BinaryHeap::new();
     let mut results = BinaryHeap::new();

@@ -420,6 +420,11 @@ impl<T> From<Reject<T>> for Decision<T> {
 ///
 /// See also: [`SearchAccessor`].
 pub trait FilteredAccessor: HasId + Send + Sync {
+    /// Exact number of matching vector IDs, if available before search.
+    fn match_count(&self) -> Option<usize> {
+        None
+    }
+
     /// Compute the distance to all start points, invoking `f` with all results.
     fn start_point_distances<F>(
         &mut self,

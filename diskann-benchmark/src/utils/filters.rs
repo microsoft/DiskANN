@@ -74,17 +74,35 @@ where
     fn is_match(&self, vec_id: T) -> bool {
         self.get_bitmap().contains(vec_id.into_usize())
     }
+
+    fn match_count(&self) -> Option<usize> {
+        Some(self.count())
+    }
 }
 
 #[derive(Debug)]
-pub struct BitmapFilter(pub BitSet);
+pub struct BitmapFilter {
+    bits: BitSet,
+    count: usize,
+}
+
+impl BitmapFilter {
+    pub fn new(bits: BitSet) -> Self {
+        let count = bits.len();
+        Self { bits, count }
+    }
+}
 
 impl<T> QueryLabelProvider<T> for BitmapFilter
 where
     T: VectorId + IntoUsize,
 {
     fn is_match(&self, vec_id: T) -> bool {
-        self.0.contains(vec_id.into_usize())
+        self.bits.contains(vec_id.into_usize())
+    }
+
+    fn match_count(&self) -> Option<usize> {
+        Some(self.count)
     }
 }
 
@@ -232,7 +250,7 @@ where
 }
 
 pub(crate) fn as_query_label_provider(set: BitSet) -> Arc<dyn QueryLabelProvider<u32>> {
-    Arc::new(BitmapFilter(set))
+    Arc::new(BitmapFilter::new(set))
 }
 
 #[cfg(test)]
@@ -244,18 +262,22 @@ mod tests {
         let mut bitset = BitSet::new();
         bitset.insert(1);
         bitset.insert(3);
-        let filter = BitmapFilter(bitset);
+        let filter = BitmapFilter::new(bitset);
 
         assert!(filter.is_match(1u32));
         assert!(filter.is_match(3u32));
         assert!(!filter.is_match(2u32));
         assert!(!filter.is_match(0u32));
+        assert_eq!(
+            <BitmapFilter as QueryLabelProvider<u32>>::match_count(&filter),
+            Some(2)
+        );
     }
 
     #[test]
     fn test_bitmap_filter_empty() {
         let bitset = BitSet::new();
-        let filter = BitmapFilter(bitset);
+        let filter = BitmapFilter::new(bitset);
 
         assert!(!filter.is_match(0u32));
         assert!(!filter.is_match(10u32));
@@ -265,7 +287,7 @@ mod tests {
     fn test_bitmap_filter_large_id() {
         let mut bitset = BitSet::new();
         bitset.insert(1000);
-        let filter = BitmapFilter(bitset);
+        let filter = BitmapFilter::new(bitset);
 
         assert!(filter.is_match(1000u32));
         assert!(!filter.is_match(999u32));

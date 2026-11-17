@@ -27,6 +27,19 @@ impl labeled::QueryLabelProvider<u32> for MatchIds {
     }
 }
 
+#[derive(Debug)]
+struct CountedMatchIds(HashSet<u32>);
+
+impl labeled::QueryLabelProvider<u32> for CountedMatchIds {
+    fn is_match(&self, id: u32) -> bool {
+        self.0.contains(&id)
+    }
+
+    fn match_count(&self) -> Option<usize> {
+        Some(self.0.len())
+    }
+}
+
 fn run(
     index: &graph::DiskANNIndex<test_provider::Provider>,
     matches: &[u32],
@@ -86,6 +99,41 @@ fn finds_matches_two_hops_away_before_heap_is_full() {
     let (stats, results) = run(&index, &[], 2);
     assert_eq!(stats.result_count, 0);
     assert!(results.is_empty());
+}
+
+#[test]
+fn exact_match_count_caps_l_and_skips_empty_filters() {
+    let index = build_1d_index(
+        0,
+        0.0,
+        AdjacencyList::from_iter_untrusted([1, 2]),
+        vec![
+            (1, vec![1.0], AdjacencyList::new()),
+            (2, vec![2.0], AdjacencyList::new()),
+        ],
+        2,
+    );
+    let one = CountedMatchIds(HashSet::from([1]));
+    let empty = CountedMatchIds(HashSet::new());
+    for method in [
+        PathSeerMethod::Original,
+        PathSeerMethod::WhatIf1,
+        PathSeerMethod::WhatIf2,
+        PathSeerMethod::WhatIf3,
+        PathSeerMethod::WhatIf4,
+    ] {
+        let (capped, results) = run_with_filter(&index, &one, 10, method);
+        let (single, _) = run_with_filter(&index, &one, 1, method);
+        assert_eq!(results.iter().map(|n| *n.id()).collect::<Vec<_>>(), [1]);
+        assert_eq!(capped.cmps, single.cmps);
+        assert_eq!(capped.hops, single.hops);
+
+        let (stats, results) = run_with_filter(&index, &empty, 10, method);
+        assert_eq!(stats.cmps, 0);
+        assert_eq!(stats.hops, 0);
+        assert_eq!(stats.result_count, 0);
+        assert!(results.is_empty());
+    }
 }
 
 #[test]
