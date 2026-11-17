@@ -41,7 +41,7 @@
 //! * `published`: **New** references to slots may be given out in the "published" state. It is
 //!   possible for a transition to go from "published" to "retiring" while references are lent
 //!   out. This is fine as long as the lifetime of these references is bounded by a
-//!   [`crate::epoch::Guard`]. Using [`super::Store::guard`] will provide such a guard.
+//!   [`crate::epoch::ReadGuard`]. Using [`super::Store::read_guard`] will provide such a guard.
 //!
 //! * `frozen`: Since "frozen" is a terminal state, it is safe to give out references to
 //!   frozen slots.
@@ -80,7 +80,7 @@
 //!
 //! * [`epoch::RegistryHandle`]: A handle into the [`epoch::Registry`] used to protect the
 //!   constructed [`Slots`]. This allows implementations to check the validity of
-//!   [`epoch::Guard`]s via [`epoch::RegistryHandle::assert_guard_belongs`].
+//!   [`epoch::ReadGuard`]s via [`epoch::RegistryHandle::assert_guard_belongs`].
 //!
 //!   Unsafe code may rely on this check and all reader construction paths should use it
 //!   as it is cheap.
@@ -174,7 +174,7 @@ pub(crate) trait Slots: Debug + 'static {
     ///
     /// 1. The slot is in the implicit "retiring" state.
     ///
-    /// 2. All [`crate::epoch::Guard`]s for this [`Slots`] that could have obtained a
+    /// 2. All [`crate::epoch::ReadGuard`]s for this [`Slots`] that could have obtained a
     ///    reference while this slot was in the "published" state have been dropped.
     unsafe fn reclaim(&self, i: u32, _: Lifecycle);
 }
