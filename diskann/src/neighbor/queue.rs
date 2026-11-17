@@ -16,6 +16,18 @@ mod search;
 
 use super::Neighbor;
 
+/// Insertion-point lookup selected when constructing a queue.
+#[derive(Debug, Clone, Copy, Default)]
+pub enum InsertionSearch {
+    /// Existing SIMD scan on x86-64, scalar scan on other architectures.
+    #[default]
+    Linear,
+    /// Binary search over the filled distances.
+    Binary,
+    /// Linear scan through the configured length, then a short prefix and binary search.
+    Hybrid { linear_scan_limit: usize },
+}
+
 /// Shared trait for the generic `I` parameter used by `NeighborQueue`.
 pub trait NeighborPriorityQueueIdType: Eq + Clone + Copy + Debug + Display + Send + Sync {}
 
@@ -102,6 +114,8 @@ pub struct NeighborPriorityQueue<I: NeighborPriorityQueueIdType> {
 
     // Search parameter L: search stops once we have explored the L best candidates.
     search_param_l: usize,
+
+    insertion_search: InsertionSearch,
 }
 
 impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
@@ -117,6 +131,7 @@ impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
             distances: Vec::with_capacity(search_param_l),
             auto_resizable: false,
             search_param_l,
+            insertion_search: InsertionSearch::Linear,
         }
     }
 
@@ -130,7 +145,14 @@ impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
             distances: Vec::with_capacity(search_param_l),
             auto_resizable: true,
             search_param_l,
+            insertion_search: InsertionSearch::Linear,
         }
+    }
+
+    /// Select the insertion-point search without changing queue contents or cursor.
+    pub fn with_insertion_search(mut self, insertion_search: InsertionSearch) -> Self {
+        self.insertion_search = insertion_search;
+        self
     }
 
     /// Inserts item with order.
@@ -161,11 +183,7 @@ impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
         }
 
         let insert_idx = if self.size > 0 {
-            if self.size <= 1024 {
-                self.get_lower_bound(&nbr)
-            } else {
-                search::large_insert(&self.distances, nbr.distance)
-            }
+            self.get_insertion_lower_bound(&nbr)
         } else {
             0
         };
@@ -241,7 +259,7 @@ impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
     fn merge_sorted(&mut self, neighbors: &[Neighbor<I>]) {
         let candidate_count = neighbors.len();
         let first = neighbors[0];
-        let prefix_len = self.get_lower_bound(&first);
+        let prefix_len = self.get_insertion_lower_bound(&first);
         let mut cursor = self.cursor.min(prefix_len);
         // Cursor-resetting operations may leave it pointing at a visited entry.
         // The unchanged prefix retains its visited flags; the first new entry is unvisited.
@@ -350,6 +368,16 @@ impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
         }
 
         false
+    }
+
+    fn get_insertion_lower_bound(&mut self, nbr: &Neighbor<I>) -> usize {
+        match self.insertion_search {
+            InsertionSearch::Linear => self.get_lower_bound(nbr),
+            InsertionSearch::Binary => search::binary(&self.distances, nbr.distance),
+            InsertionSearch::Hybrid { linear_scan_limit } => {
+                search::hybrid(&self.distances, nbr.distance, linear_scan_limit)
+            }
+        }
     }
 
     /// Get the lower bound of the neighbor - the index of the first neighbor
@@ -829,7 +857,9 @@ mod neighbor_priority_queue_test {
             (512, 512, 300, &[255.5, -1.0, f32::INFINITY]),
             (2048, 1024, 500, &[512.0, -0.0, 512.0, f32::NAN]),
             (2048, 1025, 500, &[512.0, -1.0, 512.0, f32::INFINITY]),
+            (2048, 1025, 1025, &[1024.0, 1024.0, 1025.0, f32::NAN]),
             (2000, 2000, 1000, &[1000.0, -1.0, 1000.0, 4000.0]),
+            (2000, 2000, 1999, &[1998.0, 1998.0, 1999.0]),
         ];
         for resizable in [false, true] {
             for &(capacity, initial, visited, distances) in cases {
@@ -844,8 +874,7 @@ mod neighbor_priority_queue_test {
                 for _ in 0..visited {
                     reference.closest_notvisited();
                 }
-                let mut actual = reference.clone();
-                let mut candidates: Vec<_> = distances
+                let candidates: Vec<_> = distances
                     .iter()
                     .enumerate()
                     .map(|(i, &distance)| Neighbor::new(initial + i, distance))
@@ -853,13 +882,46 @@ mod neighbor_priority_queue_test {
                 for &candidate in &candidates {
                     reference.insert(candidate);
                 }
-                let buffer_capacity = candidates.capacity();
-                let allocation = candidates.as_ptr();
-                actual.batch_insert(&mut candidates);
-                assert!(candidates.is_empty());
-                assert_eq!(candidates.capacity(), buffer_capacity);
-                assert_eq!(candidates.as_ptr(), allocation);
-                assert_same_queue(&actual, &reference);
+                for search in [
+                    InsertionSearch::Linear,
+                    InsertionSearch::Binary,
+                    InsertionSearch::Hybrid {
+                        linear_scan_limit: 0,
+                    },
+                    InsertionSearch::Hybrid {
+                        linear_scan_limit: 128,
+                    },
+                ] {
+                    let mut actual = if resizable {
+                        NeighborPriorityQueue::auto_resizable_with_search_param_l(capacity)
+                            .with_insertion_search(search)
+                    } else {
+                        NeighborPriorityQueue::new(capacity).with_insertion_search(search)
+                    };
+                    for id in 0..initial {
+                        actual.insert(Neighbor::new(id, id as f32));
+                    }
+                    for _ in 0..visited {
+                        actual.closest_notvisited();
+                    }
+                    let mut sequential = actual.clone();
+                    for &candidate in &candidates {
+                        sequential.insert(candidate);
+                    }
+                    assert_same_queue(&sequential, &reference);
+                    let mut buffer = candidates.clone();
+                    let buffer_capacity = buffer.capacity();
+                    let allocation = buffer.as_ptr();
+                    actual.batch_insert(&mut buffer);
+                    assert!(buffer.is_empty());
+                    assert_eq!(buffer.capacity(), buffer_capacity);
+                    assert_eq!(buffer.as_ptr(), allocation);
+                    assert_same_queue(&actual, &reference);
+                    if actual.size() > 0 {
+                        assert!(!actual.remove(Neighbor::new(initial, f32::NAN)));
+                        assert_same_queue(&actual, &reference);
+                    }
+                }
             }
         }
     }

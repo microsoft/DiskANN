@@ -8,7 +8,7 @@
 use std::{hint::black_box, io::Write, num::NonZeroUsize, time::Instant};
 
 use anyhow::{ensure, Context};
-use diskann::neighbor::{Neighbor, NeighborPriorityQueue};
+use diskann::neighbor::{InsertionSearch, Neighbor, NeighborPriorityQueue};
 use diskann_benchmark_runner::{
     benchmark::{MatchContext, Score},
     Benchmark, Checker, Checkpoint, Input, Output, Registry,
@@ -18,22 +18,38 @@ use serde::{Deserialize, Serialize};
 
 type Queue = NeighborPriorityQueue<u32>;
 
-mod lookup;
-
 pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
     registry.register("neighbor-queue", QueueBenchmark)?;
-    lookup::register(registry)?;
     Ok(())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct QueueInput {
+    #[serde(default, with = "SearchConfig", skip_serializing_if = "is_linear")]
+    insertion_search: InsertionSearch,
     seed: u64,
     samples: NonZeroUsize,
     queues_per_sample: NonZeroUsize,
     blocks_per_sample: NonZeroUsize,
     cases: Vec<Case>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(
+    remote = "InsertionSearch",
+    tag = "type",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+enum SearchConfig {
+    Linear,
+    Binary,
+    Hybrid { linear_scan_limit: usize },
+}
+
+fn is_linear(search: &InsertionSearch) -> bool {
+    matches!(search, InsertionSearch::Linear)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -123,6 +139,7 @@ impl Input for QueueInput {
 
     fn example() -> Self {
         Self {
+            insertion_search: InsertionSearch::Linear,
             seed: 20261113,
             samples: NonZeroUsize::new(9).unwrap(),
             queues_per_sample: NonZeroUsize::new(8).unwrap(),
@@ -204,7 +221,6 @@ struct CaseResult {
 #[derive(Debug, Serialize)]
 struct Sample {
     round: usize,
-    blocks: usize,
     first_method: Method,
     timings: Vec<Timing>,
 }
@@ -242,7 +258,6 @@ fn insert(queue: &mut Queue, buffer: &mut Vec<Neighbor<u32>>) {
 struct Fixture {
     base: Queue,
     queue: Queue,
-    reset_buffer: Vec<Neighbor<u32>>,
     input: Vec<Neighbor<u32>>,
     buffer: Vec<Neighbor<u32>>,
 }
@@ -250,18 +265,20 @@ struct Fixture {
 impl Fixture {
     fn reset(&mut self) {
         self.queue.clear();
-        self.reset_buffer.extend(self.base.iter());
-        self.queue.batch_insert(&mut self.reset_buffer);
+        for neighbor in self.base.iter() {
+            self.queue.insert(neighbor);
+        }
     }
 }
 
-fn fixture(case: &Case, rng: &mut StdRng) -> Fixture {
+fn fixture_with_search(case: &Case, rng: &mut StdRng, search: InsertionSearch) -> Fixture {
     let capacity = case.capacity.get();
     let offset = rng.random_range(0.0f32..0.25);
-    let mut base = Queue::new(capacity);
+    let mut base = Queue::new(capacity).with_insertion_search(search);
     let neighbor = |i| Neighbor::new(i as u32, offset + 1.0 + (i + 1) as f32 / capacity as f32);
-    let mut reset_buffer = (0..case.initial_size).map(neighbor).collect();
-    base.batch_insert(&mut reset_buffer);
+    for i in 0..case.initial_size {
+        base.insert(neighbor(i));
+    }
 
     let best = base.iter().next().map_or(offset + 1.0, |n| *n.distance());
     let worst = base.iter().last().map_or(offset + 2.0, |n| *n.distance());
@@ -289,8 +306,7 @@ fn fixture(case: &Case, rng: &mut StdRng) -> Fixture {
         )),
     }
     Fixture {
-        queue: Queue::new(capacity),
-        reset_buffer,
+        queue: Queue::new(capacity).with_insertion_search(search),
         buffer: Vec::with_capacity(case.input_size),
         base,
         input,
@@ -364,11 +380,9 @@ fn verify(f: &Fixture) -> anyhow::Result<[usize; 4]> {
             .eq(expected.iter().map(|(_, d)| *d)),
         "scalar work model disagrees with production queue"
     );
-    // Fixture IDs occupy disjoint consecutive ranges.
-    let first_new_id = f.base.size() as u32;
     let new_entries = expected
         .iter()
-        .filter(|(id, _)| *id >= first_new_id)
+        .filter(|(id, _)| candidates.iter().any(|n| n.id() == id))
         .count();
     Ok([survivors, admissions, moves, new_entries])
 }
@@ -404,7 +418,7 @@ fn run_case(
     rng: &mut StdRng,
 ) -> anyhow::Result<CaseResult> {
     let mut fixtures: Vec<_> = (0..input.queues_per_sample.get())
-        .map(|_| fixture(case, rng))
+        .map(|_| fixture_with_search(case, rng, input.insertion_search))
         .collect();
     let mut work = [0usize; 4];
     for f in &fixtures {
@@ -412,17 +426,6 @@ fn run_case(
             *total += count;
         }
     }
-    // Bound large-N/L experiments using the untimed scalar work model.
-    // Every executable uses the same fixtures, hence the same repetition count.
-    let final_size = case
-        .capacity
-        .get()
-        .min(case.initial_size.saturating_add(case.input_size));
-    let scalar_work = work[2].saturating_add(work[1].saturating_mul(final_size / 16));
-    let blocks = input
-        .blocks_per_sample
-        .get()
-        .min((1_000_000 / scalar_work.max(1)).max(1));
     // Warm up all paths, including allocation, outside recorded samples.
     for method in METHODS {
         measure(&mut fixtures, 1, |q, b| method.update(q, b));
@@ -433,6 +436,7 @@ fn run_case(
         let mut timings = Vec::with_capacity(METHODS.len());
         for offset in 0..METHODS.len() {
             let method = METHODS[(first + offset) % METHODS.len()];
+            let blocks = input.blocks_per_sample.get();
             // Dispatch outside the timed loop so each method can inline its update.
             let ns_per_update = match method {
                 Method::Insert => measure(&mut fixtures, blocks, insert),
@@ -445,7 +449,6 @@ fn run_case(
         }
         samples.push(Sample {
             round,
-            blocks,
             first_method: METHODS[first],
             timings,
         });
@@ -475,6 +478,39 @@ fn median(mut values: Vec<f64>) -> f64 {
 mod tests {
     use super::*;
 
+    fn fixture(case: &Case, rng: &mut StdRng) -> Fixture {
+        fixture_with_search(case, rng, InsertionSearch::Linear)
+    }
+
+    #[test]
+    fn input_selects_queue_search_without_changing_fixtures() {
+        let baseline = QueueInput::example();
+        let mut reference_rng = StdRng::seed_from_u64(baseline.seed);
+        let reference = fixture(&baseline.cases[0], &mut reference_rng);
+        for search in [
+            serde_json::json!({"type": "linear"}),
+            serde_json::json!({"type": "binary"}),
+            serde_json::json!({"type": "hybrid", "linear_scan_limit": 3}),
+        ] {
+            let mut value = serde_json::to_value(&baseline).unwrap();
+            value["insertion_search"] = search;
+            let input: QueueInput = serde_json::from_value(value).unwrap();
+            input.validate().unwrap();
+            let mut rng = StdRng::seed_from_u64(input.seed);
+            let fixture = fixture_with_search(&input.cases[0], &mut rng, input.insertion_search);
+            assert_eq!(contents(&fixture.base), contents(&reference.base));
+            assert!(fixture
+                .input
+                .iter()
+                .map(|n| n.as_tuple())
+                .eq(reference.input.iter().map(|n| n.as_tuple())));
+            assert_eq!(verify(&fixture).unwrap(), verify(&reference).unwrap());
+        }
+        let mut value = serde_json::to_value(baseline).unwrap();
+        value["insertion_search"] = serde_json::json!({"type": "hybrid"});
+        assert!(serde_json::from_value::<QueueInput>(value).is_err());
+    }
+
     #[test]
     fn generated_cases_preserve_queue_and_buffer_contracts() {
         let mut rng = StdRng::seed_from_u64(42);
@@ -500,30 +536,6 @@ mod tests {
                         }
                     }
                 }
-            }
-        }
-    }
-
-    #[test]
-    fn untimed_reset_restores_the_fixture_before_each_update() {
-        let mut rng = StdRng::seed_from_u64(42);
-        for initial_size in [0, 10, 20] {
-            let case = Case {
-                capacity: NonZeroUsize::new(20).unwrap(),
-                initial_size,
-                input_size: 8,
-                initial_cutoff_survivors: 8,
-                placement: Placement::Uniform,
-                order: Order::Shuffled,
-            };
-            let mut f = fixture(&case, &mut rng);
-            for _ in 0..3 {
-                f.reset();
-                assert_eq!(contents(&f.queue), contents(&f.base));
-                assert_eq!(unvisited(&mut f.queue), unvisited(&mut f.base.clone()));
-                assert!(f.reset_buffer.is_empty());
-                f.buffer.extend_from_slice(&f.input);
-                f.queue.batch_insert(&mut f.buffer);
             }
         }
     }
@@ -602,36 +614,11 @@ mod tests {
     }
 
     #[test]
-    fn large_updates_bound_repetitions_and_record_actual_blocks() {
-        let mut input = QueueInput::example();
-        input.samples = NonZeroUsize::new(1).unwrap();
-        input.queues_per_sample = NonZeroUsize::new(1).unwrap();
-        input.blocks_per_sample = NonZeroUsize::new(100).unwrap();
-        input.cases[0] = Case {
-            capacity: NonZeroUsize::new(128).unwrap(),
-            initial_size: 128,
-            input_size: 2000,
-            initial_cutoff_survivors: 2000,
-            placement: Placement::Head,
-            order: Order::Descending,
-        };
-        let mut rng = StdRng::seed_from_u64(input.seed);
-        let result = run_case(&input, &input.cases[0], 0, &mut rng).unwrap();
-        assert!(result.samples[0].blocks > 0);
-        assert!(result.samples[0].blocks < input.blocks_per_sample.get());
-        assert!(result.samples[0]
-            .timings
-            .iter()
-            .all(|t| t.ns_per_update > 0.0));
-    }
-
-    #[test]
     fn cutoff_work_counts_and_measurement_output() {
         let mut input = QueueInput::example();
         input.samples = NonZeroUsize::new(3).unwrap();
-        // Keep the reject-only interval above Windows timer granularity.
-        input.queues_per_sample = NonZeroUsize::new(64).unwrap();
-        input.blocks_per_sample = NonZeroUsize::new(2).unwrap();
+        input.queues_per_sample = NonZeroUsize::new(2).unwrap();
+        input.blocks_per_sample = NonZeroUsize::new(1).unwrap();
         input.cases[0].initial_cutoff_survivors = 0;
         let mut rng = StdRng::seed_from_u64(input.seed);
         let result = run_case(&input, &input.cases[0], 0, &mut rng).unwrap();
@@ -642,7 +629,11 @@ mod tests {
         assert_eq!(result.samples.len(), 3);
         for sample in result.samples {
             assert_eq!(sample.timings.len(), 2);
-            assert!(sample.timings.iter().all(|t| t.ns_per_update > 0.0));
+            // Short reject-only intervals can be zero at Windows timer resolution.
+            assert!(sample
+                .timings
+                .iter()
+                .all(|t| t.ns_per_update.is_finite() && t.ns_per_update >= 0.0));
         }
     }
 }

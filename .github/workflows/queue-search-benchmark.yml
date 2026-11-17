@@ -5,7 +5,7 @@ name: Queue insertion search benchmark
 
 on:
   pull_request:
-    branches: [wuw92-beam-queue-benchmark]
+    branches: [main]
     paths:
       - 'diskann/src/neighbor/**'
       - 'diskann-benchmark/**'
@@ -18,7 +18,7 @@ permissions:
 
 env:
   PYTHONUTF8: '1'
-  QUEUE_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+  QUEUE_BASE_SHA: a58bd09808915b3f457008217cb369a201677fd0
 
 concurrency:
   group: queue-search-${{ github.event.pull_request.number }}
@@ -68,11 +68,9 @@ jobs:
           cargo fmt --all -- --check
           cargo test --locked --release -p diskann-benchmark neighbor_queue
           cargo clippy --locked --release -p diskann -p diskann-benchmark --all-targets -- -D warnings
-      - name: Build and test fixed variants
+      - name: Build and test configurable queue
         run: |
-          python .github/scripts/benchmark_queue_search.py build \
-            --base "$QUEUE_BASE_SHA" --output benchmark-results \
-            --variants simd insert_guarded insert_outlined
+          python .github/scripts/benchmark_queue_search.py build --output benchmark-results
       - name: Compare independent processes
         run: |
           python .github/scripts/benchmark_queue_search.py run --output benchmark-results

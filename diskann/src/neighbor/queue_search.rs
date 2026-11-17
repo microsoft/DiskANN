@@ -6,7 +6,7 @@
 #[cfg(target_arch = "x86_64")]
 use diskann_wide::{SIMDMask, SIMDPartialOrd, SIMDVector};
 
-// Private insertion-search kernels; the CI experiment snapshots this source.
+// The queue constructor selects the strategy; hybrids take an explicit limit.
 #[inline]
 #[cfg(target_arch = "x86_64")]
 pub(super) fn linear(distances: &[f32], target: f32) -> usize {
@@ -63,7 +63,7 @@ pub(super) fn linear(distances: &[f32], target: f32) -> usize {
 
 #[inline]
 pub(super) fn binary(distances: &[f32], target: f32) -> usize {
-    // insert/batch_insert filter NaNs; remove also calls lower_bound.
+    // Queue insertion filters NaNs; preserve linear semantics for direct callers.
     if target.is_nan() {
         return distances.len();
     }
@@ -71,23 +71,18 @@ pub(super) fn binary(distances: &[f32], target: f32) -> usize {
 }
 
 #[inline]
-pub(super) fn hybrid<const THRESHOLD: usize>(distances: &[f32], target: f32) -> usize {
-    if distances.len() <= THRESHOLD {
+pub(super) fn hybrid(distances: &[f32], target: f32, linear_scan_limit: usize) -> usize {
+    if distances.len() <= linear_scan_limit {
         return linear(distances, target);
     }
     // Keep near-front insertions cheap, especially the minimum of a large batch.
-    let prefix = linear(&distances[..16], target);
-    if prefix < 16 {
+    let prefix_len = distances.len().min(16);
+    let prefix = linear(&distances[..prefix_len], target);
+    if prefix < prefix_len {
         prefix
     } else {
-        16 + binary(&distances[16..], target)
+        prefix_len + binary(&distances[prefix_len..], target)
     }
-}
-
-// Keep the binary-search code out of the small-queue insertion hot path.
-#[inline(never)]
-pub(super) fn large_insert(distances: &[f32], target: f32) -> usize {
-    hybrid::<1024>(distances, target)
 }
 
 #[cfg(test)]
@@ -124,33 +119,20 @@ mod tests {
                     .unwrap_or(len);
                 assert_eq!(linear(&distances, target), expected, "{len} {target}");
                 assert_eq!(binary(&distances, target), expected, "{len} {target}");
-                assert_eq!(
-                    hybrid::<128>(&distances, target),
-                    expected,
-                    "{len} {target}"
-                );
-                assert_eq!(
-                    hybrid::<256>(&distances, target),
-                    expected,
-                    "{len} {target}"
-                );
-                assert_eq!(
-                    hybrid::<512>(&distances, target),
-                    expected,
-                    "{len} {target}"
-                );
-                assert_eq!(
-                    hybrid::<1024>(&distances, target),
-                    expected,
-                    "{len} {target}"
-                );
+                for limit in [1, 128, 256, 512, 1024] {
+                    assert_eq!(
+                        hybrid(&distances, target, limit),
+                        expected,
+                        "{len} {target}"
+                    );
+                }
             }
         }
         for distances in [[-0.0, 0.0], [0.0, -0.0]] {
             for target in [-0.0, 0.0] {
                 assert_eq!(linear(&distances, target), 0);
                 assert_eq!(binary(&distances, target), 0);
-                assert_eq!(hybrid::<128>(&distances, target), 0);
+                assert_eq!(hybrid(&distances, target, 1), 0);
             }
         }
     }

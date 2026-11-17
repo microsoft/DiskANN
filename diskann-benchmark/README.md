@@ -39,28 +39,8 @@ replication and reproducibility rather than workload semantics. See the
 [benchmark source](src/neighbor_queue.rs) for validation and measurement details. Results
 are warm-data microbenchmarks, not end-to-end search measurements.
 
-`blocks_per_sample` is a ceiling: high-work cases use fewer blocks according to the
-untimed scalar work model, with the actual count recorded in each sample. This keeps
-large-N/L experiments bounded and uses the same repetition count for all executables
-given identical fixtures.
-
 The [CI workflow](../.github/workflows/neighbor-queue-benchmark.yml) publishes results
 and raw samples from shared Linux and Windows runners.
-
-For insertion-point experiments, the `neighbor-queue-lookup` input measures the private
-lookup kernels directly: the existing SIMD scan on x86-64 (scalar scan elsewhere),
-binary search, and length-based hybrids with bounded linear prefixes. The linear kernel
-reproduces the production scan; the experimental kernels stay private to the benchmark,
-without exposing queue internals as public API. Generate its input
-with `inputs neighbor-queue-lookup`. The input controls actual filled `lengths`, independent
-fixture count, seed, samples, and repetitions. Each lookup result is consumed by `black_box`.
-Head, middle, tail, random, equal-distance, and beyond-tail probes are recorded separately.
-Kernels rotate measurement order within each process.
-
-Use the complete `neighbor-queue` update benchmark as the acceptance criterion: lookup-only
-speedups can disappear behind shifting or batch sorting/merging. Its reset uses an untimed
-batch to restore the same initial queue without quadratic per-item setup. Neither benchmark
-establishes a hardware-independent crossover or measures end-to-end search.
 
 ### Input files
 
@@ -235,37 +215,43 @@ Any number of inputs can be used.
 
 #### Queue insertion-search experiments
 
-The private `neighbor-queue-lookup` kernels compare SIMD linear scan, binary search,
-and filled-length hybrids. The stacked-PR
-[workflow](../.github/workflows/queue-search-benchmark.yml) uses
-[the experiment driver](../.github/scripts/benchmark_queue_search.py) to build the
-exact base implementation and each candidate before any timing starts. The original
-`neighbor-queue.json` example is unchanged.
+The [workflow](../.github/workflows/queue-search-benchmark.yml) builds one executable.
+Benchmark input selects `insertion_search` when constructing the real queue:
 
-The artifact includes source snapshots, executable hashes and binaries, verbose
-build flags, generated inputs, exact commands, raw samples, and per-process
-comparisons. Lookup results consume the returned insertion index. Full `insert`
-and `batch_insert` measurements reuse the same fixtures and untimed reset, and
-report actual repetition counts. Candidate variants also run the queue regression
-tests. The experimental binary/hybrid variants apply on all runner architectures.
-The checked-in insertion candidate keeps the original SIMD/scalar lookup for
-small queues and for batch/remove, using an outlined hybrid only for large
-single-item insertions. The workflow compares this candidate against the original
-scan and the previous inlined hybrid without changing the workload matrix.
-Its threshold is an experimental candidate, not a universal crossover.
+```json
+"insertion_search": {"type": "binary"}
+```
+
+Omitting this field keeps the original SIMD scan on x86-64 and scalar scan elsewhere.
+Use `{"type": "linear"}` to select that scan explicitly. A hybrid must supply its limit:
+`{"type": "hybrid", "linear_scan_limit": 128}`. No crossover is hardcoded in the queue.
+The selection applies to single-item insertion and the batch merge's initial prefix
+lookup, not removal or the batch top-L partition. Both update methods run for each
+configuration, giving the four original/configured `insert`/`batch_insert` groups.
+
+[The driver](../.github/scripts/benchmark_queue_search.py) verifies that the benchmark
+measurement loops and [example input](example/neighbor-queue.json) match the fixed
+#1600 revision before building. Fixture generation, per-item reset, timing loops, method order,
+and repetition counts are unchanged. It does not generate additional cases or run a
+lookup-only benchmark. Historical timings are not pooled with this experiment.
 
 Run the driver's `build`, `run`, and `summarize` operations in that order, passing
-`--output <artifact-directory>` to each and `--base <fixed-base-SHA>` to `build`.
-The fixed input matrix, seeds, populations, and process order are defined in the
-driver. Do not run builds or other benchmarks during `run`. Compilation temporarily
-selects a private search implementation and restores the working file on exit;
-it does not add production configuration or a public API.
+`--output <artifact-directory>` to each. The candidate strategy comes from
+[the search configuration](example/neighbor-queue-search-strategy.json); `build`
+accepts `--search-config <path>` to select another configuration. The driver changes
+only `insertion_search` in a copy of the original input. The original and configured
+inputs run three independent processes each, in alternating order after compilation
+finishes. No source rewriting or Cargo feature is used. Do not build or run other
+benchmarks during `run`.
 
-Each population and seed has three independent processes and nine rounds. The
-report's repeatability screen requires the same direction in all paired repeats
-and an effect larger than the observed relative process range. It is not a
-confidence interval or an end-to-end ANN score. Hosted CI is not presumed to be
-quieter than local hardware, and a crossover is not assumed to transfer across CPUs.
+The artifact contains source snapshots, binaries and hashes, build logs, the original
+input, exact commands, raw samples, and per-process comparisons. Speedup is original
+over optimized time for the same update method. The repeatability screen requires
+consistent paired direction exceeding the observed process range; it is not a
+confidence interval. Shared CI is not presumed quieter, and these microbenchmarks
+do not measure end-to-end ANN search. `new(L)` keeps the original linear strategy.
+Only the benchmark opts into alternatives with `.with_insertion_search(...)`;
+existing constructor callers are unchanged.
 
 Registered benchmarks are queries using the following.
 ```sh
