@@ -46,9 +46,10 @@ pub enum PathSeerMethod {
 
 /// Two-phase filtered graph search for an in-memory index.
 ///
-/// Until `L` matching results have been found, all direct neighbors can be
+/// Until the phase threshold of `min(L, known matching count)` results is
+/// reached, all direct neighbors can be
 /// scored and up to one graph degree of second-order adjacency entries are
-/// examined for matching points. Once the result heap is full, second-order
+/// examined for matching points. Once the phase threshold is reached, second-order
 /// expansion stops. Direct neighbors of a rejected candidate are prefiltered;
 /// direct neighbors of an accepted candidate remain distance-first.
 ///
@@ -185,18 +186,8 @@ where
     let mut accessor = strategy
         .search_accessor(&index.data_provider, context, query)
         .into_ann_result()?;
-    let requested_l = inner.l_value().get();
-    let l = accessor
-        .match_count()
-        .map_or(requested_l, |count| requested_l.min(count));
-    if l == 0 {
-        return Ok(SearchStats {
-            cmps: 0,
-            hops: 0,
-            result_count: 0,
-            range_search_second_round: false,
-        });
-    }
+    let l = inner.l_value().get();
+    let phase_threshold = accessor.match_count().map_or(l, |count| l.min(count));
     let mut scratch = index.search_scratch(l, accessor.num_starting_points().await?);
     let mut candidates = BinaryHeap::new();
     let mut results = BinaryHeap::new();
@@ -230,7 +221,7 @@ where
         {
             break;
         }
-        let phase_two = results.len() == l;
+        let phase_two = results.len() >= phase_threshold;
         direct.clear();
         if !phase_two {
             index
@@ -348,18 +339,8 @@ where
     let mut accessor = strategy
         .search_accessor(&index.data_provider, context, query)
         .into_ann_result()?;
-    let requested_l = inner.l_value().get();
-    let l = accessor
-        .match_count()
-        .map_or(requested_l, |count| requested_l.min(count));
-    if l == 0 {
-        return Ok(SearchStats {
-            cmps: 0,
-            hops: 0,
-            result_count: 0,
-            range_search_second_round: false,
-        });
-    }
+    let l = inner.l_value().get();
+    let phase_threshold = accessor.match_count().map_or(l, |count| l.min(count));
     let mut scratch = index.search_scratch(l, accessor.num_starting_points().await?);
     let mut candidates = BinaryHeap::new();
     let mut results = BinaryHeap::new();
@@ -397,7 +378,7 @@ where
         {
             break;
         }
-        let phase_two = results.len() == l;
+        let phase_two = results.len() >= phase_threshold;
         direct.clear();
         if !phase_two {
             index
@@ -546,18 +527,7 @@ where
     let mut accessor = strategy
         .search_accessor(&index.data_provider, context, query)
         .into_ann_result()?;
-    let requested_l = inner.l_value().get();
-    let l = accessor
-        .match_count()
-        .map_or(requested_l, |count| requested_l.min(count));
-    if l == 0 {
-        return Ok(SearchStats {
-            cmps: 0,
-            hops: 0,
-            result_count: 0,
-            range_search_second_round: false,
-        });
-    }
+    let l = inner.l_value().get();
     let mut scratch = index.search_scratch(l, accessor.num_starting_points().await?);
     let mut candidates = BinaryHeap::new();
     let mut results = BinaryHeap::with_capacity(l);
@@ -675,18 +645,8 @@ where
     let mut accessor = strategy
         .search_accessor(&index.data_provider, context, query)
         .into_ann_result()?;
-    let requested_l = inner.l_value().get();
-    let l = accessor
-        .match_count()
-        .map_or(requested_l, |count| requested_l.min(count));
-    if l == 0 {
-        return Ok(SearchStats {
-            cmps: 0,
-            hops: 0,
-            result_count: 0,
-            range_search_second_round: false,
-        });
-    }
+    let l = inner.l_value().get();
+    let phase_threshold = accessor.match_count().map_or(l, |count| l.min(count));
     let mut scratch = index.search_scratch(l, accessor.num_starting_points().await?);
     let mut candidates = BinaryHeap::new();
     let mut results = BinaryHeap::with_capacity(l);
@@ -728,7 +688,7 @@ where
         // As in original PathSeer, snapshot the phase at the start of expansion.
         // Direct neighbors may fill results during this expansion; its already
         // selected phase-one second-hop work still runs to its budget.
-        let phase_one = results.len() < l;
+        let phase_one = results.len() < phase_threshold;
         direct.clear();
         if phase_one {
             index
@@ -835,18 +795,8 @@ where
     let mut accessor = strategy
         .search_accessor(&index.data_provider, context, query)
         .into_ann_result()?;
-    let requested_l = inner.l_value().get();
-    let l = accessor
-        .match_count()
-        .map_or(requested_l, |count| requested_l.min(count));
-    if l == 0 {
-        return Ok(SearchStats {
-            cmps: 0,
-            hops: 0,
-            result_count: 0,
-            range_search_second_round: false,
-        });
-    }
+    let l = inner.l_value().get();
+    let phase_threshold = accessor.match_count().map_or(l, |count| l.min(count));
     let mut scratch = index.search_scratch(l, accessor.num_starting_points().await?);
     let mut candidates = BinaryHeap::new();
     let mut results = BinaryHeap::new();
@@ -877,9 +827,9 @@ where
         {
             break;
         }
-        // Phase 1 scores every unseen direct neighbor. Once L matches exist,
+        // Phase 1 scores every unseen direct neighbor. Once the phase threshold is reached,
         // Phase 2 prefilters neighbors only when the parent is rejected.
-        let phase_two = results.len() == l;
+        let phase_two = results.len() >= phase_threshold;
         scored.clear();
         if phase_two && !candidate.accepted {
             accessor

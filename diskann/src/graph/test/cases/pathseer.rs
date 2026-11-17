@@ -102,14 +102,15 @@ fn finds_matches_two_hops_away_before_heap_is_full() {
 }
 
 #[test]
-fn exact_match_count_caps_l_and_skips_empty_filters() {
+fn exact_match_count_changes_only_phase_threshold() {
     let index = build_1d_index(
         0,
         0.0,
         AdjacencyList::from_iter_untrusted([1, 2]),
         vec![
             (1, vec![1.0], AdjacencyList::new()),
-            (2, vec![2.0], AdjacencyList::new()),
+            (2, vec![2.0], AdjacencyList::from_iter_untrusted([3])),
+            (3, vec![3.0], AdjacencyList::new()),
         ],
         2,
     );
@@ -123,16 +124,25 @@ fn exact_match_count_caps_l_and_skips_empty_filters() {
         PathSeerMethod::WhatIf4,
     ] {
         let (capped, results) = run_with_filter(&index, &one, 10, method);
-        let (single, _) = run_with_filter(&index, &one, 1, method);
+        let (uncounted, _) = run_with_method(&index, &[1], 10, method);
         assert_eq!(results.iter().map(|n| *n.id()).collect::<Vec<_>>(), [1]);
-        assert_eq!(capped.cmps, single.cmps);
-        assert_eq!(capped.hops, single.hops);
+        assert!(capped.cmps <= uncounted.cmps);
+        if matches!(method, PathSeerMethod::Original | PathSeerMethod::WhatIf4) {
+            assert!(
+                capped.cmps < uncounted.cmps,
+                "{method:?}: capped={} uncounted={}",
+                capped.cmps,
+                uncounted.cmps
+            );
+        }
 
         let (stats, results) = run_with_filter(&index, &empty, 10, method);
-        assert_eq!(stats.cmps, 0);
-        assert_eq!(stats.hops, 0);
         assert_eq!(stats.result_count, 0);
         assert!(results.is_empty());
+        if method == PathSeerMethod::WhatIf2 {
+            assert_eq!(capped.cmps, uncounted.cmps);
+            assert!(stats.hops > 0);
+        }
     }
 }
 
