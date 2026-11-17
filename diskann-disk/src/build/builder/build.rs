@@ -21,7 +21,7 @@ use diskann_providers::{
     storage::PQStorage,
     utils::{
         MAX_MEDOID_SAMPLE_SIZE, RayonThreadPoolRef, VectorDataIterator, create_thread_pool,
-        find_medoid_with_sampling, load_metadata_from_file,
+        find_medoid_with_sampling,
     },
 };
 use diskann_utils::io::Metadata;
@@ -91,8 +91,11 @@ where
     /// # Errors
     /// Returns compression, graph-construction or storage errors.
     pub fn build(&mut self) -> ANNResult<()> {
-        let metadata =
-            load_metadata_from_file(self.storage_provider, &self.index_writer.get_dataset_file())?;
+        let metadata = validate_data_generation_input(
+            self.storage_provider,
+            &self.index_writer.get_dataset_file(),
+            self.config.compression_chunk_vector_count,
+        )?;
         match &self.config.graph {
             GraphBuildConfig::Vamana {
                 graph,
@@ -217,7 +220,6 @@ where
         let parameters = &self.config;
         let data_path = self.index_writer.get_dataset_file();
         let max_block_size = parameters.compression_chunk_vector_count;
-        validate_data_generation_input(self.storage_provider, &data_path, max_block_size)?;
         let num_chunks = parameters.search_pq_chunks;
         let quantizer_context = PQGenerationContext {
             pq_storage: self.pq_storage.clone(),
@@ -247,7 +249,7 @@ where
             "Compressing data into {} bytes per vector for disk search",
             num_chunks.get()
         );
-        generator.generate_data(self.storage_provider, pool, max_block_size)
+        generator.generate_data_with_metadata(self.storage_provider, pool, max_block_size, metadata)
     }
 }
 
