@@ -17,10 +17,10 @@
         "data": {
           "data": "yfcc_10k.fbin",
           "data_type": "f32",
-          "groundtruth": "groundtruth_ip.bin",
           "metric": "inner-product",
           "queries": "yfcc_query_100.fbin",
-          "preprocess": []
+          "preprocess": [],
+          "labels": "yfcc_metadata.json"
         },
         "representation": {
           "spherical": {
@@ -29,23 +29,28 @@
           }
         },
         "search": {
-          "knn": [
-            {
-              "beam_width": null,
-              "knn": 10,
-              "search_l": 50
-            },
-            {
-              "beam_width": 3,
-              "knn": 10,
-              "search_l": 50
-            },
-            {
-              "beam_width": 3,
-              "knn": 10,
-              "search_l": 100
-            }
-          ]
+          "knn": {
+            "groundtruth": "groundtruth_ip.bin",
+            "searches": [
+              {
+                "beam_width": null,
+                "knn": 10,
+                "search_l": 50
+              },
+              {
+                "beam_width": 3,
+                "knn": 10,
+                "search_l": 50
+              },
+              {
+                "beam_width": 3,
+                "knn": 10,
+                "search_l": 100
+              }
+            ]
+          },
+          "inline_filter": null,
+          "multihop_filter": null
         }
       }
     }

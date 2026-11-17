@@ -3,11 +3,12 @@
  * Licensed under the MIT license.
  */
 
+mod factory;
 mod object;
 mod ops;
+mod parse;
 mod runner;
-
-use object::{CheckCounters, Counters, Index, KnnSearch};
+mod stats;
 
 use diskann_benchmark_runner::{Registry, RegistryError};
 

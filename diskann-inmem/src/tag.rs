@@ -25,9 +25,9 @@ use crate::num::IdLimit;
 ///
 /// Tag updates and reads should use [`AtomicTag`].
 ///
-/// A reader holding a [`Guard`](super::epoch::Guard) performs an [`Ordering::Acquire`] load
-/// on an [`AtomicTag`]; if [`Tag::can_read`] returns `true`, the reader may access the
-/// data this tag protects.
+/// A reader holding a [`ReadGuard`](super::epoch::ReadGuard) performs an
+/// [`Ordering::Acquire`] load on an [`AtomicTag`]; if [`Tag::can_read`] returns `true`,
+/// the reader may access the data this tag protects.
 ///
 /// # Named Tags
 ///
@@ -70,7 +70,7 @@ use crate::num::IdLimit;
 ///   and only by the thread that acquired ownership.
 ///
 /// * [`Tag::PUBLISHED`] -> [`Tag::RETIRING`]: Must be done while under a
-///   [`Guard`](super::epoch::Guard) and may be done with relaxed atomics. Writes to
+///   [`ReadGuard`](super::epoch::ReadGuard) and may be done with relaxed atomics. Writes to
 ///   associated data may not be made. Place into [`Retire::retire`](super::epoch::Retire::retire)
 ///   for final reclamation.
 ///

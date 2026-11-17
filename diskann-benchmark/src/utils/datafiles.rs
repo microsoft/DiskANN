@@ -3,14 +3,13 @@
  * Licensed under the MIT license.
  */
 
-use std::{io::Read, path::Path};
+use std::path::Path;
 
 use anyhow::Context;
 use bit_set::BitSet;
-use diskann::utils::IntoUsize;
 use diskann_benchmark_runner::utils::datatype::DataType;
 use diskann_providers::storage::StorageReadProvider;
-use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
+use diskann_utils::views::rowmajor::{self, Matrix};
 use serde::{Deserialize, Serialize};
 
 pub(crate) struct BinFile<'a>(pub(crate) &'a Path);
@@ -103,6 +102,8 @@ impl ConvertingLoad for f32 {
             U: Default + Clone + From<T>,
             T: Copy,
         {
+            use diskann_utils::views::rowmajor::MatrixMut;
+
             let mut to =
                 rowmajor::Owned::try_from_element(from.nrows(), from.ncols(), U::default())?;
             std::iter::zip(to.as_mut_slice().iter_mut(), from.as_slice().iter())
@@ -132,19 +133,7 @@ pub(crate) fn load_groundtruth(
         .open_reader(&path.0.to_string_lossy())
         .with_context(|| format!("while opening {}", path.0.display()))?;
 
-    let (num_points, dim) = {
-        let mut buffer = [0u8; std::mem::size_of::<u32>()];
-        file.read_exact(&mut buffer)?;
-        let num_points = u32::from_le_bytes(buffer).into_usize();
-
-        file.read_exact(&mut buffer)?;
-        let dim = u32::from_le_bytes(buffer).into_usize();
-        (num_points, dim)
-    };
-
-    let mut groundtruth = rowmajor::Owned::<u32>::from_element(num_points, dim, 0);
-    let groundtruth_slice: &mut [u8] = bytemuck::cast_slice_mut(groundtruth.as_mut_slice());
-    file.read_exact(groundtruth_slice)?;
+    let groundtruth = diskann_utils::io::read_bin(&mut file)?;
 
     if let Some(expected_k) = k {
         if groundtruth.ncols() < expected_k {
@@ -171,29 +160,7 @@ pub(crate) fn load_range_groundtruth(path: BinFile<'_>) -> anyhow::Result<Vec<Ve
         .open_reader(&path.0.to_string_lossy())
         .with_context(|| format!("while opening {}", path.0.display()))?;
 
-    let (num_points, total_results) = {
-        let mut buffer = [0u8; std::mem::size_of::<u32>()];
-        file.read_exact(&mut buffer)?;
-        let num_points = u32::from_le_bytes(buffer).into_usize();
-
-        file.read_exact(&mut buffer)?;
-        let total_results = u32::from_le_bytes(buffer).into_usize();
-        (num_points, total_results)
-    };
-
-    let mut sizes_and_ids: Vec<u32> = vec![0u32; num_points + total_results];
-    let result_sizes_slice: &mut [u8] = bytemuck::cast_slice_mut(sizes_and_ids.as_mut_slice());
-    file.read_exact(result_sizes_slice)?;
-
-    let mut groundtruth_ids = Vec::<Vec<u32>>::with_capacity(num_points);
-    let mut idx = 0;
-    let sizes = &sizes_and_ids[..num_points];
-    let ids = &sizes_and_ids[num_points..];
-    for size in sizes {
-        groundtruth_ids.push(ids[idx..idx + *size as usize].to_vec());
-        idx += *size as usize;
-    }
-    Ok(groundtruth_ids)
+    Ok(diskann_utils::io::read_staggered_bin(&mut file)?)
 }
 
 // Helper struct for serializing BitSet as Vec<u8> (raw storage)

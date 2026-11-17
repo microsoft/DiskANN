@@ -5,25 +5,49 @@
 
 use std::{num::NonZeroU32, sync::Arc};
 
-use diskann::{graph::search::Knn, utils::IntoUsize};
-use diskann_benchmark_core::recall::{RecallMetrics, Rows};
-use diskann_benchmark_runner::{
-    report::{
-        Report,
-        tolerance::{FmtSpec, MaxAbsoluteChange},
-    },
-    utils::fmt::KeyValue,
-};
+use diskann::utils::IntoUsize;
+use diskann_benchmark_core::recall::Rows;
 use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
-use serde::{Deserialize, Serialize};
 
-use crate::{
-    index::{CheckCounters, Counters, Index, KnnSearch},
-    support::datatype::DatasetView,
+use super::{
+    object::{Index, PartialIndex},
+    parse,
+    stats::{Counters, KnnSearch, KnnStats},
 };
+use crate::support::{
+    datatype::{DataType, Dataset, DatasetView},
+    filters::InvertedIndex,
+    io::{load_and_convert, open},
+};
+
+#[derive(Debug)]
+pub(super) struct Bundle {
+    pub(super) data: Dataset,
+    pub(super) labels: InvertedIndex,
+    pub(super) queries: Dataset,
+}
+
+pub(super) fn load_data(input: &parse::Data, data_type: DataType) -> anyhow::Result<Bundle> {
+    let data = {
+        let mut io = open(&*input.data)?;
+        load_and_convert(&mut io, input.data_type, data_type, &input.preprocess)?
+    };
+
+    let labels = InvertedIndex::parse(std::io::BufReader::new(open(&*input.labels)?))?;
+    let queries = {
+        let mut io = open(&*input.queries)?;
+        load_and_convert(&mut io, input.data_type, data_type, &input.preprocess)?
+    };
+
+    Ok(Bundle {
+        data,
+        labels,
+        queries,
+    })
+}
 
 pub(super) fn insert(
-    index: &dyn Index,
+    index: &dyn PartialIndex,
     dataset: DatasetView<'_>,
     rt: &tokio::runtime::Handle,
 ) -> anyhow::Result<Counters> {
@@ -60,13 +84,97 @@ pub(super) fn multi_insert(
 }
 
 pub(super) fn knn(
-    index: &dyn Index,
-    k: usize,
-    knn: Knn,
+    index: &dyn PartialIndex,
+    searches: &parse::Knn,
     queries: DatasetView<'_>,
-    groundtruth: &dyn Rows<u64>,
     rt: &tokio::runtime::Handle,
-) -> anyhow::Result<KnnStats> {
+) -> anyhow::Result<Vec<KnnStats>> {
+    let parse::Knn {
+        searches,
+        groundtruth,
+    } = searches;
+
+    let groundtruth = {
+        let mut io = open(&**groundtruth)?;
+        let groundtruth = diskann_utils::io::read_bin::<u32>(&mut io)?;
+        groundtruth.map(|v| u64::from(*v))
+    };
+
+    anyhow::ensure!(
+        queries.nrows() == Matrix::nrows(&groundtruth),
+        "number of queries ({}) must match number of groundtruth entries ({})",
+        queries.nrows(),
+        Matrix::nrows(&groundtruth),
+    );
+
+    let mut results = Vec::new();
+
+    for (k, params) in searches.iter() {
+        let mut ids = rowmajor::Owned::from_element(queries.nrows(), *k, u64::MAX);
+
+        let before = index.counters();
+        let mut misc = KnnSearch::new();
+        let mut neighbors = Vec::new();
+        for (out, query) in std::iter::zip(ids.rows_mut(), queries.iter()) {
+            neighbors.clear();
+
+            let stats = rt.block_on(index.search(query, *params, &mut neighbors))?;
+            misc += stats;
+
+            std::iter::zip(out.iter_mut(), neighbors.iter()).for_each(|(d, s)| *d = *s.id());
+        }
+        let counters = before.delta(&index.counters())?;
+
+        let recall = diskann_benchmark_core::recall::knn(
+            &groundtruth,
+            None,
+            &ids.as_view(),
+            *k,
+            *k,
+            diskann_benchmark_core::recall::GroundTruthMode::Fixed,
+        )?;
+
+        let stats = KnnStats {
+            counters,
+            recall: recall.into(),
+            misc,
+        };
+
+        results.push(stats);
+    }
+
+    Ok(results)
+}
+
+pub(super) fn filter_search(
+    index: &dyn Index,
+    labels: &InvertedIndex,
+    searches: parse::CommonFilter<'_>,
+    queries: DatasetView<'_>,
+) -> anyhow::Result<Vec<KnnStats>> {
+    let parse::CommonFilter {
+        searches,
+        predicates,
+        groundtruth,
+    } = searches;
+
+    let predicates = labels.queries(std::io::BufReader::new(open(predicates)?))?;
+
+    anyhow::ensure!(
+        queries.nrows() == Matrix::nrows(&predicates),
+        "number of queries ({}) must match number of predicate maps ({})",
+        queries.nrows(),
+        Matrix::nrows(&predicates),
+    );
+
+    let groundtruth: Vec<Vec<u64>> = {
+        let mut io = open(groundtruth)?;
+        let raw = diskann_utils::io::read_staggered_bin::<u32>(&mut io)?;
+        raw.into_iter()
+            .map(|v| v.into_iter().map(u64::from).collect())
+            .collect()
+    };
+
     anyhow::ensure!(
         queries.nrows() == groundtruth.nrows(),
         "number of queries ({}) must match number of groundtruth entries ({})",
@@ -74,193 +182,44 @@ pub(super) fn knn(
         groundtruth.nrows(),
     );
 
-    let mut ids = rowmajor::Owned::from_element(queries.nrows(), k, u64::MAX);
+    let mut results = Vec::new();
 
-    let before = index.counters();
-    let mut misc = KnnSearch::new();
-    let mut neighbors = Vec::new();
-    for (out, query) in std::iter::zip(ids.rows_mut(), queries.iter()) {
-        neighbors.clear();
+    for (k, params) in searches {
+        let mut ids = rowmajor::Owned::from_element(queries.nrows(), k, u64::MAX);
+        let before = index.counters();
+        let mut misc = KnnSearch::new();
+        let mut neighbors = Vec::new();
 
-        let stats = rt.block_on(index.search(query, knn, &mut neighbors))?;
-        misc += stats;
+        for (out, (query, predicate)) in std::iter::zip(
+            ids.rows_mut(),
+            std::iter::zip(queries.iter(), predicates.rows()),
+        ) {
+            neighbors.clear();
 
-        std::iter::zip(out.iter_mut(), neighbors.iter()).for_each(|(d, s)| *d = *s.id());
-    }
-    let counters = before.delta(&index.counters())?;
+            let stats = index.filter_search(query, predicate, params.clone(), &mut neighbors)?;
+            misc += stats;
 
-    let recall = diskann_benchmark_core::recall::knn(
-        groundtruth,
-        None,
-        &ids.as_view(),
-        k,
-        k,
-        diskann_benchmark_core::recall::GroundTruthMode::Fixed,
-    )?;
-
-    Ok(KnnStats {
-        counters,
-        recall: recall.into(),
-        misc,
-    })
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct KnnRecall {
-    recall_k: usize,
-    recall_n: usize,
-    num_queries: usize,
-    average: f64,
-}
-
-impl From<RecallMetrics> for KnnRecall {
-    fn from(metrics: RecallMetrics) -> Self {
-        Self {
-            recall_k: metrics.recall_k,
-            recall_n: metrics.recall_n,
-            num_queries: metrics.num_queries,
-            average: metrics.average,
+            std::iter::zip(out.iter_mut(), neighbors.iter()).for_each(|(d, s)| *d = *s.id());
         }
-    }
-}
+        let counters = before.delta(&index.counters())?;
 
-impl std::fmt::Display for KnnRecall {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "recall = {:.4}, recall_k = {}, recall_n = {}, num_queries = {}",
-            self.average, self.recall_k, self.recall_n, self.num_queries
-        )
-    }
-}
+        let recall = diskann_benchmark_core::recall::knn(
+            &groundtruth,
+            None,
+            &ids.as_view(),
+            k,
+            k,
+            diskann_benchmark_core::recall::GroundTruthMode::Flexible,
+        )?;
 
-#[derive(Debug, Serialize, Deserialize)]
-struct CheckKnnRecall {
-    recall: MaxAbsoluteChange,
-}
-
-impl CheckKnnRecall {
-    fn example() -> Self {
-        const RECALL: MaxAbsoluteChange = MaxAbsoluteChange::try_from_f64(0.001).unwrap();
-        Self { recall: RECALL }
-    }
-
-    fn check(&self, old: &KnnRecall, new: &KnnRecall) -> Report {
-        let Self {
-            recall: check_recall,
-        } = self;
-        let KnnRecall {
-            recall_k,
-            recall_n,
-            num_queries,
-            average,
-        } = old;
-
-        let fmt = FmtSpec::new().with_precision(4);
-        let mut builder = Report::builder();
-        builder.push("recall_k", Report::equal(*recall_k, new.recall_k));
-        builder.push("recall_n", Report::equal(*recall_n, new.recall_n));
-        builder.push("num_queries", Report::equal(*num_queries, new.num_queries));
-        builder.push(
-            "average",
-            Report::equal_with_tolerance(check_recall, *average, new.average, fmt),
-        );
-        builder.finish()
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub(crate) struct KnnStats {
-    recall: KnnRecall,
-    counters: Counters,
-    misc: KnnSearch,
-}
-
-#[cfg(test)]
-impl KnnStats {
-    pub(super) fn test_fixture() -> Self {
-        Self {
-            recall: KnnRecall {
-                recall_k: 10,
-                recall_n: 10,
-                num_queries: 100,
-                average: 0.75,
-            },
-            counters: Counters::test_fixture(),
-            misc: KnnSearch::new(),
-        }
-    }
-}
-
-impl std::fmt::Display for KnnStats {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut kv = KeyValue::new();
-        kv.push("counters", &self.counters);
-        kv.push("recall", &self.recall);
-        kv.push("misc", &self.misc);
-        write!(f, "{}", kv)
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub(crate) struct CheckKnnStats {
-    recall: CheckKnnRecall,
-    counters: CheckCounters,
-}
-
-impl CheckKnnStats {
-    pub(crate) fn example() -> Self {
-        Self {
-            recall: CheckKnnRecall::example(),
-            counters: CheckCounters::example(),
-        }
-    }
-
-    pub(crate) fn check(&self, old: &KnnStats, new: &KnnStats) -> Report {
-        let Self {
-            recall: check_recall,
-            counters: check_counters,
-        } = self;
-        let KnnStats {
-            recall,
+        let stats = KnnStats {
             counters,
+            recall: recall.into(),
             misc,
-        } = old;
+        };
 
-        let mut builder = Report::builder();
-        builder.push("recall", check_recall.check(recall, &new.recall));
-        builder.push("counters", check_counters.check(counters, &new.counters));
-        builder.push("misc", check_counters.check_hops_and_cmps(misc, &new.misc));
-        builder.finish()
+        results.push(stats);
     }
-}
 
-///////////
-// Tests //
-///////////
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use diskann_benchmark_runner::report::Status;
-
-    #[test]
-    fn check_knn_stats_rejects_recall_changes() {
-        let tolerance = CheckKnnStats::example();
-        let old = KnnStats::test_fixture();
-        for (recall_k, average, expected) in [
-            (10, 0.75, Status::Pass),
-            (11, 0.75, Status::Fail),
-            (10, 0.74, Status::Fail),
-        ] {
-            let mut new = KnnStats::test_fixture();
-            new.recall.recall_k = recall_k;
-            new.recall.average = average;
-            assert_eq!(
-                tolerance.check(&old, &new).status(),
-                expected,
-                "recall_k = {recall_k}, average = {average}"
-            );
-        }
-    }
+    Ok(results)
 }
