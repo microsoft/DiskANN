@@ -4,10 +4,12 @@
 """Check the four-group experiment without executing timing code."""
 
 import json
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import benchmark_queue_search as experiment
 
@@ -110,6 +112,38 @@ class ComparisonTests(unittest.TestCase):
 
     def test_benchmark_source_and_input_match_original(self):
         experiment.check_benchmark()
+
+    def test_build_uses_default_or_selected_workload_for_both_searches(self):
+        selected = experiment.ROOT / "diskann-benchmark/example/neighbor-queue-large-l.json"
+        suffix = ".exe" if experiment.os.name == "nt" else ""
+        binary = experiment.ROOT / "target/release" / ("diskann-benchmark" + suffix)
+        read_bytes = Path.read_bytes
+
+        def compiled_binary(path):
+            return b"test executable" if path == binary else read_bytes(path)
+
+        for index, input_file in enumerate((None, selected)):
+            with self.subTest(input_file=input_file):
+                output = self.output / f"build-{index}"
+                argv = ["benchmark_queue_search.py", "build", "--output", str(output)]
+                if input_file is not None:
+                    argv.extend(["--input-file", str(input_file)])
+                with patch.object(sys, "argv", argv), \
+                        patch.object(experiment, "command"), \
+                        patch.object(Path, "read_bytes", compiled_binary):
+                    experiment.main()
+
+                source = input_file or experiment.ROOT / experiment.INPUT
+                self.assertEqual((output / "workload-input.json").read_bytes(),
+                                 source.read_bytes())
+                expected = json.loads(source.read_bytes())
+                for variant in experiment.VARIANTS:
+                    if variant == "optimized":
+                        expected["jobs"][0]["content"]["insertion_search"] = {"type": "binary"}
+                    actual = json.loads((output / f"{variant}-input.json").read_bytes())
+                    self.assertEqual(actual, expected)
+                manifest = json.loads((output / "manifest.json").read_text())
+                self.assertEqual(manifest["workload"]["sha256"], experiment.sha256(source))
 
 
 if __name__ == "__main__":

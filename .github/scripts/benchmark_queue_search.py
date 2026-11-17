@@ -2,7 +2,7 @@
 # Copyright (c) Microsoft Corporation. All rights reserved.
 # Licensed under the MIT license.
 
-"""Compare input-selected queue searches with #1600 fixtures and measurement loops."""
+"""Compare input-selected queue searches with #1600 measurement loops."""
 
 import argparse
 import hashlib
@@ -75,6 +75,9 @@ def build(args):
     check_benchmark()
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
+    workload = args.input_file.read_bytes()
+    workload_path = output / "workload-input.json"
+    workload_path.write_bytes(workload)
     manifest = {
         "head": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
         "base": BASE,
@@ -82,6 +85,7 @@ def build(args):
         "architecture": platform.machine(),
         "runner": os.environ.get("RUNNER_NAME"),
         "rustflags": os.environ.get("RUSTFLAGS"),
+        "workload": {"path": str(args.input_file), "sha256": sha256(workload_path)},
         "variants": {},
         "benchmark_sha256": {},
     }
@@ -112,7 +116,7 @@ def build(args):
     )
     executable.chmod(0o755)
     for variant in VARIANTS:
-        content = json.loads((ROOT / INPUT).read_text(encoding="utf-8"))
+        content = json.loads(workload)
         if variant == "optimized" and config != {"type": "linear"}:
             content["jobs"][0]["content"]["insertion_search"] = config
         path = output / f"{variant}-input.json"
@@ -239,11 +243,12 @@ def summarize(args):
     for name, data in (("process-medians", records), ("comparisons", comparisons)):
         (output / f"{name}.json").write_text(json.dumps(data, indent=2), encoding="utf-8")
     lines = [
-        "### Four queue-update groups: unchanged #1600 benchmark",
+        "### Four queue-update groups: selected workload",
         "",
         f"Source: `{manifest['head']}`; workload reference: `{manifest['base']}`.",
         "One executable measures insert and batch_insert with each input-selected search.",
-        "Fixture generation, reset, cases, method order, and repetitions match #1600.",
+        "Fixture generation, reset, timing loops, and method order match #1600.",
+        "Cases and repetitions come from the selected input.",
         "No lookup-only suite, generated cases, population sweep, or repetition cap.",
         "Speedup = original / lookup-optimized, comparing the same update method.",
         "Each cell lists three independent process medians, in ns/update.",
@@ -270,6 +275,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("operation", choices=("build", "run", "summarize"))
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--input-file", type=Path, default=ROOT / INPUT)
     parser.add_argument("--search-config", type=Path, default=SEARCH_CONFIG)
     args = parser.parse_args()
     {"build": build, "run": run, "summarize": summarize}[args.operation](args)

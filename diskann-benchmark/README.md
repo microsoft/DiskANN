@@ -238,8 +238,11 @@ lookup-only benchmark. Historical timings are not pooled with this experiment.
 Run the driver's `build`, `run`, and `summarize` operations in that order, passing
 `--output <artifact-directory>` to each. The candidate strategy comes from
 [the search configuration](example/neighbor-queue-search-strategy.json); `build`
-accepts `--search-config <path>` to select another configuration. The driver changes
-only `insertion_search` in a copy of the original input. The original and configured
+accepts `--search-config <path>` to select another configuration and
+`--input-file <path>` to select a workload, defaulting to the original example.
+The search-comparison CI uses the separate [large-L workload](example/neighbor-queue-large-l.json).
+The driver saves the selected workload and its hash, then changes
+only `insertion_search` in a copy of that input. The original and configured
 inputs run three independent processes each, in alternating order after compilation
 finishes. No source rewriting or Cargo feature is used. Do not build or run other
 benchmarks during `run`.

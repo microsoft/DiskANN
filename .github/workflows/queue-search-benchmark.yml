@@ -70,7 +70,7 @@ jobs:
           cargo clippy --locked --release -p diskann -p diskann-benchmark --all-targets -- -D warnings
       - name: Build and test configurable queue
         run: |
-          python .github/scripts/benchmark_queue_search.py build --output benchmark-results
+          python .github/scripts/benchmark_queue_search.py build --output benchmark-results --input-file diskann-benchmark/example/neighbor-queue-large-l.json
       - name: Compare independent processes
         run: |
           python .github/scripts/benchmark_queue_search.py run --output benchmark-results
