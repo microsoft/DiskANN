@@ -330,22 +330,60 @@ impl std::fmt::Display for KnnRecall {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct RangeQuality {
     num_queries: usize,
-    num_groundtruth_values: usize,
-    num_result_values: usize,
-    num_matches: usize,
+    pooled: PooledCounts,
+    mean_precision: QueryMean,
+    mean_recall: QueryMean,
+    empty_groundtruth: EmptyGroundtruth,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PooledCounts {
+    groundtruth: usize,
+    returned: usize,
+    matches: usize,
     precision: f64,
     recall: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct QueryMean {
+    value: Option<f64>,
+    num_queries: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct EmptyGroundtruth {
+    num_queries: usize,
+    queries_with_results: usize,
+    returned: usize,
+    false_positive_rate: Option<f64>,
 }
 
 impl From<RangeMetrics> for RangeQuality {
     fn from(metrics: RangeMetrics) -> Self {
         Self {
             num_queries: metrics.num_queries,
-            num_groundtruth_values: metrics.num_groundtruth_values,
-            num_result_values: metrics.num_result_values,
-            num_matches: metrics.num_matches,
-            precision: metrics.precision,
-            recall: metrics.recall,
+            pooled: PooledCounts {
+                groundtruth: metrics.pooled.groundtruth,
+                returned: metrics.pooled.returned,
+                matches: metrics.pooled.matches,
+                precision: metrics.pooled.precision(),
+                recall: metrics.pooled.recall(),
+            },
+            mean_precision: QueryMean {
+                value: metrics.mean_precision.value,
+                num_queries: metrics.mean_precision.num_queries,
+            },
+            mean_recall: QueryMean {
+                value: metrics.mean_recall.value,
+                num_queries: metrics.mean_recall.num_queries,
+            },
+            empty_groundtruth: EmptyGroundtruth {
+                num_queries: metrics.empty_groundtruth.num_queries,
+                queries_with_results: metrics.empty_groundtruth.queries_with_results,
+                returned: metrics.empty_groundtruth.returned,
+                false_positive_rate: metrics.empty_groundtruth.false_positive_rate(),
+            },
         }
     }
 }
@@ -355,12 +393,12 @@ impl std::fmt::Display for RangeQuality {
         write!(
             f,
             "precision = {:.4}, recall = {:.4}, num_queries = {}, num_groundtruth_values = {}, num_result_values = {}, num_matches = {}",
-            self.precision,
-            self.recall,
+            self.pooled.precision,
+            self.pooled.recall,
             self.num_queries,
-            self.num_groundtruth_values,
-            self.num_result_values,
-            self.num_matches
+            self.pooled.groundtruth,
+            self.pooled.returned,
+            self.pooled.matches
         )
     }
 }
@@ -436,26 +474,56 @@ impl CheckQuality {
             (Quality::Range(old), Quality::Range(new)) => {
                 let RangeQuality {
                     num_queries,
-                    num_groundtruth_values,
-                    num_result_values: _,
-                    num_matches: _,
-                    precision,
-                    recall,
+                    pooled,
+                    mean_precision,
+                    mean_recall,
+                    empty_groundtruth,
                 } = old;
 
                 let mut builder = Report::builder();
                 builder.push("num_queries", Report::equal(*num_queries, new.num_queries));
                 builder.push(
                     "num_groundtruth_values",
-                    Report::equal(*num_groundtruth_values, new.num_groundtruth_values),
+                    Report::equal(pooled.groundtruth, new.pooled.groundtruth),
                 );
                 builder.push(
                     "precision",
-                    Report::equal_with_tolerance(change, *precision, new.precision, fmt),
+                    Report::equal_with_tolerance(
+                        change,
+                        pooled.precision,
+                        new.pooled.precision,
+                        fmt,
+                    ),
                 );
                 builder.push(
                     "recall",
-                    Report::equal_with_tolerance(change, *recall, new.recall, fmt),
+                    Report::equal_with_tolerance(change, pooled.recall, new.pooled.recall, fmt),
+                );
+                let check_optional = |old: Option<f64>, new: Option<f64>| match (old, new) {
+                    (Some(old), Some(new)) => Report::equal_with_tolerance(change, old, new, fmt),
+                    _ => Report::equal(old.is_some(), new.is_some()),
+                };
+                builder.push(
+                    "mean_precision",
+                    check_optional(mean_precision.value, new.mean_precision.value),
+                );
+                builder.push(
+                    "mean_recall",
+                    check_optional(mean_recall.value, new.mean_recall.value),
+                );
+                builder.push(
+                    "num_empty_groundtruth_queries",
+                    Report::equal(
+                        empty_groundtruth.num_queries,
+                        new.empty_groundtruth.num_queries,
+                    ),
+                );
+                builder.push(
+                    "empty_groundtruth_false_positive_rate",
+                    check_optional(
+                        empty_groundtruth.false_positive_rate,
+                        new.empty_groundtruth.false_positive_rate,
+                    ),
                 );
                 builder.finish()
             }
@@ -484,11 +552,27 @@ mod tests {
         let tolerance = CheckQuality::example();
         let fixture = || RangeQuality {
             num_queries: 2,
-            num_groundtruth_values: 4,
-            num_result_values: 5,
-            num_matches: 3,
-            precision: 0.6,
-            recall: 0.75,
+            pooled: PooledCounts {
+                groundtruth: 4,
+                returned: 5,
+                matches: 3,
+                precision: 0.6,
+                recall: 0.75,
+            },
+            mean_precision: QueryMean {
+                value: Some(2.0 / 3.0),
+                num_queries: 2,
+            },
+            mean_recall: QueryMean {
+                value: Some(0.75),
+                num_queries: 2,
+            },
+            empty_groundtruth: EmptyGroundtruth {
+                num_queries: 0,
+                queries_with_results: 0,
+                returned: 0,
+                false_positive_rate: None,
+            },
         };
         let old = Quality::Range(fixture());
         for (precision, recall, expected) in [
@@ -497,18 +581,89 @@ mod tests {
             (0.6, 0.74, Status::Fail),
         ] {
             let new = Quality::Range(RangeQuality {
-                precision,
-                recall,
+                pooled: PooledCounts {
+                    precision,
+                    recall,
+                    ..fixture().pooled
+                },
                 ..fixture()
             });
             assert_eq!(tolerance.check(&old, &new).status(), expected);
         }
 
         let new = Quality::Range(RangeQuality {
-            num_groundtruth_values: 5,
+            pooled: PooledCounts {
+                groundtruth: 5,
+                ..fixture().pooled
+            },
             ..fixture()
         });
         assert_eq!(tolerance.check(&old, &new).status(), Status::Fail);
+
+        for (mean_precision, mean_recall, empty_rate, expected) in [
+            (Some(2.0 / 3.0), Some(0.75), None, Status::Pass),
+            (Some(0.65), Some(0.75), None, Status::Fail),
+            (Some(2.0 / 3.0), Some(0.74), None, Status::Fail),
+            (None, Some(0.75), None, Status::Fail),
+            (Some(2.0 / 3.0), None, None, Status::Fail),
+            (Some(2.0 / 3.0), Some(0.75), Some(0.0), Status::Fail),
+        ] {
+            let new = Quality::Range(RangeQuality {
+                mean_precision: QueryMean {
+                    value: mean_precision,
+                    ..fixture().mean_precision
+                },
+                mean_recall: QueryMean {
+                    value: mean_recall,
+                    ..fixture().mean_recall
+                },
+                empty_groundtruth: EmptyGroundtruth {
+                    false_positive_rate: empty_rate,
+                    ..fixture().empty_groundtruth
+                },
+                ..fixture()
+            });
+            assert_eq!(tolerance.check(&old, &new).status(), expected);
+        }
+
+        let empty_fixture = || RangeQuality {
+            num_queries: 12,
+            pooled: PooledCounts {
+                returned: 8,
+                precision: 3.0 / 8.0,
+                ..fixture().pooled
+            },
+            mean_precision: QueryMean {
+                value: Some(4.0 / 9.0),
+                num_queries: 3,
+            },
+            empty_groundtruth: EmptyGroundtruth {
+                num_queries: 10,
+                queries_with_results: 1,
+                returned: 3,
+                false_positive_rate: Some(0.1),
+            },
+            ..fixture()
+        };
+        let old_empty = Quality::Range(empty_fixture());
+        for rate in [Some(0.2), None] {
+            let new = Quality::Range(RangeQuality {
+                empty_groundtruth: EmptyGroundtruth {
+                    false_positive_rate: rate,
+                    ..empty_fixture().empty_groundtruth
+                },
+                ..empty_fixture()
+            });
+            assert_eq!(tolerance.check(&old_empty, &new).status(), Status::Fail);
+        }
+        let new = Quality::Range(RangeQuality {
+            empty_groundtruth: EmptyGroundtruth {
+                num_queries: 11,
+                ..empty_fixture().empty_groundtruth
+            },
+            ..empty_fixture()
+        });
+        assert_eq!(tolerance.check(&old_empty, &new).status(), Status::Fail);
 
         let json = serde_json::to_value(&old).unwrap();
         assert_eq!(
@@ -516,16 +671,56 @@ mod tests {
             serde_json::json!({
                 "range": {
                     "num_queries": 2,
-                    "num_groundtruth_values": 4,
-                    "num_result_values": 5,
-                    "num_matches": 3,
-                    "precision": 0.6,
-                    "recall": 0.75
+                    "pooled": {
+                        "groundtruth": 4,
+                        "returned": 5,
+                        "matches": 3,
+                        "precision": 0.6,
+                        "recall": 0.75
+                    },
+                    "mean_precision": { "value": 2.0 / 3.0, "num_queries": 2 },
+                    "mean_recall": { "value": 0.75, "num_queries": 2 },
+                    "empty_groundtruth": {
+                        "num_queries": 0,
+                        "queries_with_results": 0,
+                        "returned": 0,
+                        "false_positive_rate": null
+                    }
                 }
             })
         );
         let decoded: Quality = serde_json::from_value(json).unwrap();
         assert_eq!(tolerance.check(&old, &decoded).status(), Status::Pass);
+    }
+
+    #[test]
+    fn range_quality_from_metrics() {
+        let metrics = diskann_benchmark_core::recall::range_metrics(
+            &vec![vec![1, 8], vec![3], vec![], vec![7, 7, 8], vec![]],
+            &vec![vec![1, 2], vec![3, 4, 5, 6], vec![], vec![], vec![9]],
+        )
+        .unwrap();
+        let quality = RangeQuality::from(metrics);
+        assert_eq!(
+            serde_json::to_value(&quality).unwrap(),
+            serde_json::json!({
+                "num_queries": 5,
+                "pooled": {
+                    "groundtruth": 7, "returned": 5, "matches": 2,
+                    "precision": 2.0 / 5.0, "recall": 2.0 / 7.0
+                },
+                "mean_precision": { "value": 0.5, "num_queries": 3 },
+                "mean_recall": { "value": 0.25, "num_queries": 3 },
+                "empty_groundtruth": {
+                    "num_queries": 2, "queries_with_results": 1,
+                    "returned": 2, "false_positive_rate": 0.5
+                }
+            })
+        );
+        assert_eq!(
+            quality.to_string(),
+            "precision = 0.4000, recall = 0.2857, num_queries = 5, num_groundtruth_values = 7, num_result_values = 5, num_matches = 2"
+        );
     }
 
     #[test]

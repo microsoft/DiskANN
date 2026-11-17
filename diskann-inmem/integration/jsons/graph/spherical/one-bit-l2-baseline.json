@@ -317,12 +317,28 @@
           },
           "quality": {
             "range": {
-              "num_groundtruth_values": 1606,
-              "num_matches": 1605,
+              "empty_groundtruth": {
+                "false_positive_rate": 0.8809523809523809,
+                "num_queries": 42,
+                "queries_with_results": 37,
+                "returned": 1312
+              },
+              "mean_precision": {
+                "num_queries": 95,
+                "value": 0.025484704017581523
+              },
+              "mean_recall": {
+                "num_queries": 58,
+                "value": 0.9984326018808776
+              },
               "num_queries": 100,
-              "num_result_values": 50925,
-              "precision": 0.031516936671575846,
-              "recall": 0.9993773349937732
+              "pooled": {
+                "groundtruth": 1606,
+                "matches": 1605,
+                "precision": 0.031516936671575846,
+                "recall": 0.9993773349937732,
+                "returned": 50925
+              }
             }
           }
         }
@@ -647,12 +663,28 @@
           },
           "quality": {
             "range": {
-              "num_groundtruth_values": 1606,
-              "num_matches": 1605,
+              "empty_groundtruth": {
+                "false_positive_rate": 0.8809523809523809,
+                "num_queries": 42,
+                "queries_with_results": 37,
+                "returned": 1312
+              },
+              "mean_precision": {
+                "num_queries": 95,
+                "value": 0.025484704017581523
+              },
+              "mean_recall": {
+                "num_queries": 58,
+                "value": 0.9984326018808776
+              },
               "num_queries": 100,
-              "num_result_values": 50925,
-              "precision": 0.031516936671575846,
-              "recall": 0.9993773349937732
+              "pooled": {
+                "groundtruth": 1606,
+                "matches": 1605,
+                "precision": 0.031516936671575846,
+                "recall": 0.9993773349937732,
+                "returned": 50925
+              }
             }
           }
         }

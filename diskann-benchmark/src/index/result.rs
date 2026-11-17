@@ -379,12 +379,15 @@ where
             ),
             col_idx + 3,
         );
-        row.insert(format!("{:.3}", r.range_metrics.precision), col_idx + 4);
-        row.insert(format!("{:.3}", r.range_metrics.recall), col_idx + 5);
+        row.insert(
+            format!("{:.3}", r.range_metrics.pooled.precision),
+            col_idx + 4,
+        );
+        row.insert(format!("{:.3}", r.range_metrics.pooled.recall), col_idx + 5);
         row.insert(r.range_metrics.num_queries, col_idx + 6);
-        row.insert(r.range_metrics.num_groundtruth_values, col_idx + 7);
-        row.insert(r.range_metrics.num_result_values, col_idx + 8);
-        row.insert(r.range_metrics.num_matches, col_idx + 9);
+        row.insert(r.range_metrics.pooled.groundtruth, col_idx + 7);
+        row.insert(r.range_metrics.pooled.returned, col_idx + 8);
+        row.insert(r.range_metrics.pooled.matches, col_idx + 9);
         row.insert(r.num_tasks, col_idx + 10);
     });
 

@@ -75,24 +75,61 @@ where
 #[derive(Debug, Clone, Serialize)]
 #[non_exhaustive]
 pub(crate) struct RangeMetrics {
-    /// The number of queries.
     pub(crate) num_queries: usize,
-    pub(crate) num_groundtruth_values: usize,
-    pub(crate) num_result_values: usize,
-    pub(crate) num_matches: usize,
+    pub(crate) pooled: PooledCounts,
+    pub(crate) mean_precision: QueryMean,
+    pub(crate) mean_recall: QueryMean,
+    pub(crate) empty_groundtruth: EmptyGroundtruth,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct PooledCounts {
+    pub(crate) groundtruth: usize,
+    pub(crate) returned: usize,
+    pub(crate) matches: usize,
     pub(crate) precision: f64,
     pub(crate) recall: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct QueryMean {
+    pub(crate) value: Option<f64>,
+    pub(crate) num_queries: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct EmptyGroundtruth {
+    pub(crate) num_queries: usize,
+    pub(crate) queries_with_results: usize,
+    pub(crate) returned: usize,
+    pub(crate) false_positive_rate: Option<f64>,
 }
 
 impl From<&benchmark_core::recall::RangeMetrics> for RangeMetrics {
     fn from(m: &benchmark_core::recall::RangeMetrics) -> Self {
         Self {
             num_queries: m.num_queries,
-            num_groundtruth_values: m.num_groundtruth_values,
-            num_result_values: m.num_result_values,
-            num_matches: m.num_matches,
-            precision: m.precision,
-            recall: m.recall,
+            pooled: PooledCounts {
+                groundtruth: m.pooled.groundtruth,
+                returned: m.pooled.returned,
+                matches: m.pooled.matches,
+                precision: m.pooled.precision(),
+                recall: m.pooled.recall(),
+            },
+            mean_precision: QueryMean {
+                value: m.mean_precision.value,
+                num_queries: m.mean_precision.num_queries,
+            },
+            mean_recall: QueryMean {
+                value: m.mean_recall.value,
+                num_queries: m.mean_recall.num_queries,
+            },
+            empty_groundtruth: EmptyGroundtruth {
+                num_queries: m.empty_groundtruth.num_queries,
+                queries_with_results: m.empty_groundtruth.queries_with_results,
+                returned: m.empty_groundtruth.returned,
+                false_positive_rate: m.empty_groundtruth.false_positive_rate(),
+            },
         }
     }
 }

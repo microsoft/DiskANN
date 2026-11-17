@@ -1054,6 +1054,19 @@ where
     }
 
     /// Run [`diskann::graph::search::FilteredRange`] and store the results in `output`.
+    ///
+    /// FIXME: Quantized range bounds need consistent distance units. Spherical
+    /// prescaling changes squared-L2 units, so an original-space radius cannot be
+    /// passed through unchanged.
+    ///
+    /// FIXME: Reranking recomputes distances and sorts but does not reapply range
+    /// bounds, leaving out-of-range candidates in the output.
+    ///
+    /// FIXME: Investigate one-bit scalar range search returning no results for
+    /// the YFCC test radius despite nonempty exact groundtruth.
+    ///
+    /// Before marking the PR ready, open cross-linked issues for these findings
+    /// and their unfiltered range-search counterparts, and add the issue links here.
     pub fn range_filtered<O>(
         &mut self,
         params: diskann::graph::search::FilteredRange,

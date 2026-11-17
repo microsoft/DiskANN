@@ -317,10 +317,15 @@ mod tests {
             let metrics = summary.range_metrics;
             assert_eq!(metrics.num_queries, queries.nrows());
             assert_eq!(
-                metrics.precision, 1.0,
+                metrics.pooled.precision(),
+                1.0,
                 "we used a search as the groundtruth"
             );
-            assert_eq!(metrics.recall, 1.0, "we used a search as the groundtruth");
+            assert_eq!(
+                metrics.pooled.recall(),
+                1.0,
+                "we used a search as the groundtruth"
+            );
         }
     }
 

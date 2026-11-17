@@ -300,21 +300,150 @@ where
     })
 }
 
+//-------//
+// Range //
+//-------//
+
+/// Aggregated metrics for range search results.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct RangeMetrics {
     /// The number of queries.
     pub num_queries: usize,
-    /// Total groundtruth IDs, deduplicated within each query.
-    pub num_groundtruth_values: usize,
-    /// Total returned IDs, deduplicated within each query.
-    pub num_result_values: usize,
-    /// Total returned IDs present in their query's groundtruth.
-    pub num_matches: usize,
-    /// Total matching IDs divided by total returned IDs.
-    pub precision: f64,
-    /// Total matching IDs divided by total groundtruth IDs.
-    pub recall: f64,
+
+    /// Aggregated metrics across all queries.
+    ///
+    /// Since the number of results can vary wildly between queries, queries with a large
+    /// number of results are highly represented in these metrics.
+    pub pooled: PooledCounts,
+
+    /// Average per-query precision, excluding queries with no returned IDs.
+    ///
+    /// This helps strenghen the signal of queries with few total groundtruth/results.
+    pub mean_precision: QueryMean,
+
+    /// Average per-query recall, excluding queries with empty groundtruth.
+    ///
+    /// This helps strenghen the signal of queries with few total groundtruth/results.
+    pub mean_recall: QueryMean,
+
+    /// Statistics on queries that have zero ground-truth entries.
+    pub empty_groundtruth: EmptyGroundtruth,
+}
+
+/// Range search results aggregated across the entire batch of queries and results.
+///
+/// This is used to compute both [`Self::recall`] and [`Self::precision`].
+///
+/// * Recall: The number of groundtruth actually present in the results. This measures how
+///   many of the actual true results were returned. However, it can be gamed by simply
+///   returning all of the items in a dataset.
+///
+/// * Precision: The number of results that are present in the groundtruth. This can be used
+///   to detect the case where the entire dataset is returned, but can be gamed if just a
+///   single item within the groundtruth is observed.
+///
+/// Quality of range search should seek to have both high recall and precision.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct PooledCounts {
+    /// Total groundtruth IDs (with duplicates removed).
+    pub groundtruth: usize,
+    /// Total returned IDs (with duplicates removed).
+    pub returned: usize,
+    /// Number of [`Self::returned`] items present within the [`Self::groundtruth`] for
+    /// their respective queries.
+    pub matches: usize,
+}
+
+impl PooledCounts {
+    /// Return the ratio of matched items to groundtruth items:
+    /// ```math
+    /// | results ∩ groundtruth |
+    /// -------------------------
+    ///      | groundtruth |
+    /// ```
+    /// This measures how accurate the returned results were.
+    ///
+    /// Returns 0 if [`Self::groundtruth`] is zero.
+    pub fn recall(&self) -> f64 {
+        if self.groundtruth == 0 {
+            0.0
+        } else {
+            self.matches as f64 / self.groundtruth as f64
+        }
+    }
+
+    /// Return the ratio of matched items to returned items:
+    /// ```math
+    /// | results ∩ groundtruth |
+    /// -------------------------
+    ///       | results |
+    /// ```
+    /// This measures the number of returned results that are actually useful.
+    ///
+    /// Returns 0 if [`Self::returned`] is zero.
+    pub fn precision(&self) -> f64 {
+        if self.returned == 0 {
+            0.0
+        } else {
+            self.matches as f64 / self.returned as f64
+        }
+    }
+
+    fn new() -> Self {
+        Self {
+            groundtruth: 0,
+            returned: 0,
+            matches: 0,
+        }
+    }
+}
+
+/// A mean of per-query scores with nonzero denominators.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct QueryMean {
+    /// `None` when no queries contribute.
+    pub value: Option<f64>,
+    pub num_queries: usize,
+}
+
+/// False-positive diagnostics for queries with empty groundtruth.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct EmptyGroundtruth {
+    /// Number of queries with empty groundtruth.
+    pub num_queries: usize,
+    /// Number of empty-groundtruth queries that returned at least one ID.
+    pub queries_with_results: usize,
+    /// Total returned IDs on empty-groundtruth queries, deduplicated within each query.
+    pub returned: usize,
+}
+
+impl EmptyGroundtruth {
+    /// Fraction of empty-groundtruth queries that returned any IDs.
+    ///
+    /// Returns `None` when no queries have empty groundtruth.
+    pub fn false_positive_rate(&self) -> Option<f64> {
+        (self.num_queries != 0).then(|| self.queries_with_results as f64 / self.num_queries as f64)
+    }
+
+    fn new() -> Self {
+        Self {
+            num_queries: 0,
+            queries_with_results: 0,
+            returned: 0,
+        }
+    }
+
+    fn accum(&mut self, num_results: usize) {
+        self.num_queries += 1;
+        if num_results != 0 {
+            self.queries_with_results += 1;
+        }
+        self.returned += num_results;
+    }
 }
 
 #[derive(Debug, Error)]
@@ -323,15 +452,62 @@ pub enum RangeMetricsError {
     EntriesMismatch(usize, usize),
 }
 
-/// Compute pooled (micro-averaged) precision and recall for range search results.
+#[derive(Debug)]
+struct QueryMeanAccumulator {
+    // * Key: the number of items (results or groundtruth).
+    // * Value: the number of matches.
+    //
+    // A `BTreeMap` is used keep accumulation order at the end consistent.
+    hits: BTreeMap<usize, usize>,
+    count: usize,
+}
+
+impl QueryMeanAccumulator {
+    fn new() -> Self {
+        Self {
+            hits: BTreeMap::new(),
+            count: 0,
+        }
+    }
+
+    fn accum(&mut self, total: usize, hits: usize) {
+        assert!(hits <= total);
+
+        // 0 totals don't contribute.
+        if total != 0 {
+            self.count += 1;
+            *self.hits.entry(total).or_insert(0) += hits;
+        }
+    }
+
+    fn finish(self) -> QueryMean {
+        let Self { hits, count } = self;
+        if count == 0 {
+            QueryMean {
+                value: None,
+                num_queries: count,
+            }
+        } else {
+            let total: f64 = hits
+                .into_iter()
+                .map(|(size, hits)| (hits as f64) / (size as f64))
+                .sum();
+
+            QueryMean {
+                value: Some(total / (count as f64)),
+                num_queries: count,
+            }
+        }
+    }
+}
+
+/// Compute pooled and mean per-query precision and recall for range search results.
 ///
 /// Each row is treated as a set: duplicate IDs and ordering do not affect the scores.
-/// Counts are summed across queries before division, rather than averaging per-query
-/// ratios. A metric is zero when its denominator is zero, including an empty batch.
 ///
 /// # Errors
 ///
-/// Returns an error if results and groundtruth have different numbers of queries.
+/// Returns an error if results and groundtruth have different numbers of rows.
 pub fn range_metrics<T>(
     results: &dyn Rows<T>,
     groundtruth: &dyn Rows<T>,
@@ -339,15 +515,17 @@ pub fn range_metrics<T>(
 where
     T: RecallCompatible,
 {
+    // Verify that we have the same number of entries.j
     let nrows = results.nrows();
     let groundtruth_nrows = groundtruth.nrows();
     if nrows != groundtruth_nrows {
         return Err(RangeMetricsError::EntriesMismatch(nrows, groundtruth_nrows));
     }
 
-    let mut num_gt_results = 0;
-    let mut num_reported_results = 0;
-    let mut num_matches = 0;
+    let mut pooled = PooledCounts::new();
+    let mut precision = QueryMeanAccumulator::new();
+    let mut recall = QueryMeanAccumulator::new();
+    let mut empty_groundtruth = EmptyGroundtruth::new();
 
     let mut result_ids = HashSet::new();
     let mut gt_ids = HashSet::new();
@@ -360,26 +538,26 @@ where
         result_ids.extend(result.iter().cloned());
         gt_ids.clear();
         gt_ids.extend(gt.iter().cloned());
-        num_matches += result_ids.intersection(&gt_ids).count();
-        num_reported_results += result_ids.len();
-        num_gt_results += gt_ids.len();
+        let hits = result_ids.intersection(&gt_ids).count();
+
+        pooled.matches += hits;
+        pooled.returned += result_ids.len();
+        pooled.groundtruth += gt_ids.len();
+
+        precision.accum(result_ids.len(), hits);
+        recall.accum(gt_ids.len(), hits);
+
+        if gt_ids.is_empty() {
+            empty_groundtruth.accum(result_ids.len());
+        }
     }
 
     Ok(RangeMetrics {
-        precision: if num_reported_results == 0 {
-            0.0
-        } else {
-            (num_matches as f64) / (num_reported_results as f64)
-        },
-        recall: if num_gt_results == 0 {
-            0.0
-        } else {
-            (num_matches as f64) / (num_gt_results as f64)
-        },
         num_queries: nrows,
-        num_groundtruth_values: num_gt_results,
-        num_result_values: num_reported_results,
-        num_matches,
+        pooled,
+        mean_precision: precision.finish(),
+        mean_recall: recall.finish(),
+        empty_groundtruth,
     })
 }
 
@@ -392,64 +570,6 @@ mod tests {
     use super::*;
 
     use diskann_utils::views::rowmajor::MatrixMut;
-
-    #[test]
-    fn test_range_metrics() {
-        let groundtruth = vec![vec![1, 2, 3], vec![4]];
-        for (results, num_results, num_matches, precision, recall) in [
-            (groundtruth.clone(), 4, 4, 1.0, 1.0),
-            (vec![vec![1, 2, 3, 5, 6], vec![4, 7, 8]], 8, 4, 0.5, 1.0),
-            (vec![vec![1, 2], vec![]], 2, 2, 1.0, 0.5),
-            (vec![vec![1, 5], vec![6]], 3, 1, 1.0 / 3.0, 0.25),
-            (vec![vec![5], vec![6]], 2, 0, 0.0, 0.0),
-            (vec![vec![3, 1, 1, 2], vec![4, 4]], 4, 4, 1.0, 1.0),
-        ] {
-            let metrics = range_metrics(&results, &groundtruth).unwrap();
-            assert_eq!(metrics.num_queries, 2);
-            assert_eq!(metrics.num_groundtruth_values, 4);
-            assert_eq!(metrics.num_result_values, num_results);
-            assert_eq!(metrics.num_matches, num_matches);
-            assert_eq!(metrics.precision, precision);
-            assert_eq!(metrics.recall, recall);
-        }
-
-        let metrics = range_metrics(&vec![vec![1, 1, 2]], &vec![vec![1, 1]]).unwrap();
-        assert_eq!(metrics.num_groundtruth_values, 1);
-        assert_eq!(metrics.num_result_values, 2);
-        assert_eq!(metrics.num_matches, 1);
-        assert_eq!(metrics.precision, 0.5);
-        assert_eq!(metrics.recall, 1.0);
-    }
-
-    #[test]
-    fn test_range_metrics_empty_rows() {
-        for (results, groundtruth, precision, recall) in [
-            (vec![], vec![], 0.0, 0.0),
-            (vec![vec![]], vec![vec![]], 0.0, 0.0),
-            (vec![vec![]], vec![vec![1]], 0.0, 0.0),
-            (vec![vec![1]], vec![vec![]], 0.0, 0.0),
-            (vec![vec![1], vec![2]], vec![vec![1], vec![]], 0.5, 1.0),
-        ] {
-            let metrics = range_metrics::<u32>(&results, &groundtruth).unwrap();
-            assert_eq!(metrics.num_queries, results.len());
-            assert_eq!(
-                metrics.num_groundtruth_values,
-                groundtruth.iter().map(Vec::len).sum::<usize>()
-            );
-            assert_eq!(
-                metrics.num_result_values,
-                results.iter().map(Vec::len).sum::<usize>()
-            );
-            assert_eq!(metrics.precision, precision);
-            assert_eq!(metrics.recall, recall);
-        }
-    }
-
-    #[test]
-    fn test_range_metrics_rows_mismatch() {
-        let err = range_metrics::<u32>(&vec![vec![1]], &vec![]).unwrap_err();
-        assert!(matches!(err, RangeMetricsError::EntriesMismatch(1, 0)));
-    }
 
     fn test_rows_inner(rows: &dyn Rows<usize>, ncols: Option<usize>) {
         assert_eq!(rows.ncols(), ncols);
@@ -896,5 +1016,123 @@ mod tests {
             err,
             ComputeRecallError::GroundTruthDistanceMismatch(2, 3)
         ));
+    }
+
+    //-------//
+    // Range //
+    //-------//
+
+    #[test]
+    fn test_range_metrics() {
+        let groundtruth = vec![vec![1, 2, 3], vec![4]];
+        for (results, num_results, num_matches, precision, recall) in [
+            (groundtruth.clone(), 4, 4, 1.0, 1.0),
+            (vec![vec![1, 2, 3, 5, 6], vec![4, 7, 8]], 8, 4, 0.5, 1.0),
+            (vec![vec![1, 2], vec![]], 2, 2, 1.0, 0.5),
+            (vec![vec![1, 5], vec![6]], 3, 1, 1.0 / 3.0, 0.25),
+            (vec![vec![5], vec![6]], 2, 0, 0.0, 0.0),
+            (vec![vec![3, 1, 1, 2], vec![4, 4]], 4, 4, 1.0, 1.0),
+        ] {
+            let metrics = range_metrics(&results, &groundtruth).unwrap();
+            assert_eq!(metrics.num_queries, 2);
+            assert_eq!(metrics.pooled.groundtruth, 4);
+            assert_eq!(metrics.pooled.returned, num_results);
+            assert_eq!(metrics.pooled.matches, num_matches);
+            assert_eq!(metrics.pooled.precision(), precision);
+            assert_eq!(metrics.pooled.recall(), recall);
+        }
+
+        let metrics = range_metrics(&vec![vec![1, 1, 2]], &vec![vec![1, 1]]).unwrap();
+        assert_eq!(metrics.pooled.groundtruth, 1);
+        assert_eq!(metrics.pooled.returned, 2);
+        assert_eq!(metrics.pooled.matches, 1);
+        assert_eq!(metrics.pooled.precision(), 0.5);
+        assert_eq!(metrics.pooled.recall(), 1.0);
+    }
+
+    #[test]
+    fn test_range_metrics_empty_rows() {
+        for (results, groundtruth, precision, recall) in [
+            (vec![], vec![], 0.0, 0.0),
+            (vec![vec![]], vec![vec![]], 0.0, 0.0),
+            (vec![vec![]], vec![vec![1]], 0.0, 0.0),
+            (vec![vec![1]], vec![vec![]], 0.0, 0.0),
+            (vec![vec![1], vec![2]], vec![vec![1], vec![]], 0.5, 1.0),
+        ] {
+            let metrics = range_metrics::<u32>(&results, &groundtruth).unwrap();
+            assert_eq!(metrics.num_queries, results.len());
+            assert_eq!(
+                metrics.pooled.groundtruth,
+                groundtruth.iter().map(Vec::len).sum::<usize>()
+            );
+            assert_eq!(
+                metrics.pooled.returned,
+                results.iter().map(Vec::len).sum::<usize>()
+            );
+            assert_eq!(metrics.pooled.precision(), precision);
+            assert_eq!(metrics.pooled.recall(), recall);
+        }
+    }
+
+    #[test]
+    fn test_range_metrics_rows_mismatch() {
+        let err = range_metrics::<u32>(&vec![vec![1]], &vec![]).unwrap_err();
+        assert!(matches!(err, RangeMetricsError::EntriesMismatch(1, 0)));
+    }
+
+    #[test]
+    fn test_range_metrics_per_query_and_empty_groundtruth() {
+        let groundtruth = vec![vec![1, 2], vec![3, 4, 5, 6], vec![], vec![], vec![9]];
+        let results = vec![vec![1, 8], vec![3], vec![], vec![7, 7, 8], vec![]];
+        let metrics = range_metrics(&results, &groundtruth).unwrap();
+        assert_eq!(metrics.pooled.groundtruth, 7);
+        assert_eq!(metrics.pooled.returned, 5);
+        assert_eq!(metrics.pooled.matches, 2);
+        assert_eq!(metrics.pooled.precision(), 2.0 / 5.0);
+        assert_eq!(metrics.pooled.recall(), 2.0 / 7.0);
+        assert_eq!(metrics.mean_precision.value, Some(0.5));
+        assert_eq!(metrics.mean_precision.num_queries, 3);
+        assert_eq!(metrics.mean_recall.value, Some(0.25));
+        assert_eq!(metrics.mean_recall.num_queries, 3);
+        assert_eq!(metrics.empty_groundtruth.num_queries, 2);
+        assert_eq!(metrics.empty_groundtruth.queries_with_results, 1);
+        assert_eq!(metrics.empty_groundtruth.returned, 2);
+        assert_eq!(metrics.empty_groundtruth.false_positive_rate(), Some(0.5));
+    }
+
+    #[test]
+    fn test_range_metrics_undefined_means_and_rates() {
+        for (results, groundtruth, precision, recall, rate) in [
+            (vec![], vec![], None, None, None),
+            (vec![vec![]], vec![vec![]], None, None, Some(0.0)),
+            (vec![vec![]], vec![vec![1]], None, Some(0.0), None),
+            (vec![vec![1]], vec![vec![]], Some(0.0), None, Some(1.0)),
+            (vec![vec![1]], vec![vec![1]], Some(1.0), Some(1.0), None),
+        ] {
+            let metrics = range_metrics::<u32>(&results, &groundtruth).unwrap();
+            assert_eq!(metrics.mean_precision.value, precision);
+            assert_eq!(metrics.mean_recall.value, recall);
+            assert_eq!(metrics.empty_groundtruth.false_positive_rate(), rate);
+            assert_eq!(
+                metrics.mean_precision.num_queries,
+                results.iter().filter(|row| !row.is_empty()).count()
+            );
+            assert_eq!(
+                metrics.mean_recall.num_queries,
+                groundtruth.iter().filter(|row| !row.is_empty()).count()
+            );
+            assert_eq!(
+                metrics.empty_groundtruth.num_queries,
+                groundtruth.iter().filter(|row| row.is_empty()).count()
+            );
+        }
+    }
+
+    #[test]
+    fn test_range_metrics_perfect_means_variable_sizes() {
+        let groundtruth: Vec<Vec<u32>> = (1..=58).map(|size| (0..size).collect()).collect();
+        let metrics = range_metrics(&groundtruth, &groundtruth).unwrap();
+        assert_eq!(metrics.mean_precision.value, Some(1.0));
+        assert_eq!(metrics.mean_recall.value, Some(1.0));
     }
 }

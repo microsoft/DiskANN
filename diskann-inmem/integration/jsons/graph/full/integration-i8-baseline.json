@@ -319,12 +319,28 @@
           },
           "quality": {
             "range": {
-              "num_groundtruth_values": 1606,
-              "num_matches": 1561,
+              "empty_groundtruth": {
+                "false_positive_rate": 0.0,
+                "num_queries": 42,
+                "queries_with_results": 0,
+                "returned": 0
+              },
+              "mean_precision": {
+                "num_queries": 57,
+                "value": 0.9937531572438544
+              },
+              "mean_recall": {
+                "num_queries": 58,
+                "value": 0.9645030471111768
+              },
               "num_queries": 100,
-              "num_result_values": 1576,
-              "precision": 0.990482233502538,
-              "recall": 0.9719800747198007
+              "pooled": {
+                "groundtruth": 1606,
+                "matches": 1561,
+                "precision": 0.990482233502538,
+                "recall": 0.9719800747198007,
+                "returned": 1576
+              }
             }
           }
         }
