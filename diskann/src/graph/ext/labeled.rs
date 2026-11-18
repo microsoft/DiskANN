@@ -35,7 +35,7 @@ use crate::{
     ANNResult,
     graph::glue::{self, Accept, Decision},
     neighbor::Neighbor,
-    provider::{HasId},
+    provider::HasId,
     utils::VectorId,
 };
 
@@ -251,7 +251,7 @@ mod tests {
 
     use super::*;
     use crate::graph::{
-        glue::{FilteredAccessor as _, HybridPredicate, Predicate, PredicateMut, SearchStrategy},
+        glue::{FilteredAccessor as _, HybridPredicate, Predicate, PredicateMut},
         test::{provider as test_provider, synthetic::Grid},
     };
 
@@ -382,10 +382,8 @@ mod tests {
         let context = test_provider::Context::new();
         let filter = EvenFilter;
 
-        let strategy = Filtered::new(test_provider::Strategy::new(), &filter);
-        let mut accessor = strategy
-            .search_accessor(&provider, &context, &[0.0, 0.0])
-            .unwrap();
+        let mut accessor =
+            FilteredAccessor::new(provider.search_accessor(&[0.0, 0.0]).unwrap(), &filter);
 
         let mut starts = Vec::new();
         glue::FilteredAccessor::start_point_distances(&mut accessor, |decision, dist| {

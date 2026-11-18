@@ -60,10 +60,7 @@ where
     /// Within a page, results ordered by non-decreasing distance.
     ///
     /// When the search is exhausted, returns an empty `Vec`.
-    pub fn next_page(
-        &mut self,
-        k: usize,
-    ) -> impl SendFuture<ANNResult<Vec<Neighbor<A::Id>>>> {
+    pub fn next_page(&mut self, k: usize) -> impl SendFuture<ANNResult<Vec<Neighbor<A::Id>>>> {
         async move {
             if k > self.search_param_l {
                 return ANNResult::Err(ANNError::message(

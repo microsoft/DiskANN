@@ -5,7 +5,7 @@
 
 use super::helpers::{generate_2d_square_adjacency_list, setup_2d_square};
 use crate::{
-    graph::{self, AdjacencyList, index::DegreeStats, test::provider as test_provider},
+    graph::{self, AdjacencyList, algorithms::DegreeStats, test::provider as test_provider},
     provider::{Delete, NeighborAccessor},
     test::cmp::assert_eq_verbose,
 };

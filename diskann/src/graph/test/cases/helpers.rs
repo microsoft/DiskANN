@@ -12,7 +12,7 @@ use diskann_vector::distance::Metric;
 
 use crate::{
     graph::{
-        self, AdjacencyList, DiskANNIndex,
+        self, AdjacencyList,
         test::{
             provider::{self as test_provider, Provider, StartPoint},
             synthetic::Grid,
@@ -29,7 +29,7 @@ use crate::{
 pub(super) fn setup_2d_square(
     adjacency_lists: Vec<AdjacencyList<u32>>,
     pruned_degree: usize,
-) -> Arc<DiskANNIndex<Provider>> {
+) -> Arc<Provider> {
     let vectors = Grid::Two.data(2);
     let num_points = vectors.nrows();
     let dim = vectors.ncols();
@@ -68,9 +68,6 @@ pub(super) fn setup_2d_square(
         .enumerate()
         .map(|(id, (row, adj))| (id as u32, row.to_vec(), adj));
 
-    let provider =
-        Provider::new_from(provider_config, iter::once((start_id, start_adj)), points).unwrap();
-
     let index_config = graph::config::Builder::new(
         pruned_degree,
         graph::config::MaxDegree::same(),
@@ -80,14 +77,22 @@ pub(super) fn setup_2d_square(
     .build()
     .unwrap();
 
-    Arc::new(DiskANNIndex::new(index_config, provider, None))
+    let provider = Provider::new_from(
+        provider_config,
+        iter::once((start_id, start_adj)),
+        points,
+        index_config,
+    )
+    .unwrap();
+
+    Arc::new(provider)
 }
 
 pub(super) fn setup_2d_square_using_synthetics_grid(
     size: usize,
     start_id: u32,
     pruned_degree: usize,
-) -> Arc<DiskANNIndex<Provider>> {
+) -> Arc<Provider> {
     let grid = Grid::Two;
     let setup = grid.setup(size, start_id);
 
@@ -98,9 +103,6 @@ pub(super) fn setup_2d_square_using_synthetics_grid(
     )
     .unwrap();
 
-    let provider =
-        Provider::new_from(provider_config, setup.start_neighbors(), setup.setup()).unwrap();
-
     let index_config = graph::config::Builder::new(
         pruned_degree,
         graph::config::MaxDegree::same(),
@@ -110,7 +112,15 @@ pub(super) fn setup_2d_square_using_synthetics_grid(
     .build()
     .unwrap();
 
-    Arc::new(DiskANNIndex::new(index_config, provider, None))
+    let provider = Provider::new_from(
+        provider_config,
+        setup.start_neighbors(),
+        setup.setup(),
+        index_config,
+    )
+    .unwrap();
+
+    Arc::new(provider)
 }
 
 /// Create a basic adjacency list for 2d square validation
@@ -125,14 +135,10 @@ pub(super) fn generate_2d_square_adjacency_list() -> Vec<AdjacencyList<u32>> {
 }
 
 /// Assert that `id`'s sorted neighbor list equals `expected`.
-pub(super) fn assert_neighbors(
-    rt: &tokio::runtime::Runtime,
-    index: &DiskANNIndex<Provider>,
-    id: u32,
-    expected: &[u32],
-) {
+pub(super) fn assert_neighbors(index: &Provider, id: u32, expected: &[u32]) {
     let mut list = AdjacencyList::new();
-    rt.block_on(index.provider().neighbors().get_neighbors(id, &mut list))
+    index
+        .get_neighbors(id, &mut list)
         .expect("get_neighbors failed");
     list.sort();
     assert_eq!(&*list, expected, "neighbors of node {id}");

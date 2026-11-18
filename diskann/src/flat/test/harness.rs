@@ -102,7 +102,6 @@ impl KnnOracleRun {
             visitor,
             NonZeroUsize::new(k).expect("flat::test::harness requires k > 0"),
             oracle.processor(),
-            query,
             &mut BackInserter::new(buf.as_mut_slice()),
         )
         .await?;
@@ -133,7 +132,7 @@ impl KnnOracleRun {
 /// Wrapper for producing a [`SearchPostProcess`] and its reference impl
 pub(crate) trait OracleProcessor {
     /// The post-processor exercised by the search.
-    type Processor: for<'a, 'q> SearchPostProcess<Visitor<'a>, &'q [f32], u32> + Send + Sync;
+    type Processor: for<'a> SearchPostProcess<Visitor<'a>, u32> + Send + Sync;
 
     /// Construct the processor instance fed to [`knn_search`].
     fn processor(&self) -> Self::Processor;
@@ -161,7 +160,7 @@ impl OracleProcessor for CopyIdsOracle {
 #[derive(Debug, Default, Clone, Copy)]
 pub(crate) struct EvenIdsOnly;
 
-impl<A, T> SearchPostProcess<A, T> for EvenIdsOnly
+impl<A> SearchPostProcess<A> for EvenIdsOnly
 where
     A: HasId<Id = u32>,
 {
@@ -170,7 +169,6 @@ where
     fn post_process<I, B>(
         &self,
         _accessor: &mut A,
-        _query: T,
         candidates: I,
         output: &mut B,
     ) -> impl std::future::Future<Output = Result<usize, Self::Error>> + Send
