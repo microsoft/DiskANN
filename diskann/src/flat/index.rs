@@ -40,18 +40,16 @@ pub struct SearchStats {
 /// Returns an error if distance scanning or result post-processing fails. Distance-scan
 /// errors are escalated because a partial flat scan cannot produce correct k-nearest-neighbor
 /// results.
-pub fn knn_search<V, T, O, PP, OB>(
+pub fn knn_search<V, O, PP, OB>(
     visitor: &mut V,
     k: NonZeroUsize,
     processor: PP,
-    query: T,
     output: &mut OB,
 ) -> impl SendFuture<ANNResult<SearchStats>>
 where
     V: DistancesUnordered,
-    T: Copy + Send + Sync,
     O: Send,
-    PP: SearchPostProcess<V, T, O> + Send + Sync,
+    PP: SearchPostProcess<V, O> + Send + Sync,
     OB: SearchOutputBuffer<O> + Send + ?Sized,
 {
     async move {
@@ -68,7 +66,7 @@ where
             .escalate("flat scan must complete to produce correct k-NN results")?;
 
         let result_count = processor
-            .post_process(visitor, query, queue.iter().take(k), output)
+            .post_process(visitor, queue.iter().take(k), output)
             .await
             .into_ann_result()? as u32;
 

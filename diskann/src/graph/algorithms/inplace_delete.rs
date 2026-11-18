@@ -13,8 +13,8 @@ use crate::graph::{
     AdjacencyList, Config, algorithms,
     glue::{PruneAccessor, SearchAccessor},
     internal::{BackedgeBuffer, prune},
-    workingset::View,
     search::record::NoopSearchRecord,
+    workingset::View,
 };
 
 use crate::{
@@ -22,7 +22,7 @@ use crate::{
     error::IntoANNResult,
     internal,
     neighbor::{self, Neighbor},
-    provider::{NeighborAccessor, NeighborAccessorMut, HasId},
+    provider::{HasId, NeighborAccessor, NeighborAccessorMut},
     utils::VectorId,
 };
 
@@ -109,12 +109,7 @@ where
     where
         A: InplaceDelete<Id = I>,
     {
-        one_hop.discover(
-            accessor,
-            id,
-            config,
-            self
-        ).await?;
+        one_hop.discover(accessor, id, config, self).await?;
 
         add_edges_and_drop(
             accessor.prune_accessor().borrow_mut(),
@@ -122,7 +117,8 @@ where
             config,
             &self.edges,
             &mut self.prune,
-        ).await?;
+        )
+        .await?;
 
         Ok(())
     }
@@ -137,12 +133,7 @@ where
     where
         A: InplaceDelete<Id = I>,
     {
-        two_hop.discover(
-            accessor,
-            id,
-            config,
-            self
-        ).await?;
+        two_hop.discover(accessor, id, config, self).await?;
 
         add_edges_and_drop(
             accessor.prune_accessor().borrow_mut(),
@@ -150,7 +141,8 @@ where
             config,
             &self.edges,
             &mut self.prune,
-        ).await?;
+        )
+        .await?;
 
         Ok(())
     }
@@ -165,12 +157,9 @@ where
     where
         A: SearchInplaceDelete<Id = I>,
     {
-        visited_and_topk.discover(
-            accessor,
-            id,
-            config,
-            self
-        ).await?;
+        visited_and_topk
+            .discover(accessor, id, config, self)
+            .await?;
 
         add_edges_and_drop(
             accessor.prune_accessor().borrow_mut(),
@@ -178,7 +167,8 @@ where
             config,
             &self.edges,
             &mut self.prune,
-        ).await?;
+        )
+        .await?;
 
         Ok(())
     }
@@ -343,14 +333,13 @@ pub struct VisitedAndTopK {
 }
 
 impl VisitedAndTopK {
-    pub fn new(
-        replacements: NonZeroUsize,
-        l_value: NonZeroUsize,
-        k_value: NonZeroUsize,
-    ) -> Self {
-        Self { replacements, l_value, k_value }
+    pub fn new(replacements: NonZeroUsize, l_value: NonZeroUsize, k_value: NonZeroUsize) -> Self {
+        Self {
+            replacements,
+            l_value,
+            k_value,
+        }
     }
-
 
     pub(crate) async fn discover<A>(
         &self,
@@ -362,31 +351,36 @@ impl VisitedAndTopK {
     where
         A: SearchInplaceDelete,
     {
-        let Self { replacements, l_value, k_value } = self;
+        let Self {
+            replacements,
+            l_value,
+            k_value,
+        } = self;
 
         // Find the replacement candidates using graph search.
         {
             let mut search_accessor = accessor.search_accessor();
             let num_start_points = search_accessor.borrow_mut().num_starting_points().await?;
 
-            let mut search_scratch = algorithms::search_scratch(
-                config,
-                l_value.get(),
-                num_start_points,
-            );
+            let mut search_scratch =
+                algorithms::search_scratch(config, l_value.get(), num_start_points);
 
             algorithms::search(
                 search_accessor.borrow_mut(),
                 NonZeroUsize::MIN,
                 &mut search_scratch,
                 &mut NoopSearchRecord::new(),
-            ).await?;
+            )
+            .await?;
 
             scratch.replace.replace_from_iter_trusted(
-                search_scratch.best.iter().take(l_value.get()).map(|n| *n.id())
+                search_scratch
+                    .best
+                    .iter()
+                    .take(l_value.get())
+                    .map(|n| *n.id()),
             );
         }
-
 
         // Get the current out-neighbors and filter out deleted points from the candidate
         // stream (if needed) as well as the out-neighbors.
@@ -414,12 +408,15 @@ impl VisitedAndTopK {
             id,
             &mut prune.borrow_mut().neighbors(),
             &mut AdjacencyList::with_capacity(config.max_degree().get()),
-        ).await?;
+        )
+        .await?;
 
         scratch.replace.truncate(k_value.get());
-        FilterCandidates { replacements: *replacements }
-            .filter_candidates(prune.borrow_mut(), scratch)
-            .await?;
+        FilterCandidates {
+            replacements: *replacements,
+        }
+        .filter_candidates(prune.borrow_mut(), scratch)
+        .await?;
 
         Ok(())
     }
@@ -505,7 +502,11 @@ impl FilterCandidates {
             }
 
             pool.sort_unstable_by(neighbor::ord::fast_distance);
-            let best = pool.iter().take(replacements.get()).map(|x| *x.id()).collect();
+            let best = pool
+                .iter()
+                .take(replacements.get())
+                .map(|x| *x.id())
+                .collect();
             edges.insert(*neighbor, best);
         }
 
@@ -613,7 +614,8 @@ impl<I> Delta<I> {
         I: VectorId,
     {
         for (src, dst) in other.iter() {
-            self.delta.entry(*src)
+            self.delta
+                .entry(*src)
                 .and_modify(|b| {
                     for d in dst.iter() {
                         b.push(*d);
@@ -623,5 +625,3 @@ impl<I> Delta<I> {
         }
     }
 }
-
-

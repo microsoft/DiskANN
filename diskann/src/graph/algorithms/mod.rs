@@ -61,6 +61,13 @@ pub struct SearchStats {
     pub range_search_second_round: bool,
 }
 
+/// Return the maximum degree from [`SearchAccessor::max_degree_hint`] or an approximate
+/// default. This should be used as a sizing hint only.
+pub(crate) fn max_degree_from_hint(hint: Option<NonZeroUsize>) -> NonZeroUsize {
+    const FALLBACK: NonZeroUsize = NonZeroUsize::new(32).unwrap();
+    hint.unwrap_or(FALLBACK)
+}
+
 // FIXME: Can we do better?
 pub(crate) fn search_scratch<I>(config: &Config, l: usize, additional: usize) -> SearchScratch<I>
 where
@@ -70,6 +77,23 @@ where
         PriorityQueueConfiguration::Fixed(l + additional),
         Some(scratch::estimate_node_visited_set_size(
             config.max_degree().get(),
+            l,
+        )),
+    )
+}
+
+pub(crate) fn search_scratch_2<I>(
+    degree: NonZeroUsize,
+    l: usize,
+    additional: usize,
+) -> SearchScratch<I>
+where
+    I: VectorId,
+{
+    SearchScratch::new(
+        PriorityQueueConfiguration::Fixed(l + additional),
+        Some(scratch::estimate_node_visited_set_size(
+            degree.get(),
             l,
         )),
     )

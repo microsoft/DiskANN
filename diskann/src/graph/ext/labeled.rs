@@ -35,7 +35,7 @@ use crate::{
     ANNResult,
     graph::glue::{self, Accept, Decision},
     neighbor::Neighbor,
-    provider::{DataProvider, HasId},
+    provider::{HasId},
     utils::VectorId,
 };
 
@@ -65,66 +65,15 @@ where
     }
 }
 
-/// A [`SearchStrategy`](glue::SearchStrategy) adaptor that creates a
-/// [`FilteredAccessor`](glue::FilteredAccessor) using a [`QueryLabelProvider`].
-///
-/// Bundling the labels with the strategy like this is moderately disingenuous since it
-/// mixes per-query information (the [`QueryLabelProvider`]) with a general strategy
-/// type, but is done as a convenience to also avoid wrapper types for the query that
-/// Rust's coherence rules would otherwise require.
-#[derive(Debug, Clone, Copy)]
-pub struct Filtered<'a, S, I> {
-    strategy: S,
-    labels: &'a dyn QueryLabelProvider<I>,
-}
-
-impl<'a, S, I> Filtered<'a, S, I> {
-    /// Construct a new [`Filtered`] that will apply the `labels` filter to
-    /// `SearchAccessors` yielded from `strategy`.
-    ///
-    /// Note that this embeds query-specific state with the strategy, so use with caution.
-    pub fn new(strategy: S, labels: &'a dyn QueryLabelProvider<I>) -> Self {
-        Self { strategy, labels }
-    }
-
-    /// Return the contained [`QueryLabelProvider`].
-    pub fn labels(&self) -> &'a dyn QueryLabelProvider<I> {
-        self.labels
-    }
-}
-
-impl<'a, S, DP, T> glue::SearchStrategy<'a, DP, T> for Filtered<'_, S, DP::InternalId>
+impl<O, A> glue::DefaultPostProcessor<O> for FilteredAccessor<'_, A>
 where
-    DP: DataProvider,
-    S: glue::SearchStrategy<'a, DP, T>,
-{
-    type SearchAccessor = FilteredAccessor<'a, S::SearchAccessor>;
-    type SearchAccessorError = S::SearchAccessorError;
-
-    fn search_accessor(
-        &'a self,
-        provider: &'a DP,
-        context: &'a DP::Context,
-        query: T,
-    ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
-        let inner = self.strategy.search_accessor(provider, context, query)?;
-        Ok(FilteredAccessor {
-            inner,
-            labels: self.labels,
-        })
-    }
-}
-
-impl<'a, S, DP, T, O> glue::DefaultPostProcessor<'a, DP, T, O> for Filtered<'_, S, DP::InternalId>
-where
-    S: glue::DefaultPostProcessor<'a, DP, T, O>,
-    DP: DataProvider,
+    A: HasId + glue::DefaultPostProcessor<O>,
     O: Send,
 {
-    type Processor = glue::Pipeline<Unfiltered, S::Processor>;
+    type Processor = glue::Pipeline<Unfiltered, A::Processor>;
 
-    fn default_post_processor(&'a self) -> Self::Processor {
-        glue::Pipeline::new(Unfiltered, self.strategy.default_post_processor())
+    fn default_post_processor(&self) -> Self::Processor {
+        glue::Pipeline::new(Unfiltered, self.inner.default_post_processor())
     }
 }
 
@@ -146,8 +95,7 @@ impl<'a, A> FilteredAccessor<'a, A>
 where
     A: HasId,
 {
-    #[cfg(test)]
-    pub(crate) fn new(inner: A, labels: &'a dyn QueryLabelProvider<A::Id>) -> Self {
+    pub fn new(inner: A, labels: &'a dyn QueryLabelProvider<A::Id>) -> Self {
         Self { inner, labels }
     }
 }
@@ -222,7 +170,7 @@ where
 #[derive(Debug, Clone, Copy)]
 pub struct Unfiltered;
 
-impl<A, T, O> glue::SearchPostProcessStep<FilteredAccessor<'_, A>, T, O> for Unfiltered
+impl<O, A> glue::SearchPostProcessStep<FilteredAccessor<'_, A>, O> for Unfiltered
 where
     A: HasId,
 {
@@ -236,16 +184,15 @@ where
         &self,
         next: &Next,
         accessor: &mut FilteredAccessor<'_, A>,
-        query: T,
         candidates: I,
         output: &mut B,
     ) -> impl std::future::Future<Output = Result<usize, Self::Error<Next::Error>>> + Send
     where
         I: Iterator<Item = Neighbor<A::Id>> + Send,
         B: crate::graph::SearchOutputBuffer<O> + Send + ?Sized,
-        Next: glue::SearchPostProcess<Self::NextAccessor, T, O> + Sync,
+        Next: glue::SearchPostProcess<Self::NextAccessor, O> + Sync,
     {
-        next.post_process(&mut accessor.inner, query, candidates, output)
+        next.post_process(&mut accessor.inner, candidates, output)
     }
 }
 
