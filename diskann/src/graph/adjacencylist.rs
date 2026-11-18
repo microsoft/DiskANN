@@ -66,6 +66,19 @@ impl<I> AdjacencyList<I> {
     pub fn truncate(&mut self, len: usize) {
         self.edges.truncate(len)
     }
+
+    /// Remove an element from the adjacency list and return it.
+    ///
+    /// The removed element is replaced by the last element in the adjacency list.
+    ///
+    /// This does not preserve ordering of the remaining elements, but is `O(1)`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `index` is out of bounds.
+    pub fn swap_remove(&mut self, index: usize) -> I {
+        self.edges.swap_remove(index)
+    }
 }
 
 impl<I> AdjacencyList<I>

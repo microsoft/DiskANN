@@ -14,9 +14,7 @@ use hashbrown::HashSet;
 
 use super::{
     AdjacencyList, Config,
-    glue::{
-        self, PruneAccessor, SearchAccessor,
-    },
+    glue::{self, PruneAccessor, SearchAccessor},
     internal::{SortedNeighbors, prune},
     search::{
         record::{SearchRecord, VisitedSearchRecord},
@@ -34,6 +32,12 @@ use crate::{
     tracked_trace,
     utils::{IntoUsize, VectorId},
 };
+
+//-------------//
+// Sub-modules //
+//-------------//
+
+pub mod inplace_delete;
 
 /// Statistics collected during a search operation.
 ///
@@ -166,31 +170,6 @@ where
 // Insert //
 //--------//
 
-#[derive(Debug)]
-pub enum MaybeMut<'a, T> {
-    Owned(T),
-    Mut(&'a mut T),
-}
-
-impl<T> std::ops::Deref for MaybeMut<'_, T> {
-    type Target = T;
-    fn deref(&self) -> &T {
-        match self {
-            Self::Owned(v) => v,
-            Self::Mut(v) => v,
-        }
-    }
-}
-
-impl<T> std::ops::DerefMut for MaybeMut<'_, T> {
-    fn deref_mut(&mut self) -> &mut T {
-        match self {
-            Self::Owned(v) => v,
-            Self::Mut(v) => v,
-        }
-    }
-}
-
 pub trait Insert: HasId + Send {
     type SearchAccessor<'a>: SearchAccessor<Id = Self::Id>
     where
@@ -200,8 +179,8 @@ pub trait Insert: HasId + Send {
     where
         Self: 'a;
 
-    fn search_accessor(&mut self) -> MaybeMut<'_, Self::SearchAccessor<'_>>;
-    fn prune_accessor(&mut self) -> MaybeMut<'_, Self::PruneAccessor<'_>>;
+    fn search_accessor(&mut self) -> impl std::borrow::BorrowMut<Self::SearchAccessor<'_>> + Send;
+    fn prune_accessor(&mut self) -> impl std::borrow::BorrowMut<Self::PruneAccessor<'_>> + Send;
 }
 
 /// Insert a vector into the index with the given `id` and `vector`.
@@ -210,18 +189,15 @@ where
     A: Insert,
 {
     async move {
-        // // NOTE: We don't filter the start points out of `visited_nodes`, as those are
-        // // needed to generate out edges from the start points.
-        // let num_start_ids = accessor.num_starting_points().await?;
-
-        // let prune_strategy = strategy.prune_strategy();
-        // let mut prune_accessor = prune_strategy
-        //     .prune_accessor(&self.data_provider, context, self.max_occlusion_size())
-        //     .into_ann_result()?;
+        use std::borrow::BorrowMut;
 
         let mut scratch = {
             // FIXME: There's got to be a better way of doing this.
-            let num_start_ids = accessor.search_accessor().num_starting_points().await?;
+            let num_start_ids = accessor
+                .search_accessor()
+                .borrow_mut()
+                .num_starting_points()
+                .await?;
             search_scratch(config, config.l_build().get(), num_start_ids)
         };
 
@@ -240,7 +216,7 @@ where
                 VisitedSearchRecord::new(estimate_visited_set_capacity(config, Some(search_l)));
 
             search(
-                &mut *accessor.search_accessor(),
+                accessor.search_accessor().borrow_mut(),
                 NonZeroUsize::MIN,
                 &mut scratch,
                 &mut search_record,
@@ -261,7 +237,7 @@ where
             };
 
             robust_prune(
-                &mut *accessor.prune_accessor(),
+                accessor.prune_accessor().borrow_mut(),
                 id,
                 context,
                 options,
@@ -286,9 +262,11 @@ where
             new_neighbors,
         );
 
+        let mut prune = accessor.prune_accessor();
+
         // insert out edges
-        accessor
-            .prune_accessor()
+        prune
+            .borrow_mut()
             .neighbors()
             .set_neighbors(id, &new_neighbors)
             .await?;
@@ -299,7 +277,7 @@ where
         // add edges from `new_neighbors` to `internal_id` and prune if necessary
         for source in new_neighbors.iter().take(num_back_edges) {
             add_edge_and_prune(
-                &mut *accessor.prune_accessor(),
+                prune.borrow_mut(),
                 std::slice::from_ref(&id),
                 *source,
                 &mut prune_scratch,
