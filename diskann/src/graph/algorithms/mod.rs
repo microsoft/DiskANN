@@ -38,7 +38,8 @@ use crate::{
 //-------------//
 
 pub mod inplace_delete;
-pub mod multi_insert;
+
+pub mod batch;
 
 /// Statistics collected during a search operation.
 ///
