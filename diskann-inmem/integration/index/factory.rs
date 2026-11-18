@@ -5,7 +5,7 @@
 
 use std::{num::NonZeroUsize, sync::Arc};
 
-use diskann::graph::{Config};
+use diskann::graph::Config;
 use diskann_inmem::{
     self as di, Provider,
     num::{Capacity, MaxDegree},
@@ -119,12 +119,12 @@ fn create_spherical(
     metric: Metric,
     graph_config: &Config,
 ) -> anyhow::Result<Arc<dyn Index>> {
+    use di::repr::quantized::{Backend, Config, spherical::Spherical};
     use diskann_quantization::{
         algorithms::transforms,
         alloc::GlobalAllocator,
         spherical::{PreScale, SphericalQuantizer},
     };
-    use di::repr::quantized::{Backend, Config, spherical::Spherical};
     use rand::SeedableRng;
 
     let DatasetView::F32(data) = data else {
@@ -226,8 +226,8 @@ fn create_scalar(
     metric: Metric,
     graph_config: &Config,
 ) -> anyhow::Result<Arc<dyn Index>> {
-    use diskann_quantization::{num::Positive, scalar as qscalar};
     use di::repr::quantized::{Backend, Quantized, scalar::Scalar};
+    use diskann_quantization::{num::Positive, scalar as qscalar};
 
     let DatasetView::F32(data) = data else {
         anyhow::bail!("scalar quantization only supports f32 data");
@@ -294,19 +294,19 @@ fn create_scalar(
 //     Ok(Arc::new(DiskANNIndex::new(index_config, provider, None)))
 // }
 
-fn finish<R, M>(provider: di::provider::Provider<R, M>, config: diskann::graph::Config) -> Arc<dyn Index>
+fn finish<R, M>(
+    provider: di::provider::Provider<R, M>,
+    config: diskann::graph::Config,
+) -> Arc<dyn Index>
 where
     R: di::repr::Representation, // FIXME: structural bounds
-    M: di::provider::Id, // FIXME: structural bounds
+    M: di::provider::Id,         // FIXME: structural bounds
     di::index::Index<R, M>: Index,
 {
     Arc::new(di::index::Index::temp_new(provider, config))
 }
 
-fn quantizer_rerank(
-    rerank: quantization::Rerank,
-    metric: Metric,
-) -> di::repr::quantized::Rerank {
+fn quantizer_rerank(rerank: quantization::Rerank, metric: Metric) -> di::repr::quantized::Rerank {
     match rerank {
         quantization::Rerank::None => di::repr::quantized::Rerank::None,
         quantization::Rerank::F16 => di::repr::quantized::Rerank::F16 {

@@ -32,6 +32,8 @@ pub mod workingset;
 
 pub mod ext;
 
+mod algorithms;
+
 // Re-export the Search trait and error/output types only.
 // Search parameter types (Knn, Range, Diverse, etc.) should be accessed via `graph::search::`.
 pub use search::{KnnSearchError, RangeSearchError, Search};

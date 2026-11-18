@@ -104,9 +104,7 @@ impl diskann_benchmark_runner::Benchmark for FullTest {
             data.as_view(),
         )?;
         let build = match build.insert {
-            parse::Insert::Single => {
-                ops::insert(&*index, data.as_view())?
-            }
+            parse::Insert::Single => ops::insert(&*index, data.as_view())?,
             parse::Insert::Multi { batch_size } => {
                 let rt = diskann_benchmark_core::tokio::runtime(
                     build.config.max_minibatch_par().into(),

@@ -6,9 +6,7 @@
 use std::{future::Future, pin::Pin, sync::Arc};
 
 use diskann::{
-    graph::{
-        search::{InlineFilterSearch, Knn, MultihopFilterSearch},
-    },
+    graph::search::{InlineFilterSearch, Knn, MultihopFilterSearch},
     neighbor::Neighbor,
 };
 use diskann_utils::views::rowmajor::Matrix;
@@ -34,11 +32,7 @@ pub(crate) trait PartialIndex {
     // Insert //
     //--------//
 
-    fn insert<'a>(
-        &'a self,
-        vector: Slice<'a>,
-        id: u64,
-    ) -> anyhow::Result<()>;
+    fn insert<'a>(&'a self, vector: Slice<'a>, id: u64) -> anyhow::Result<()>;
 
     //----------//
     // Counters //
