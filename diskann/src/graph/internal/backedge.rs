@@ -163,6 +163,19 @@ impl<I> Deref for BackedgeBuffer<I> {
     }
 }
 
+impl<I> FromIterator<I> for BackedgeBuffer<I>
+where
+    I: Copy + Debug + Default + PartialEq + ContainsSimd,
+{
+    fn from_iter<T: IntoIterator<Item = I>>(iter: T) -> Self {
+        let mut me = Self::default();
+        for i in iter {
+            me.push(i);
+        }
+        me
+    }
+}
+
 ///////////
 // Tests //
 ///////////

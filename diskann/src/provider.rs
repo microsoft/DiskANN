@@ -395,6 +395,15 @@ pub trait NeighborAccessorMut: NeighborAccessor {
             Ok(())
         }
     }
+
+    //------------------//
+    // Provided Methods //
+    //------------------//
+
+    /// Remove all neighbors from the adjacency list for `id`.
+    fn clear(&mut self, id: Self::Id) -> impl std::future::Future<Output = ANNResult<()>> + Send {
+        self.set_neighbors(id, &[])
+    }
 }
 
 /// A small adaptor providing [`NeighborAccessor`] and [`NeighborAccessorMut`] for `&mut T`.
