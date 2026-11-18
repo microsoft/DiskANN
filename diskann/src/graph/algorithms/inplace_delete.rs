@@ -98,6 +98,90 @@ where
     pub(crate) fn delta(&self) -> &HashMap<I, BackedgeBuffer<I>> {
         &self.edges
     }
+
+    pub async fn one_hop<A>(
+        &mut self,
+        one_hop: &OneHop,
+        accessor: &mut A,
+        id: A::Id,
+        config: &Config,
+    ) -> ANNResult<()>
+    where
+        A: InplaceDelete<Id = I>,
+    {
+        one_hop.discover(
+            accessor,
+            id,
+            config,
+            self
+        ).await?;
+
+        add_edges_and_drop(
+            accessor.prune_accessor().borrow_mut(),
+            id,
+            config,
+            &self.edges,
+            &mut self.prune,
+        ).await?;
+
+        Ok(())
+    }
+
+    pub async fn two_hop<A>(
+        &mut self,
+        two_hop: &TwoHop,
+        accessor: &mut A,
+        id: A::Id,
+        config: &Config,
+    ) -> ANNResult<()>
+    where
+        A: InplaceDelete<Id = I>,
+    {
+        two_hop.discover(
+            accessor,
+            id,
+            config,
+            self
+        ).await?;
+
+        add_edges_and_drop(
+            accessor.prune_accessor().borrow_mut(),
+            id,
+            config,
+            &self.edges,
+            &mut self.prune,
+        ).await?;
+
+        Ok(())
+    }
+
+    pub async fn visited_and_topk<A>(
+        &mut self,
+        visited_and_topk: &VisitedAndTopK,
+        accessor: &mut A,
+        id: A::Id,
+        config: &Config,
+    ) -> ANNResult<()>
+    where
+        A: SearchInplaceDelete<Id = I>,
+    {
+        visited_and_topk.discover(
+            accessor,
+            id,
+            config,
+            self
+        ).await?;
+
+        add_edges_and_drop(
+            accessor.prune_accessor().borrow_mut(),
+            id,
+            config,
+            &self.edges,
+            &mut self.prune,
+        ).await?;
+
+        Ok(())
+    }
 }
 
 //--------//
