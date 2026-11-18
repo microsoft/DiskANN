@@ -42,6 +42,8 @@ pub enum PathSeerMethod {
     WhatIf3,
     /// Single-hop PathSeer with parent-fail once the matching-result heap is full.
     WhatIf4,
+    /// WhatIf3 with match-first one-hop expansion in phase two.
+    WhatIf5,
 }
 
 /// Two-phase filtered graph search for an in-memory index.
@@ -775,6 +777,173 @@ where
     })
 }
 
+async fn search_what_if_5<'a, DP, S, T, O, PP, OB>(
+    inner: Knn,
+    index: &'a DiskANNIndex<DP>,
+    strategy: &'a S,
+    processor: PP,
+    context: &'a DP::Context,
+    query: T,
+    output: &mut OB,
+) -> ANNResult<SearchStats>
+where
+    DP: PathSeerGraph,
+    S: SearchStrategy<'a, DP, T, SearchAccessor: FilteredAccessor<Id = DP::InternalId>>,
+    T: Copy + Send + Sync,
+    O: Send,
+    PP: SearchPostProcess<S::SearchAccessor, T, O> + Send + Sync,
+    OB: SearchOutputBuffer<O> + Send + ?Sized,
+{
+    let mut accessor = strategy
+        .search_accessor(&index.data_provider, context, query)
+        .into_ann_result()?;
+    let l = inner.l_value().get();
+    let phase_threshold = accessor.match_count().map_or(l, |count| l.min(count));
+    let mut scratch = index.search_scratch(l, accessor.num_starting_points().await?);
+    let mut candidates = BinaryHeap::new();
+    let mut results = BinaryHeap::with_capacity(l);
+    let mut starts = Vec::new();
+    accessor
+        .start_point_distances(|decision, distance| {
+            starts.push(Scored {
+                id: decision.into_inner(),
+                distance,
+                accepted: decision.is_accept(),
+            });
+        })
+        .await?;
+    for point in starts {
+        if !scratch.visited.insert(point.id) {
+            continue;
+        }
+        // Use the same result-distance admission gate as original PathSeer.
+        admit(point, l, &mut candidates, &mut results);
+    }
+    let budget = index.max_degree_with_slack();
+    let mut direct = AdjacencyList::with_capacity(budget);
+    let mut second = AdjacencyList::with_capacity(budget);
+    let mut scored = Vec::with_capacity(budget * 2);
+
+    // Exhaustion is one normal stopping condition. Otherwise, use the Lth
+    // matching result as the distance gate when popping the nearest candidate.
+    while let Some(Reverse(candidate)) = candidates.pop() {
+        if accessor.terminate_early() {
+            break;
+        }
+        if results.len() == l
+            && results
+                .peek()
+                .is_some_and(|worst| candidate.distance > worst.distance)
+        {
+            break;
+        }
+        // As in original PathSeer, snapshot the phase at the start of expansion.
+        // Direct neighbors may fill results during this expansion; its already
+        // selected phase-one second-hop work still runs to its budget.
+        let phase_one = results.len() < phase_threshold;
+        direct.clear();
+        if phase_one {
+            index
+                .data_provider
+                .pathseer_neighbors(candidate.id, &mut direct)?;
+        }
+        scored.clear();
+        if phase_one {
+            // Match WhatIf3: score and classify every unseen one-hop neighbor.
+            accessor
+                .expand_beam_filtered(
+                    std::iter::once(candidate.id),
+                    glue::NotInMut::new(&mut scratch.visited),
+                    |decision, distance| {
+                        scored.push(Scored {
+                            id: decision.into_inner(),
+                            distance,
+                            accepted: decision.is_accept(),
+                        })
+                    },
+                )
+                .await?;
+        } else {
+            // Phase two: classify before distance evaluation, regardless of
+            // whether the parent itself matches the filter.
+            accessor
+                .expand_beam_accept_only(
+                    std::iter::once(candidate.id),
+                    glue::NotInMut::new(&mut scratch.visited),
+                    |id, distance| {
+                        scored.push(Scored {
+                            id: id.into_inner(),
+                            distance,
+                            accepted: true,
+                        })
+                    },
+                )
+                .await?;
+        }
+        scratch.cmps += scored.len() as u32;
+        scratch.hops += 1;
+        for point in scored.drain(..) {
+            admit(point, l, &mut candidates, &mut results);
+        }
+
+        if phase_one {
+            // Share the original raw second-hop budget across all direct parents.
+            let mut remaining = budget;
+            for &parent in direct.iter() {
+                if remaining == 0 || accessor.terminate_early() {
+                    break;
+                }
+                index
+                    .data_provider
+                    .pathseer_neighbors(parent, &mut second)?;
+                scratch.hops += 1;
+                let count = remaining.min(second.len());
+                remaining -= count;
+                let selected: HashSet<_> = second.iter().take(count).copied().collect();
+                scored.clear();
+                // Only accepted second-hop IDs pass eval_mut and become visited.
+                // Rejected IDs remain reachable later as direct neighbors.
+                accessor
+                    .expand_beam_accept_only(
+                        std::iter::once(parent),
+                        SelectedNotVisited {
+                            selected: &selected,
+                            visited: &mut scratch.visited,
+                        },
+                        |id, distance| {
+                            scored.push(Scored {
+                                id: id.into_inner(),
+                                distance,
+                                accepted: true,
+                            })
+                        },
+                    )
+                    .await?;
+                scratch.cmps += scored.len() as u32;
+                for point in scored.drain(..) {
+                    admit(point, l, &mut candidates, &mut results);
+                }
+            }
+        }
+    }
+
+    let matched: Vec<_> = results
+        .into_sorted_vec()
+        .into_iter()
+        .map(|point| Neighbor::new(point.id, point.distance))
+        .collect();
+    let result_count = processor
+        .post_process(&mut accessor, query, matched.into_iter(), output)
+        .await
+        .into_ann_result()?;
+    Ok(SearchStats {
+        cmps: scratch.cmps,
+        hops: scratch.hops,
+        result_count: result_count as u32,
+        range_search_second_round: false,
+    })
+}
+
 async fn search_what_if_4<'a, DP, S, T, O, PP, OB>(
     inner: Knn,
     index: &'a DiskANNIndex<DP>,
@@ -934,6 +1103,12 @@ where
                 }
                 PathSeerMethod::WhatIf4 => {
                     search_what_if_4(
+                        self.inner, index, strategy, processor, context, query, output,
+                    )
+                    .await
+                }
+                PathSeerMethod::WhatIf5 => {
+                    search_what_if_5(
                         self.inner, index, strategy, processor, context, query, output,
                     )
                     .await

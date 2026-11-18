@@ -548,6 +548,51 @@ fn what_if_3_full_results_disable_second_hop_but_not_direct_scoring() {
 }
 
 #[test]
+fn what_if_5_matches_method_3_in_phase_one() {
+    let index = build_1d_index(
+        0,
+        10.0,
+        AdjacencyList::from_iter_untrusted([1]),
+        vec![
+            (1, vec![100.0], AdjacencyList::from_iter_untrusted([2, 3])),
+            (2, vec![2.0], AdjacencyList::new()),
+            (3, vec![3.0], AdjacencyList::new()),
+        ],
+        4,
+    );
+    let (three_stats, three_results) = run_with_method(&index, &[3], 3, PathSeerMethod::WhatIf3);
+    let (five_stats, five_results) = run_with_method(&index, &[3], 3, PathSeerMethod::WhatIf5);
+    assert_eq!(
+        five_results.iter().map(|n| *n.id()).collect::<Vec<_>>(),
+        three_results.iter().map(|n| *n.id()).collect::<Vec<_>>()
+    );
+    assert_eq!(five_stats.cmps, three_stats.cmps);
+    assert_eq!(five_stats.hops, three_stats.hops);
+}
+
+#[test]
+fn what_if_5_prefilters_all_one_hop_neighbors_in_phase_two() {
+    let index = build_1d_index(
+        0,
+        10.0,
+        AdjacencyList::from_iter_untrusted([1, 2]),
+        vec![
+            (1, vec![2.0], AdjacencyList::new()),
+            (2, vec![3.0], AdjacencyList::new()),
+        ],
+        2,
+    );
+    let matches = &[0, 2];
+    let (three_stats, three_results) = run_with_method(&index, matches, 1, PathSeerMethod::WhatIf3);
+    let (five_stats, five_results) = run_with_method(&index, matches, 1, PathSeerMethod::WhatIf5);
+    assert_eq!(
+        five_results.iter().map(|n| *n.id()).collect::<Vec<_>>(),
+        three_results.iter().map(|n| *n.id()).collect::<Vec<_>>()
+    );
+    assert!(five_stats.cmps < three_stats.cmps);
+}
+
+#[test]
 fn what_if_4_has_no_second_order_expansion_even_before_results_fill() {
     let index = build_1d_index(
         0,
