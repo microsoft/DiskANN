@@ -158,9 +158,15 @@ where
                     self.config.num_threads
                 );
                 self.build_with(metadata, |pool| {
+                    let start_id = start_point_from_medoid::<Data::VectorDataType, _>(
+                        &data_path,
+                        self.config.seed,
+                        self.storage_provider,
+                    )?
+                    .id();
                     super::pipnn::build_inmem_index::<Data::VectorDataType, _>(
                         self.config.metric,
-                        self.config.seed,
+                        start_id,
                         graph,
                         &data_path,
                         &self.index_writer.get_mem_index_file(),
@@ -293,7 +299,7 @@ fn u32_try_from(value: usize) -> ANNResult<u32> {
         .map_err(|_| diskann_error!(ErrorKind::IndexError, "id {value} exceeds u32::MAX"))
 }
 
-pub(super) fn start_point_from_medoid<T, StorageReader>(
+fn start_point_from_medoid<T, StorageReader>(
     path: &str,
     random_seed: Option<u64>,
     reader: &StorageReader,

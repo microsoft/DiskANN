@@ -22,16 +22,15 @@ use diskann_providers::{
 use diskann_utils::{io::read_bin, views::rowmajor::Matrix};
 use diskann_vector::distance::Metric;
 
-use super::build::start_point_from_medoid;
 use crate::error::{ErrorKind, diskann_error};
 
 /// Build the PiPNN graph of the dataset at `data_path` and write it to
 /// `save_path` as an in-memory index file.
 ///
-/// The start point is the medoid of a storage sample, as in the Vamana build.
+/// The caller's `start_id` is recorded in the graph header.
 pub(super) fn build_inmem_index<T, StorageProvider>(
     metric: Metric,
-    seed: Option<u64>,
+    start_id: u32,
     config: &pipnn::Config,
     data_path: &str,
     save_path: &str,
@@ -42,9 +41,8 @@ where
     T: VectorRepr + pipnn::Element,
     StorageProvider: StorageReadProvider + StorageWriteProvider,
 {
-    let start_point = start_point_from_medoid::<T, _>(data_path, seed, storage_provider)?.id();
     let graph = build_graph::<T, _>(metric, config, data_path, storage_provider, pool)?;
-    save_graph(&graph, config, start_point, save_path, storage_provider)
+    save_graph(&graph, config, start_id, save_path, storage_provider)
 }
 
 /// Read the dataset at `data_path` and build its PiPNN graph on `pool`.
@@ -148,11 +146,11 @@ mod tests {
         storage
     }
 
-    fn build(storage: &VirtualStorageProvider<MemoryFS>) -> ANNResult<()> {
+    fn build(storage: &VirtualStorageProvider<MemoryFS>, start_id: u32) -> ANNResult<()> {
         let pool = create_thread_pool(1)?;
         build_inmem_index::<f32, _>(
             Metric::L2,
-            Some(SEED),
+            start_id,
             &pipnn_config(),
             DATA,
             GRAPH,
@@ -166,21 +164,19 @@ mod tests {
         let (points, dimensions) = (256, 8);
         let storage = storage_with_data(points, dimensions);
 
-        build(&storage).unwrap();
+        let start_id = 17;
+        build(&storage, start_id).unwrap();
 
         let mut file = Vec::new();
         std::io::Read::read_to_end(&mut storage.open_reader(GRAPH).unwrap(), &mut file).unwrap();
         let word = |index: usize| u32::from_le_bytes(file[4 * index..][..4].try_into().unwrap());
-        let medoid = start_point_from_medoid::<f32, _>(DATA, Some(SEED), &storage)
-            .unwrap()
-            .id();
 
         assert_eq!(
             u64::from_le_bytes(file[..8].try_into().unwrap()),
             file.len() as u64
         );
         assert_eq!(word(2), DEGREE as u32);
-        assert_eq!(word(3), medoid);
+        assert_eq!(word(3), start_id);
         assert_eq!(u64::from_le_bytes(file[16..24].try_into().unwrap()), 0);
         // Each row is its length and then its neighbor IDs.
         let mut index = 6;
