@@ -22,6 +22,8 @@ mod tag;
 
 pub(crate) use poll::poll;
 
+pub mod index;
+
 pub mod provider;
 pub mod repr;
 pub mod store;

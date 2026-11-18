@@ -7,14 +7,13 @@ use std::{future::Future, pin::Pin, sync::Arc};
 
 use diskann::{
     graph::{
-        DiskANNIndex, glue,
         search::{InlineFilterSearch, Knn, MultihopFilterSearch},
     },
     neighbor::Neighbor,
 };
 use diskann_utils::views::rowmajor::Matrix;
 
-use diskann_inmem::{self as di, Context, Provider, Strategy, repr};
+use diskann_inmem::{self as di, repr};
 
 use super::stats::{Counters, KnnSearch};
 use crate::support::datatype::{AsDataType, DatasetView, Slice, TryCast};
@@ -29,7 +28,7 @@ pub(crate) trait PartialIndex {
         query: Slice<'a>,
         knn: Knn,
         neighbors: &'a mut Vec<Neighbor<u64>>,
-    ) -> Pin<Box<dyn Future<Output = anyhow::Result<KnnSearch>> + 'a>>;
+    ) -> anyhow::Result<KnnSearch>;
 
     //--------//
     // Insert //
@@ -39,7 +38,7 @@ pub(crate) trait PartialIndex {
         &'a self,
         vector: Slice<'a>,
         id: u64,
-    ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + 'a>>;
+    ) -> anyhow::Result<()>;
 
     //----------//
     // Counters //
@@ -72,11 +71,11 @@ pub(crate) trait Index: PartialIndex {
     // Insert //
     //--------//
 
-    fn multi_insert(
-        self: Arc<Self>,
-        batch: DatasetView<'_>,
+    fn multi_insert<'a>(
+        &'a self,
+        batch: DatasetView<'a>,
         ids: std::ops::Range<u64>,
-    ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + '_>>;
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + 'a>>;
 }
 
 ///////////
@@ -88,7 +87,7 @@ macro_rules! index {
         index!({} $T where);
     };
     ({ $($generics:ident),* $(,)? } $T:ty where $($where:tt)*) => {
-        impl<$($generics),*> PartialIndex for DiskANNIndex<Provider<$T, u64>>
+        impl<$($generics),*> PartialIndex for di::index::Index<$T, u64>
         where
             $($where)*
         {
@@ -101,17 +100,10 @@ macro_rules! index {
                 query: Slice<'a>,
                 knn: Knn,
                 neighbors: &'a mut Vec<Neighbor<u64>>,
-            ) -> Pin<Box<dyn Future<Output = anyhow::Result<KnnSearch>> + 'a>> {
-                let fut = async move {
-                    let query = query.try_cast()?;
-                    let stats = self
-                        .search(knn, &Strategy, &Context, query, neighbors)
-                        .await?;
-
-                    Ok(stats.into())
-                };
-
-                Box::pin(fut)
+            ) -> anyhow::Result<KnnSearch> {
+                let query = query.try_cast()?;
+                let stats = self.read()?.search(query, knn, neighbors)?;
+                Ok(stats.into())
             }
 
             //--------//
@@ -122,15 +114,10 @@ macro_rules! index {
                 &'a self,
                 vector: Slice<'a>,
                 id: u64,
-            ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + 'a>> {
-                let fut = async move {
-                    let vector = vector.try_cast()?;
-                    self.insert(&Strategy, &Context, &id, vector).await?;
-
-                    Ok(())
-                };
-
-                Box::pin(fut)
+            ) -> anyhow::Result<()> {
+                let vector = vector.try_cast()?;
+                self.write()?.insert(vector, id)?;
+                Ok(())
             }
 
             //----------//
@@ -138,11 +125,11 @@ macro_rules! index {
             //----------//
 
             fn counters(&self) -> Counters {
-                self.provider().counters().into()
+                self.counters().into()
             }
         }
 
-        impl<$($generics),*> Index for DiskANNIndex<Provider<$T, u64>>
+        impl<$($generics),*> Index for di::index::Index<$T, u64>
         where
             $($where)*
         {
@@ -158,13 +145,13 @@ macro_rules! index {
                 neighbors: &mut Vec<Neighbor<u64>>,
             ) -> anyhow::Result<KnnSearch> {
                 anyhow::ensure!(
-                    predicate.len() == self.provider().capacity().value(),
+                    predicate.len() == self.capacity().value(),
                     "expected predicate to densly represent external IDs",
                 );
 
                 let query = query.try_cast()?;
-                let scoped = di::provider::scoped(&self)?;
-                let mut filtered = scoped.filtered(
+                let read = self.read()?;
+                let mut filtered = read.filtered(
                     query,
                     |i| predicate[*i as usize],
                 )?;
@@ -181,15 +168,16 @@ macro_rules! index {
             // Insert //
             //--------//
 
-            fn multi_insert(
-                self: Arc<Self>,
-                batch: DatasetView<'_>,
+            fn multi_insert<'a>(
+                &'a self,
+                batch: DatasetView<'a>,
                 ids: std::ops::Range<u64>,
-            ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + '_>> {
+            ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + 'a>> {
                 let fut = async move {
+                    let write = self.write()?;
                     let vectors = Arc::new(batch.try_cast()?.to_rowmajor_owned());
                     let ids: Arc<[u64]> = ids.collect();
-                    (&self).multi_insert(Strategy, &Context, vectors, ids).await?;
+                    write.multi_insert(vectors, ids).await?;
                     Ok(())
                 };
 
@@ -202,59 +190,59 @@ macro_rules! index {
 index!({ T } repr::Full<T> where T: repr::FullPrecision + TryCast + AsDataType);
 index!(repr::Quantized);
 
-impl PartialIndex for DiskANNIndex<di::provider::buildonly::Provider<repr::Full<f32>>> {
-    fn search<'a>(
-        &'a self,
-        query: Slice<'a>,
-        knn: Knn,
-        neighbors: &'a mut Vec<Neighbor<u64>>,
-    ) -> Pin<Box<dyn Future<Output = anyhow::Result<KnnSearch>> + 'a>> {
-        let fut = async move {
-            let query = query.try_cast()?;
-            let mut neighbors_u32 = Vec::<Neighbor<u32>>::new();
-            let post_process = glue::Pipeline::new(glue::FilterStartPoints, glue::CopyIds);
-
-            let stats = self
-                .search_with(
-                    knn,
-                    &Strategy,
-                    post_process,
-                    &Context,
-                    query,
-                    &mut neighbors_u32,
-                )
-                .await?;
-
-            neighbors.extend(
-                neighbors_u32
-                    .into_iter()
-                    .map(|n| Neighbor::new(u64::from(*n.id()), *n.distance())),
-            );
-
-            Ok(stats.into())
-        };
-
-        Box::pin(fut)
-    }
-
-    fn insert<'a>(
-        &'a self,
-        vector: Slice<'a>,
-        id: u64,
-    ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + 'a>> {
-        let fut = async move {
-            let id: u32 =
-                u32::try_from(id).map_err(|_| anyhow::anyhow!("id {id} exceeds u32::MAX"))?;
-            let vector = vector.try_cast()?;
-            self.insert(&Strategy, &Context, &id, vector).await?;
-
-            Ok(())
-        };
-
-        Box::pin(fut)
-    }
-
-    fn counters(&self) -> Counters {
-        self.provider().counters().into()
-    }
-}
+// impl PartialIndex for DiskANNIndex<di::provider::buildonly::Provider<repr::Full<f32>>> {
+//     fn search<'a>(
+//         &'a self,
+//         query: Slice<'a>,
+//         knn: Knn,
+//         neighbors: &'a mut Vec<Neighbor<u64>>,
+//     ) -> Pin<Box<dyn Future<Output = anyhow::Result<KnnSearch>> + 'a>> {
+//         let fut = async move {
+//             let query = query.try_cast()?;
+//             let mut neighbors_u32 = Vec::<Neighbor<u32>>::new();
+//             let post_process = glue::Pipeline::new(glue::FilterStartPoints, glue::CopyIds);
+//
+//             let stats = self
+//                 .search_with(
+//                     knn,
+//                     &Strategy,
+//                     post_process,
+//                     &Context,
+//                     query,
+//                     &mut neighbors_u32,
+//                 )
+//                 .await?;
+//
+//             neighbors.extend(
+//                 neighbors_u32
+//                     .into_iter()
+//                     .map(|n| Neighbor::new(u64::from(*n.id()), *n.distance())),
+//             );
+//
+//             Ok(stats.into())
+//         };
+//
+//         Box::pin(fut)
+//     }
+//
+//     fn insert<'a>(
+//         &'a self,
+//         vector: Slice<'a>,
+//         id: u64,
+//     ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + 'a>> {
+//         let fut = async move {
+//             let id: u32 =
+//                 u32::try_from(id).map_err(|_| anyhow::anyhow!("id {id} exceeds u32::MAX"))?;
+//             let vector = vector.try_cast()?;
+//             self.insert(&Strategy, &Context, &id, vector).await?;
+//
+//             Ok(())
+//         };
+//
+//         Box::pin(fut)
+//     }
+//
+//     fn counters(&self) -> Counters {
+//         self.provider().counters().into()
+//     }
+// }

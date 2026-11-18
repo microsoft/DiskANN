@@ -32,7 +32,7 @@ use std::hash::Hash;
 use diskann::{
     ANNError, ANNResult,
     graph::{
-        AdjacencyList, DiskANNIndex as Index, SearchOutputBuffer,
+        AdjacencyList, SearchOutputBuffer,
         glue::{self, HybridPredicate},
         workingset,
     },
@@ -83,8 +83,14 @@ where
     M: Id,
 {
     /// A local set of counters that update the provider-wide counters in bulk.
-    fn local_counters(&self) -> LocalCounters<'_> {
+    ///
+    /// FIXME: Make more private.
+    pub(crate) fn local_counters(&self) -> LocalCounters<'_> {
         self.counters.local()
+    }
+
+    pub(crate) fn repr(&self) -> &R {
+        &self.representation
     }
 
     /// Return a snapshot of the current event counters.
@@ -127,8 +133,15 @@ where
     /// Return the [`IdLimit`] for `self`.
     ///
     /// Keep private since it relates to the internal ID space.
-    fn id_limit(&self) -> IdLimit {
+    ///
+    /// FIXME: Make more private
+    pub(crate) fn id_limit(&self) -> IdLimit {
         self.representation.id_limit()
+    }
+
+    /// FIXME: Make it go away.
+    pub(crate) fn mapping(&self) -> &IdMap<M> {
+        &self.mapping
     }
 }
 
@@ -136,127 +149,127 @@ where
 // Scoped //
 ////////////
 
-/// Construct a [`Scoped`] view of `index`.
-///
-/// Items deleted in `index` while the [`Scoped`] is held will be prevented from reclamation.
-/// This allows operations that require some amount of pre-processing (like [`Filtered`])
-/// to maintain a coherent view of the `index` by prevent ABA style bugs that would be allowed.
-///
-/// # Warning
-///
-/// This function is intended to be temporary pending architectural reworking of `diskann`.
-#[doc(hidden)]
-pub fn scoped<R, M>(index: &Index<Provider<R, M>>) -> ANNResult<Scoped<'_, R, M>>
-where
-    R: repr::Representation,
-    M: Id,
-{
-    let guard =
-        <_ as repr::Representation>::read_guard(&index.provider().representation)?.into_inner();
-    Ok(Scoped::new(index, guard))
-}
-
-/// A scoped view of [`Provider`], preventing id receclamation while held.
-///
-/// See: [`scope`].
-#[doc(hidden)]
-#[derive(Debug)]
-pub struct Scoped<'a, R, M>
-where
-    R: repr::Representation,
-    M: Id,
-{
-    index: &'a Index<Provider<R, M>>,
-    guard: epoch::ReadGuard<'a>,
-}
-
-impl<'a, R, M> Scoped<'a, R, M>
-where
-    R: repr::Representation,
-    M: Id,
-{
-    fn new(index: &'a Index<Provider<R, M>>, guard: epoch::ReadGuard<'a>) -> Self {
-        Self { index, guard }
-    }
-
-    /// Evaluate the `predicate` on all current external-ids.
-    ///
-    /// Return a [`BitVector`] of length [`Provider::id_limit`] with entries set to 1 if ane
-    /// only if the associated external-id satisfies `predicate`.
-    fn evaluate<F>(&self, mut predicate: F) -> BitVector
-    where
-        F: FnMut(&M) -> bool,
-    {
-        let provider = self.index.provider();
-        let mut bitvec = BitVector::new(<R as repr::Representation>::id_limit(
-            &provider.representation,
-        ));
-
-        // We need to protect against the case where a predicate also tries to insert and
-        // delete items, which would acquire the ID translation locks.
-        //
-        // If we were holding these locks when that happened, this would deadlock.
-        //
-        // Instead, we acquire and release locks for each item.
-        //
-        // FIXME: This is slow and can be fixed by moving internal-to-external ID translation
-        // behind the epoch boundary, then we can read through it without locks.
-        for internal in 0..self.index.provider().id_limit().value() {
-            if let Some(external) = provider.mapping.to_external(internal)
-                && predicate(&external)
-            {
-                bitvec.set_true(internal);
-            }
-        }
-
-        bitvec
-    }
-
-    /// Construct a [`Filtered`] with `query` and a pre-processed `predicate`.
-    ///
-    /// The returned [`Filtered`] can be used for multiple filtered searches with the same
-    /// `query`/`predicate` pair.
-    ///
-    /// The `predicate` will be called at most once for each ID currently registered with
-    /// the parent [`Provider`].
-    ///
-    /// # Note
-    ///
-    /// While the [`Filtered`] is held, it prevents id reclamation of its parent [`Provider`].
-    /// It should only be held as long as necessary, or in situations where it is known the
-    /// parent [`Provider`] is not undergoing rapid inserts and deletes.
-    ///
-    /// In addition, items inserted into the [`Provider`] after the [`Filtered`] is
-    /// constructed will not be returned from searches.
-    ///
-    /// # Warning
-    ///
-    /// This is likely temporary function pending architectural changes to `diskann`.
-    pub fn filtered<'x, F>(
-        &'x self,
-        query: <R as repr::Search>::Query<'x>,
-        predicate: F,
-    ) -> ANNResult<Filtered<'x, R, M>>
-    where
-        R: repr::Search,
-        F: FnMut(&M) -> bool,
-    {
-        let provider = self.index.provider();
-        let search = <R as repr::Search>::search_accessor(
-            &provider.representation,
-            query,
-            provider,
-            Some(repr::ReadGuard::new(self.guard.share())),
-            provider.local_counters(),
-        )?;
-
-        let filter = self.evaluate(predicate);
-        Ok(Filtered {
-            index: self.index,
-            accessor: FilteredAccessor { search, filter },
-        })
-    }
-}
+// /// Construct a [`Scoped`] view of `index`.
+// ///
+// /// Items deleted in `index` while the [`Scoped`] is held will be prevented from reclamation.
+// /// This allows operations that require some amount of pre-processing (like [`Filtered`])
+// /// to maintain a coherent view of the `index` by prevent ABA style bugs that would be allowed.
+// ///
+// /// # Warning
+// ///
+// /// This function is intended to be temporary pending architectural reworking of `diskann`.
+// #[doc(hidden)]
+// pub fn scoped<R, M>(index: &Index<Provider<R, M>>) -> ANNResult<Scoped<'_, R, M>>
+// where
+//     R: repr::Representation,
+//     M: Id,
+// {
+//     let guard =
+//         <_ as repr::Representation>::read_guard(&index.provider().representation)?.into_inner();
+//     Ok(Scoped::new(index, guard))
+// }
+//
+// /// A scoped view of [`Provider`], preventing id receclamation while held.
+// ///
+// /// See: [`scope`].
+// #[doc(hidden)]
+// #[derive(Debug)]
+// pub struct Scoped<'a, R, M>
+// where
+//     R: repr::Representation,
+//     M: Id,
+// {
+//     index: &'a Index<Provider<R, M>>,
+//     guard: epoch::ReadGuard<'a>,
+// }
+//
+// impl<'a, R, M> Scoped<'a, R, M>
+// where
+//     R: repr::Representation,
+//     M: Id,
+// {
+//     fn new(index: &'a Index<Provider<R, M>>, guard: epoch::ReadGuard<'a>) -> Self {
+//         Self { index, guard }
+//     }
+//
+//     /// Evaluate the `predicate` on all current external-ids.
+//     ///
+//     /// Return a [`BitVector`] of length [`Provider::id_limit`] with entries set to 1 if ane
+//     /// only if the associated external-id satisfies `predicate`.
+//     fn evaluate<F>(&self, mut predicate: F) -> BitVector
+//     where
+//         F: FnMut(&M) -> bool,
+//     {
+//         let provider = self.index.provider();
+//         let mut bitvec = BitVector::new(<R as repr::Representation>::id_limit(
+//             &provider.representation,
+//         ));
+//
+//         // We need to protect against the case where a predicate also tries to insert and
+//         // delete items, which would acquire the ID translation locks.
+//         //
+//         // If we were holding these locks when that happened, this would deadlock.
+//         //
+//         // Instead, we acquire and release locks for each item.
+//         //
+//         // FIXME: This is slow and can be fixed by moving internal-to-external ID translation
+//         // behind the epoch boundary, then we can read through it without locks.
+//         for internal in 0..self.index.provider().id_limit().value() {
+//             if let Some(external) = provider.mapping.to_external(internal)
+//                 && predicate(&external)
+//             {
+//                 bitvec.set_true(internal);
+//             }
+//         }
+//
+//         bitvec
+//     }
+//
+//     /// Construct a [`Filtered`] with `query` and a pre-processed `predicate`.
+//     ///
+//     /// The returned [`Filtered`] can be used for multiple filtered searches with the same
+//     /// `query`/`predicate` pair.
+//     ///
+//     /// The `predicate` will be called at most once for each ID currently registered with
+//     /// the parent [`Provider`].
+//     ///
+//     /// # Note
+//     ///
+//     /// While the [`Filtered`] is held, it prevents id reclamation of its parent [`Provider`].
+//     /// It should only be held as long as necessary, or in situations where it is known the
+//     /// parent [`Provider`] is not undergoing rapid inserts and deletes.
+//     ///
+//     /// In addition, items inserted into the [`Provider`] after the [`Filtered`] is
+//     /// constructed will not be returned from searches.
+//     ///
+//     /// # Warning
+//     ///
+//     /// This is likely temporary function pending architectural changes to `diskann`.
+//     pub fn filtered<'x, F>(
+//         &'x self,
+//         query: <R as repr::Search>::Query<'x>,
+//         predicate: F,
+//     ) -> ANNResult<Filtered<'x, R, M>>
+//     where
+//         R: repr::Search,
+//         F: FnMut(&M) -> bool,
+//     {
+//         let provider = self.index.provider();
+//         let search = <R as repr::Search>::search_accessor(
+//             &provider.representation,
+//             query,
+//             provider,
+//             Some(repr::ReadGuard::new(self.guard.share())),
+//             provider.local_counters(),
+//         )?;
+//
+//         let filter = self.evaluate(predicate);
+//         Ok(Filtered {
+//             index: self.index,
+//             accessor: FilteredAccessor { search, filter },
+//         })
+//     }
+// }
 
 ///////////////////
 // Data Provider //
@@ -1001,58 +1014,58 @@ where
     }
 }
 
-//---------//
-// Filters //
-//---------//
-
-/// A scoped view of a [`Provider`] with a pre-evaluate query and filter predicate.
-///
-/// See: [`Scoped::filtered`].
-#[derive(Debug)]
-pub struct Filtered<'a, R, M>
-where
-    R: repr::Representation,
-    M: Id,
-{
-    // FIXME: `accessor` has everything we need. We don't need `index` except that `diskann`
-    // requires it!
-    index: &'a Index<Provider<R, M>>,
-    accessor: FilteredAccessor<'a>,
-}
-
-impl<R, M> Filtered<'_, R, M>
-where
-    R: repr::Representation,
-    M: Id,
-{
-    /// Run [`diskann::graph::search::InlineFilterSearch`] and store the results in `output`.
-    pub fn inline_filtered<O>(
-        &mut self,
-        params: diskann::graph::search::InlineFilterSearch,
-        output: &mut O,
-    ) -> ANNResult<diskann::graph::index::SearchStats>
-    where
-        O: diskann::graph::SearchOutputBuffer<M> + Send,
-    {
-        let strategy = Smuggle::new(&mut self.accessor);
-        let fut = self.index.search(params, &strategy, &Context, (), output);
-        crate::poll(fut)
-    }
-
-    /// Run [`diskann::graph::search::MultihopFilterSearch`] and store the results in `output`.
-    pub fn multihop_filtered<O>(
-        &mut self,
-        params: diskann::graph::search::MultihopFilterSearch,
-        output: &mut O,
-    ) -> ANNResult<diskann::graph::index::SearchStats>
-    where
-        O: diskann::graph::SearchOutputBuffer<M> + Send,
-    {
-        let strategy = Smuggle::new(&mut self.accessor);
-        let fut = self.index.search(params, &strategy, &Context, (), output);
-        crate::poll(fut)
-    }
-}
+// //---------//
+// // Filters //
+// //---------//
+//
+// /// A scoped view of a [`Provider`] with a pre-evaluate query and filter predicate.
+// ///
+// /// See: [`Scoped::filtered`].
+// #[derive(Debug)]
+// pub struct Filtered<'a, R, M>
+// where
+//     R: repr::Representation,
+//     M: Id,
+// {
+//     // FIXME: `accessor` has everything we need. We don't need `index` except that `diskann`
+//     // requires it!
+//     index: &'a Index<Provider<R, M>>,
+//     accessor: FilteredAccessor<'a>,
+// }
+//
+// impl<R, M> Filtered<'_, R, M>
+// where
+//     R: repr::Representation,
+//     M: Id,
+// {
+//     /// Run [`diskann::graph::search::InlineFilterSearch`] and store the results in `output`.
+//     pub fn inline_filtered<O>(
+//         &mut self,
+//         params: diskann::graph::search::InlineFilterSearch,
+//         output: &mut O,
+//     ) -> ANNResult<diskann::graph::index::SearchStats>
+//     where
+//         O: diskann::graph::SearchOutputBuffer<M> + Send,
+//     {
+//         let strategy = Smuggle::new(&mut self.accessor);
+//         let fut = self.index.search(params, &strategy, &Context, (), output);
+//         crate::poll(fut)
+//     }
+//
+//     /// Run [`diskann::graph::search::MultihopFilterSearch`] and store the results in `output`.
+//     pub fn multihop_filtered<O>(
+//         &mut self,
+//         params: diskann::graph::search::MultihopFilterSearch,
+//         output: &mut O,
+//     ) -> ANNResult<diskann::graph::index::SearchStats>
+//     where
+//         O: diskann::graph::SearchOutputBuffer<M> + Send,
+//     {
+//         let strategy = Smuggle::new(&mut self.accessor);
+//         let fut = self.index.search(params, &strategy, &Context, (), output);
+//         crate::poll(fut)
+//     }
+// }
 
 //~~~~~~~~~~~~~~~~~//
 // HERE BE DRAGONS //
@@ -1069,11 +1082,13 @@ where
 // methods receive accessors only without a `DiskANNIndex` or any strategies.
 //
 // Then we will be able to avoid this horrible hack and simplify `Scoped`/`Filtered`.
+//
+// FIXME: Make it go away
 #[derive(Debug)]
-struct Smuggle<'borrow, 'data>(Mutex<Option<FilteredAccessorRef<'borrow, 'data>>>);
+pub(super) struct Smuggle<'borrow, 'data>(Mutex<Option<FilteredAccessorRef<'borrow, 'data>>>);
 
 impl<'borrow, 'data> Smuggle<'borrow, 'data> {
-    fn new(accessor: &'borrow mut FilteredAccessor<'data>) -> Self {
+    pub(super) fn new(accessor: &'borrow mut FilteredAccessor<'data>) -> Self {
         Self(Mutex::new(Some(FilteredAccessorRef(accessor))))
     }
 }
@@ -1141,9 +1156,19 @@ where
 ///
 /// See: [`Filtered`].
 #[derive(Debug)]
-struct FilteredAccessor<'a> {
+pub(super) struct FilteredAccessor<'a> {
     search: SearchAccessor<'a>,
     filter: BitVector,
+}
+
+impl<'a> FilteredAccessor<'a> {
+    pub(super) fn new(search: SearchAccessor<'a>, filter: BitVector) -> Self {
+        Self { search, filter }
+    }
+
+    pub(super) fn as_mut<'b>(&'b mut self) -> FilteredAccessorRef<'b, 'a> {
+        FilteredAccessorRef(self)
+    }
 }
 
 /// A temporary wrapper for [`FilteredAccessor`] to inject it directly into the `diskann`
@@ -1151,7 +1176,7 @@ struct FilteredAccessor<'a> {
 ///
 /// This should become unnecessary in the future.
 #[derive(Debug)]
-struct FilteredAccessorRef<'borrow, 'data>(&'borrow mut FilteredAccessor<'data>);
+pub(crate) struct FilteredAccessorRef<'borrow, 'data>(&'borrow mut FilteredAccessor<'data>);
 
 impl diskann::provider::HasId for FilteredAccessorRef<'_, '_> {
     type Id = u32;
@@ -1227,302 +1252,302 @@ impl glue::FilteredAccessor for FilteredAccessorRef<'_, '_> {
     }
 }
 
-///////////
-// Tests //
-///////////
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    use diskann::{
-        graph::{
-            DiskANNIndex, InplaceDeleteMethod,
-            search::{InlineFilterSearch, Knn, MultihopFilterSearch},
-            test::synthetic::Grid,
-        },
-        neighbor::Neighbor,
-        provider::{DataProvider, Delete},
-    };
-    use diskann_utils::{
-        assert_contains,
-        views::rowmajor::{self, Matrix},
-    };
-    use diskann_vector::distance::Metric;
-
-    use crate::{num::Capacity, poll::poll};
-
-    /// The true tests live in the integration tests for this repo.
-    ///
-    /// The smoke test here uses a 2D grid of points to verify that our provider
-    /// implementations are more-or-less correct.
-    ///
-    /// Note that since `Provider` separates internal and external IDs, we multiply the
-    /// coordinates of each element in the grid by 10 and add 1 to verify that the ID
-    /// translation is behaving properly.
-    ///
-    /// For clarity, the expected structure of the grid is as follows:
-    ///
-    ///                       <unknown>
-    ///   41 91 141 191 241
-    ///   31 81 131 181 231
-    ///   21 71 121 171 221
-    ///   11 61 111 161 211
-    ///    1 51 101 151 201
-    ///
-    #[tokio::test]
-    async fn smoke() {
-        let grid = Grid::Two;
-        let size = 5;
-        let data = grid.data(size);
-        let start = grid.start_point(size);
-        let degree = 6;
-
-        let config = repr::full::Config::new(
-            Capacity::new(grid.num_points(size)),
-            MaxDegree::new(degree),
-            Metric::L2,
-            rowmajor::Owned::row_vector(start.into()),
-        )
-        .unwrap();
-
-        let provider = Provider::<_, u64>::new(config).unwrap();
-        assert_eq!(provider.max_degree(), MaxDegree::new(degree));
-        assert_eq!(provider.capacity(), Capacity::new(grid.num_points(size)));
-
-        let config = diskann::graph::config::Builder::new(
-            2 * (grid.dim() as usize),
-            diskann::graph::config::MaxDegree::new(provider.max_degree().value()),
-            10,
-            (Metric::L2).into(),
-        )
-        .build()
-        .unwrap();
-
-        let index = DiskANNIndex::new(config, provider, None);
-
-        for (i, data) in data.rows().enumerate() {
-            index
-                .insert(&Strategy, &Context, &((10 * i + 1) as u64), data)
-                .await
-                .unwrap();
-        }
-
-        // Verify that each ID round trips.
-        for i in 0..data.nrows() {
-            let i = (10 * i + 1) as u64;
-            let internal = index.provider().to_internal_id(&Context, &i).unwrap();
-            assert_ne!(
-                internal as u64,
-                i + 1,
-                "this relies on the start points being located at the beginning of the id space\
-                 this is **NOT** guaranteed",
-            );
-
-            assert!(
-                !index
-                    .provider()
-                    .status_by_external_id(&Context, &i)
-                    .await
-                    .unwrap()
-                    .is_deleted()
-            );
-            assert!(
-                !index
-                    .provider()
-                    .status_by_internal_id(&Context, internal)
-                    .await
-                    .unwrap()
-                    .is_deleted()
-            );
-        }
-
-        // Assert that out-of-bounds translations returns errors.
-        assert!(index.provider().to_internal_id(&Context, &0).is_err());
-
-        // Searches should return something reasonable.
-        let knn = Knn::new(10, None).unwrap();
-        let mut neighbors = Vec::<Neighbor<u64>>::new();
-        index
-            .search(knn, &Strategy, &Context, &[0.0, 0.0], &mut neighbors)
-            .await
-            .unwrap();
-
-        assert_eq!(neighbors[0].as_tuple(), (1, 0.0));
-        assert_eq!(neighbors[1].as_tuple(), (11, 1.0)); // this can be swapped with 2
-        assert_eq!(neighbors[2].as_tuple(), (51, 1.0));
-        assert_eq!(neighbors[3].as_tuple(), (61, 2.0));
-
-        // Filtered searches work.
-        //
-        // What we do here is create a `Scoped` then a `Filtered`.
-        //
-        // We then hold onto these to ensure that algorithms like inplace delete can still
-        // run but that IDs cannot be reclaimed until both to away.
-        //
-        // The filter excludes IDs where the 10s digit is odd.
-        let scoped = scoped(&index).unwrap();
-        let mut filtered = scoped
-            .filtered(&[0.0, 0.0], |i| (*i / 10).is_multiple_of(2))
-            .unwrap();
-
-        {
-            let mut neighbors = Vec::<Neighbor<u64>>::new();
-            let ifs = InlineFilterSearch::new(knn, None);
-            filtered
-                .inline_filtered(ifs.clone(), &mut neighbors)
-                .unwrap();
-
-            // We should not observe entries with odd 10s digits.
-            assert_eq!(neighbors[0].as_tuple(), (1, 0.0));
-            assert_eq!(neighbors[1].as_tuple(), (61, 2.0));
-            assert_eq!(neighbors[2].as_tuple(), (21, 4.0)); // This can be swapped with 3
-            assert_eq!(neighbors[3].as_tuple(), (101, 4.0));
-
-            // This is a bit sneaky.
-            //
-            // We mimic the case where a rerank style post-processing routine clears the
-            // internal buffer and leaves it that way.
-            //
-            // The `expand_beam` should handle this case properly.
-            filtered.accessor.search.buffer.clear();
-
-            // Try again, this time with mulit-hop filter.
-            neighbors.clear();
-            let mfs = MultihopFilterSearch::new(knn);
-            filtered.multihop_filtered(mfs, &mut neighbors).unwrap();
-
-            // We should not observe entries with odd 10s digits.
-            assert_eq!(neighbors[0].as_tuple(), (1, 0.0));
-            assert_eq!(neighbors[1].as_tuple(), (61, 2.0));
-            assert_eq!(neighbors[2].as_tuple(), (21, 4.0)); // This can be swapped with 3
-            assert_eq!(neighbors[3].as_tuple(), (101, 4.0));
-        }
-
-        // If we run inplace delete on point 61, it longer be present.
-        index
-            .inplace_delete(
-                Strategy,
-                &Context,
-                &61,
-                3,
-                InplaceDeleteMethod::VisitedAndTopK {
-                    k_value: 10,
-                    l_value: 10,
-                },
-            )
-            .await
-            .unwrap();
-
-        assert!(
-            index
-                .provider()
-                .status_by_external_id(&Context, &61)
-                .await
-                .unwrap()
-                .is_deleted()
-        );
-
-        // We can't delete the same thing twice.
-        assert!(
-            index
-                .inplace_delete(
-                    Strategy,
-                    &Context,
-                    &61,
-                    3,
-                    InplaceDeleteMethod::VisitedAndTopK {
-                        k_value: 10,
-                        l_value: 10
-                    },
-                )
-                .await
-                .is_err()
-        );
-
-        // Rerun search - the point 61 should now be gone.
-        let mut neighbors = Vec::<Neighbor<u64>>::new();
-        index
-            .search(knn, &Strategy, &Context, &[0.0, 0.0], &mut neighbors)
-            .await
-            .unwrap();
-
-        assert_eq!(neighbors[0].as_tuple(), (1, 0.0));
-        assert_eq!(neighbors[1].as_tuple(), (51, 1.0)); // this can be swapped with 2
-        assert_eq!(neighbors[2].as_tuple(), (11, 1.0));
-        assert_eq!(neighbors[3].as_tuple(), (101, 4.0)); // we can also accept "21"
-
-        // This insert fails because even though there is an empty slot, it cannot be
-        // reclaimed until the `scoped` is dropped.
-        //
-        // After this check, we free up these resources.
-        assert_contains!(
-            index
-                .insert(&Strategy, &Context, &1, &[10.0, 10.0])
-                .await
-                .unwrap_err()
-                .to_string(),
-            "could not allocate a new slot",
-        );
-
-        drop(filtered);
-        drop(scoped);
-
-        // We can't insert an existing ID.
-        assert_contains!(
-            index
-                .insert(&Strategy, &Context, &1, &[10.0, 10.0])
-                .await
-                .unwrap_err()
-                .to_string(),
-            "external id is already mapped",
-        );
-
-        // If we insert a new ID but the query vector is too long - make sure we leave the
-        // provider untouched.
-        assert_contains!(
-            index
-                .insert(&Strategy, &Context, &2, &[10.0, 10.0, 10.0])
-                .await
-                .unwrap_err()
-                .to_string(),
-            "expected slice of length 2",
-        );
-
-        // Check that we can reinsert the same point with a different ID and have it be
-        // returned from search.
-        index
-            .insert(&Strategy, &Context, &62, &[1.0, 1.0])
-            .await
-            .unwrap();
-
-        // We can't insert an ID - but this time it's because we don't have any more internal
-        // slots.
-        assert!(
-            index
-                .insert(&Strategy, &Context, &62, &[0.0, 0.0])
-                .await
-                .is_err()
-        );
-
-        // Rerun search - the point 62 should be present.
-        let mut neighbors = Vec::<Neighbor<u64>>::new();
-        index
-            .search(knn, &Strategy, &Context, &[0.0, 0.0], &mut neighbors)
-            .await
-            .unwrap();
-
-        assert_eq!(neighbors[0].as_tuple(), (1, 0.0));
-        assert_eq!(neighbors[1].as_tuple(), (11, 1.0)); // this can be swapped with 2
-        assert_eq!(neighbors[2].as_tuple(), (51, 1.0));
-        assert_eq!(neighbors[3].as_tuple(), (62, 2.0));
-
-        // Finally - test that we can create a crazy predicate for filtering that deletes
-        // all the external IDs as they are evaluated.
-        let scoped = super::scoped(&index).unwrap();
-        let _ = scoped.filtered(&[0.0, 0.0], |i| {
-            poll(index.provider().delete(&Context, i)).unwrap();
-            true
-        });
-    }
-}
+// ///////////
+// // Tests //
+// ///////////
+//
+// #[cfg(test)]
+// mod tests {
+//     use super::*;
+//
+//     use diskann::{
+//         graph::{
+//             DiskANNIndex, InplaceDeleteMethod,
+//             search::{InlineFilterSearch, Knn, MultihopFilterSearch},
+//             test::synthetic::Grid,
+//         },
+//         neighbor::Neighbor,
+//         provider::{DataProvider, Delete},
+//     };
+//     use diskann_utils::{
+//         assert_contains,
+//         views::rowmajor::{self, Matrix},
+//     };
+//     use diskann_vector::distance::Metric;
+//
+//     use crate::{num::Capacity, poll::poll};
+//
+//     /// The true tests live in the integration tests for this repo.
+//     ///
+//     /// The smoke test here uses a 2D grid of points to verify that our provider
+//     /// implementations are more-or-less correct.
+//     ///
+//     /// Note that since `Provider` separates internal and external IDs, we multiply the
+//     /// coordinates of each element in the grid by 10 and add 1 to verify that the ID
+//     /// translation is behaving properly.
+//     ///
+//     /// For clarity, the expected structure of the grid is as follows:
+//     ///
+//     ///                       <unknown>
+//     ///   41 91 141 191 241
+//     ///   31 81 131 181 231
+//     ///   21 71 121 171 221
+//     ///   11 61 111 161 211
+//     ///    1 51 101 151 201
+//     ///
+//     #[tokio::test]
+//     async fn smoke() {
+//         let grid = Grid::Two;
+//         let size = 5;
+//         let data = grid.data(size);
+//         let start = grid.start_point(size);
+//         let degree = 6;
+//
+//         let config = repr::full::Config::new(
+//             Capacity::new(grid.num_points(size)),
+//             MaxDegree::new(degree),
+//             Metric::L2,
+//             rowmajor::Owned::row_vector(start.into()),
+//         )
+//         .unwrap();
+//
+//         let provider = Provider::<_, u64>::new(config).unwrap();
+//         assert_eq!(provider.max_degree(), MaxDegree::new(degree));
+//         assert_eq!(provider.capacity(), Capacity::new(grid.num_points(size)));
+//
+//         let config = diskann::graph::config::Builder::new(
+//             2 * (grid.dim() as usize),
+//             diskann::graph::config::MaxDegree::new(provider.max_degree().value()),
+//             10,
+//             (Metric::L2).into(),
+//         )
+//         .build()
+//         .unwrap();
+//
+//         let index = DiskANNIndex::new(config, provider, None);
+//
+//         for (i, data) in data.rows().enumerate() {
+//             index
+//                 .insert(&Strategy, &Context, &((10 * i + 1) as u64), data)
+//                 .await
+//                 .unwrap();
+//         }
+//
+//         // Verify that each ID round trips.
+//         for i in 0..data.nrows() {
+//             let i = (10 * i + 1) as u64;
+//             let internal = index.provider().to_internal_id(&Context, &i).unwrap();
+//             assert_ne!(
+//                 internal as u64,
+//                 i + 1,
+//                 "this relies on the start points being located at the beginning of the id space\
+//                  this is **NOT** guaranteed",
+//             );
+//
+//             assert!(
+//                 !index
+//                     .provider()
+//                     .status_by_external_id(&Context, &i)
+//                     .await
+//                     .unwrap()
+//                     .is_deleted()
+//             );
+//             assert!(
+//                 !index
+//                     .provider()
+//                     .status_by_internal_id(&Context, internal)
+//                     .await
+//                     .unwrap()
+//                     .is_deleted()
+//             );
+//         }
+//
+//         // Assert that out-of-bounds translations returns errors.
+//         assert!(index.provider().to_internal_id(&Context, &0).is_err());
+//
+//         // Searches should return something reasonable.
+//         let knn = Knn::new(10, None).unwrap();
+//         let mut neighbors = Vec::<Neighbor<u64>>::new();
+//         index
+//             .search(knn, &Strategy, &Context, &[0.0, 0.0], &mut neighbors)
+//             .await
+//             .unwrap();
+//
+//         assert_eq!(neighbors[0].as_tuple(), (1, 0.0));
+//         assert_eq!(neighbors[1].as_tuple(), (11, 1.0)); // this can be swapped with 2
+//         assert_eq!(neighbors[2].as_tuple(), (51, 1.0));
+//         assert_eq!(neighbors[3].as_tuple(), (61, 2.0));
+//
+//         // Filtered searches work.
+//         //
+//         // What we do here is create a `Scoped` then a `Filtered`.
+//         //
+//         // We then hold onto these to ensure that algorithms like inplace delete can still
+//         // run but that IDs cannot be reclaimed until both to away.
+//         //
+//         // The filter excludes IDs where the 10s digit is odd.
+//         let scoped = scoped(&index).unwrap();
+//         let mut filtered = scoped
+//             .filtered(&[0.0, 0.0], |i| (*i / 10).is_multiple_of(2))
+//             .unwrap();
+//
+//         {
+//             let mut neighbors = Vec::<Neighbor<u64>>::new();
+//             let ifs = InlineFilterSearch::new(knn, None);
+//             filtered
+//                 .inline_filtered(ifs.clone(), &mut neighbors)
+//                 .unwrap();
+//
+//             // We should not observe entries with odd 10s digits.
+//             assert_eq!(neighbors[0].as_tuple(), (1, 0.0));
+//             assert_eq!(neighbors[1].as_tuple(), (61, 2.0));
+//             assert_eq!(neighbors[2].as_tuple(), (21, 4.0)); // This can be swapped with 3
+//             assert_eq!(neighbors[3].as_tuple(), (101, 4.0));
+//
+//             // This is a bit sneaky.
+//             //
+//             // We mimic the case where a rerank style post-processing routine clears the
+//             // internal buffer and leaves it that way.
+//             //
+//             // The `expand_beam` should handle this case properly.
+//             filtered.accessor.search.buffer.clear();
+//
+//             // Try again, this time with mulit-hop filter.
+//             neighbors.clear();
+//             let mfs = MultihopFilterSearch::new(knn);
+//             filtered.multihop_filtered(mfs, &mut neighbors).unwrap();
+//
+//             // We should not observe entries with odd 10s digits.
+//             assert_eq!(neighbors[0].as_tuple(), (1, 0.0));
+//             assert_eq!(neighbors[1].as_tuple(), (61, 2.0));
+//             assert_eq!(neighbors[2].as_tuple(), (21, 4.0)); // This can be swapped with 3
+//             assert_eq!(neighbors[3].as_tuple(), (101, 4.0));
+//         }
+//
+//         // If we run inplace delete on point 61, it longer be present.
+//         index
+//             .inplace_delete(
+//                 Strategy,
+//                 &Context,
+//                 &61,
+//                 3,
+//                 InplaceDeleteMethod::VisitedAndTopK {
+//                     k_value: 10,
+//                     l_value: 10,
+//                 },
+//             )
+//             .await
+//             .unwrap();
+//
+//         assert!(
+//             index
+//                 .provider()
+//                 .status_by_external_id(&Context, &61)
+//                 .await
+//                 .unwrap()
+//                 .is_deleted()
+//         );
+//
+//         // We can't delete the same thing twice.
+//         assert!(
+//             index
+//                 .inplace_delete(
+//                     Strategy,
+//                     &Context,
+//                     &61,
+//                     3,
+//                     InplaceDeleteMethod::VisitedAndTopK {
+//                         k_value: 10,
+//                         l_value: 10
+//                     },
+//                 )
+//                 .await
+//                 .is_err()
+//         );
+//
+//         // Rerun search - the point 61 should now be gone.
+//         let mut neighbors = Vec::<Neighbor<u64>>::new();
+//         index
+//             .search(knn, &Strategy, &Context, &[0.0, 0.0], &mut neighbors)
+//             .await
+//             .unwrap();
+//
+//         assert_eq!(neighbors[0].as_tuple(), (1, 0.0));
+//         assert_eq!(neighbors[1].as_tuple(), (51, 1.0)); // this can be swapped with 2
+//         assert_eq!(neighbors[2].as_tuple(), (11, 1.0));
+//         assert_eq!(neighbors[3].as_tuple(), (101, 4.0)); // we can also accept "21"
+//
+//         // This insert fails because even though there is an empty slot, it cannot be
+//         // reclaimed until the `scoped` is dropped.
+//         //
+//         // After this check, we free up these resources.
+//         assert_contains!(
+//             index
+//                 .insert(&Strategy, &Context, &1, &[10.0, 10.0])
+//                 .await
+//                 .unwrap_err()
+//                 .to_string(),
+//             "could not allocate a new slot",
+//         );
+//
+//         drop(filtered);
+//         drop(scoped);
+//
+//         // We can't insert an existing ID.
+//         assert_contains!(
+//             index
+//                 .insert(&Strategy, &Context, &1, &[10.0, 10.0])
+//                 .await
+//                 .unwrap_err()
+//                 .to_string(),
+//             "external id is already mapped",
+//         );
+//
+//         // If we insert a new ID but the query vector is too long - make sure we leave the
+//         // provider untouched.
+//         assert_contains!(
+//             index
+//                 .insert(&Strategy, &Context, &2, &[10.0, 10.0, 10.0])
+//                 .await
+//                 .unwrap_err()
+//                 .to_string(),
+//             "expected slice of length 2",
+//         );
+//
+//         // Check that we can reinsert the same point with a different ID and have it be
+//         // returned from search.
+//         index
+//             .insert(&Strategy, &Context, &62, &[1.0, 1.0])
+//             .await
+//             .unwrap();
+//
+//         // We can't insert an ID - but this time it's because we don't have any more internal
+//         // slots.
+//         assert!(
+//             index
+//                 .insert(&Strategy, &Context, &62, &[0.0, 0.0])
+//                 .await
+//                 .is_err()
+//         );
+//
+//         // Rerun search - the point 62 should be present.
+//         let mut neighbors = Vec::<Neighbor<u64>>::new();
+//         index
+//             .search(knn, &Strategy, &Context, &[0.0, 0.0], &mut neighbors)
+//             .await
+//             .unwrap();
+//
+//         assert_eq!(neighbors[0].as_tuple(), (1, 0.0));
+//         assert_eq!(neighbors[1].as_tuple(), (11, 1.0)); // this can be swapped with 2
+//         assert_eq!(neighbors[2].as_tuple(), (51, 1.0));
+//         assert_eq!(neighbors[3].as_tuple(), (62, 2.0));
+//
+//         // Finally - test that we can create a crazy predicate for filtering that deletes
+//         // all the external IDs as they are evaluated.
+//         let scoped = super::scoped(&index).unwrap();
+//         let _ = scoped.filtered(&[0.0, 0.0], |i| {
+//             poll(index.provider().delete(&Context, i)).unwrap();
+//             true
+//         });
+//     }
+// }

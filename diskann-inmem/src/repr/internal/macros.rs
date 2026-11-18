@@ -35,6 +35,10 @@ macro_rules! representation {
             fn read_guard(&self) -> ANNResult<$crate::repr::ReadGuard<'_>> {
                 Ok($crate::repr::ReadGuard::new(self.store.read_guard(|_, g| g)?))
             }
+
+            fn write_guard(&self) -> ANNResult<$crate::repr::WriteGuard<'_>> {
+                Ok($crate::repr::WriteGuard::new(self.store.write_guard(|_, g| g)?))
+            }
         }
     };
 }

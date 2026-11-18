@@ -5,10 +5,10 @@
 
 use std::{num::NonZeroUsize, sync::Arc};
 
-use diskann::graph::{Config, DiskANNIndex};
+use diskann::graph::{Config};
 use diskann_inmem::{
-    self as inmem, Provider,
-    num::{Capacity, MaxDegree, Range},
+    self as di, Provider,
+    num::{Capacity, MaxDegree},
     repr::Full,
 };
 use diskann_utils::views::rowmajor::{self, Matrix};
@@ -124,7 +124,7 @@ fn create_spherical(
         alloc::GlobalAllocator,
         spherical::{PreScale, SphericalQuantizer},
     };
-    use inmem::repr::quantized::{Backend, Config, spherical::Spherical};
+    use di::repr::quantized::{Backend, Config, spherical::Spherical};
     use rand::SeedableRng;
 
     let DatasetView::F32(data) = data else {
@@ -203,10 +203,10 @@ fn create_product(
     ));
 
     // Step 2: Create the quantizer.
-    let product = inmem::repr::quantized::product::Product::new(table, metric.into(), None)?;
+    let product = di::repr::quantized::product::Product::new(table, metric.into(), None)?;
 
     // Step 3: Create the config.
-    let config = inmem::repr::quantized::Quantized::config(
+    let config = di::repr::quantized::Quantized::config(
         product,
         Capacity::new(data.nrows()),
         MaxDegree::new(graph_config.max_degree().get()),
@@ -227,7 +227,7 @@ fn create_scalar(
     graph_config: &Config,
 ) -> anyhow::Result<Arc<dyn Index>> {
     use diskann_quantization::{num::Positive, scalar as qscalar};
-    use inmem::repr::quantized::{Backend, Quantized, scalar::Scalar};
+    use di::repr::quantized::{Backend, Quantized, scalar::Scalar};
 
     let DatasetView::F32(data) = data else {
         anyhow::bail!("scalar quantization only supports f32 data");
@@ -244,9 +244,9 @@ fn create_scalar(
 
     // Step 2: Create the config.
     let scalar_metric = if override_to_cosine_normalized {
-        inmem::repr::quantized::scalar::Metric::CosineNormalized
+        di::repr::quantized::scalar::Metric::CosineNormalized
     } else {
-        inmem::repr::quantized::scalar::Metric::try_from(metric)?
+        di::repr::quantized::scalar::Metric::try_from(metric)?
     };
 
     let backend = match bits {
@@ -266,49 +266,50 @@ fn create_scalar(
     Ok(finish(Provider::new(config)?, index_config))
 }
 
-pub(super) fn create_partial(
-    metric: Metric,
-    graph_config: &Config,
-    data: DatasetView<'_>,
-) -> anyhow::Result<Arc<dyn PartialIndex>> {
-    let DatasetView::F32(data) = data else {
-        anyhow::bail!("static build tests only support f32 data");
-    };
+// pub(super) fn create_partial(
+//     metric: Metric,
+//     graph_config: &Config,
+//     data: DatasetView<'_>,
+// ) -> anyhow::Result<Arc<dyn PartialIndex>> {
+//     let DatasetView::F32(data) = data else {
+//         anyhow::bail!("static build tests only support f32 data");
+//     };
+//
+//     let start_point = rowmajor::Owned::row_vector(Box::from(
+//         <f32 as diskann_utils::sampling::medoid::ComputeMedoid>::compute_medoid(data),
+//     ));
+//     let num_start_points = start_point.nrows();
+//
+//     let capacity = Capacity::new(data.nrows());
+//     let max_degree = graph_config.max_degree().get();
+//     let index_config = graph_config.clone();
+//
+//     let end_range = Range::start_plus_usize(data.nrows(), num_start_points)
+//         .ok_or_else(|| anyhow::anyhow!("cannot move start points to the end"))?;
+//
+//     let full_config = Full::config(capacity, MaxDegree::new(max_degree), metric, start_point)?
+//         .locate_start_point_ids_at(end_range)?;
+//
+//     let provider = di::provider::buildonly::Provider::new(full_config)?;
+//     Ok(Arc::new(DiskANNIndex::new(index_config, provider, None)))
+// }
 
-    let start_point = rowmajor::Owned::row_vector(Box::from(
-        <f32 as diskann_utils::sampling::medoid::ComputeMedoid>::compute_medoid(data),
-    ));
-    let num_start_points = start_point.nrows();
-
-    let capacity = Capacity::new(data.nrows());
-    let max_degree = graph_config.max_degree().get();
-    let index_config = graph_config.clone();
-
-    let end_range = Range::start_plus_usize(data.nrows(), num_start_points)
-        .ok_or_else(|| anyhow::anyhow!("cannot move start points to the end"))?;
-
-    let full_config = Full::config(capacity, MaxDegree::new(max_degree), metric, start_point)?
-        .locate_start_point_ids_at(end_range)?;
-
-    let provider = inmem::provider::buildonly::Provider::new(full_config)?;
-    Ok(Arc::new(DiskANNIndex::new(index_config, provider, None)))
-}
-
-fn finish<DP>(provider: DP, config: diskann::graph::Config) -> Arc<dyn Index>
+fn finish<R, M>(provider: di::provider::Provider<R, M>, config: diskann::graph::Config) -> Arc<dyn Index>
 where
-    DP: diskann::provider::DataProvider,
-    DiskANNIndex<DP>: Index,
+    R: di::repr::Representation, // FIXME: structural bounds
+    M: di::provider::Id, // FIXME: structural bounds
+    di::index::Index<R, M>: Index,
 {
-    Arc::new(DiskANNIndex::new(config, provider, None))
+    Arc::new(di::index::Index::temp_new(provider, config))
 }
 
 fn quantizer_rerank(
     rerank: quantization::Rerank,
     metric: Metric,
-) -> inmem::repr::quantized::Rerank {
+) -> di::repr::quantized::Rerank {
     match rerank {
-        quantization::Rerank::None => inmem::repr::quantized::Rerank::None,
-        quantization::Rerank::F16 => inmem::repr::quantized::Rerank::F16 {
+        quantization::Rerank::None => di::repr::quantized::Rerank::None,
+        quantization::Rerank::F16 => di::repr::quantized::Rerank::F16 {
             metric: metric.into(),
         },
     }
