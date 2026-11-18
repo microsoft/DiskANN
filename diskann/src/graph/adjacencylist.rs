@@ -104,6 +104,15 @@ where
         }
     }
 
+    /// Append an element to the back of the collection, assumint it does not already exist.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `Vec::push` would panic while inserting `i`.
+    pub(crate) fn push_unique(&mut self, i: I) {
+        self.edges.push(i)
+    }
+
     /// Append all elements of `is` that are not already in the list. Duplicates within `is`
     /// will be removed.
     ///
@@ -146,6 +155,14 @@ where
         Self {
             edges: itr.collect(),
         }
+    }
+
+    pub(crate) fn replace_from_iter_unique<Itr>(&mut self, itr: Itr)
+    where
+        Itr: UniqueIter<Item = I>,
+    {
+        self.clear();
+        self.edges.extend(itr);
     }
 
     /// Resize the underlying storage to `capacity` elements and return a guard allowing
@@ -200,6 +217,17 @@ where
         edges.sort_unstable();
         edges.dedup();
         Self { edges }
+    }
+
+    pub(crate) fn replace_from_iter_untrusted<Itr>(&mut self, itr: Itr)
+    where
+        Itr: IntoIterator<Item = I>,
+        I: Ord,
+    {
+        self.edges.clear();
+        self.edges.extend(itr);
+        self.edges.sort_unstable();
+        self.edges.dedup();
     }
 
     //---------//
@@ -410,6 +438,9 @@ impl<K> UniqueIter for std::collections::hash_set::IntoIter<K> {}
 
 /// Collections with only one item are trivially unique.
 impl<T> UniqueIter for std::iter::Once<T> {}
+
+/// Sets contain unique items.
+impl<K> UniqueIter for hashbrown::hash_set::Iter<'_, K> {}
 
 /// Sets contain unique items.
 impl<K> UniqueIter for hashbrown::hash_set::IntoIter<K> {}
