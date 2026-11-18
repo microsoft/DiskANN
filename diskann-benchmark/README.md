@@ -5,6 +5,45 @@ easier by providing a "one click" runner for benchmarks with machine readable ou
 
 ## Usage
 
+### Neighbor queue microbenchmark
+
+Run the fixed-capacity `u32` queue benchmark without a dataset:
+
+```sh
+cargo run --release --package diskann-benchmark -- run --input-file diskann-benchmark/example/neighbor-queue.json --output-file neighbor-queue-results.json
+```
+
+The [example workload](example/neighbor-queue.json) compares per-item `insert` with
+one `batch_insert` call on the same synthetic fixed-capacity queue state and candidate set.
+It covers capacities 10, 20, 40, 200, and 2,000 with a fixed 8-candidate update and an
+L-sized update at each capacity. It adds `2L` candidate pressure points only at L=20, 200,
+and 2,000, plus one `L+1` boundary case. Focused L=20 cases compare head/tail placement,
+descending input, cutoff rejection, and partially full queues both below and across capacity.
+
+Each case exposes queue-update variables: `capacity`, `initial_size`, `input_size` (the
+number of unique candidates passed to the operation), `initial_cutoff_survivors` (how many
+candidates are no worse than the initial worst distance when the queue starts full),
+`placement` (`head`, `middle`, `uniform`, or `tail`), and `order` (`shuffled`, `ascending`,
+or `descending`). For a partially full queue, there is no initial cutoff, so
+`initial_cutoff_survivors` must equal `input_size`. Candidates beyond the count are worse
+than the initial cutoff and are filtered before sorting and merging. `tail` includes
+candidates exactly at the cutoff. There is no duplicate-ID scenario because duplicate IDs
+violate the queue's input contract.
+
+The benchmark does not expose visited-prefix state: it changes cursor maintenance and
+visited-state semantics, but would add a separate state axis to this candidate-ordering and
+merge comparison. Performance fixtures therefore start unvisited; cursor and visited-state
+equivalence remain covered by queue correctness tests. Top-level
+`samples`, `queues_per_sample`, `blocks_per_sample`, and `seed` control measurement
+replication and reproducibility rather than workload semantics. See the
+[benchmark source](src/neighbor_queue.rs) for validation and measurement details. Results
+are warm-data microbenchmarks, not end-to-end search measurements.
+
+The [CI workflow](../.github/workflows/neighbor-queue-benchmark.yml) publishes results
+and raw samples from shared Linux and Windows runners.
+
+### Input files
+
 To get started, run
 ```sh
 cargo run --release --package diskann-benchmark -- skeleton
@@ -173,6 +212,49 @@ Any number of inputs can be used.
   for benchmarking later.
 
 ### Finding Benchmarks
+
+#### Queue insertion-search experiments
+
+The [workflow](../.github/workflows/queue-search-benchmark.yml) builds one executable.
+Benchmark input selects `insertion_search` when constructing the real queue:
+
+```json
+"insertion_search": {"type": "binary"}
+```
+
+Omitting this field keeps the original SIMD scan on x86-64 and scalar scan elsewhere.
+Use `{"type": "linear"}` to select that scan explicitly. A hybrid must supply its limit:
+`{"type": "hybrid", "linear_scan_limit": 128}`. No crossover is hardcoded in the queue.
+The selection applies to single-item insertion and the batch merge's initial prefix
+lookup, not removal or the batch top-L partition. Both update methods run for each
+configuration, giving the four original/configured `insert`/`batch_insert` groups.
+
+[The driver](../.github/scripts/benchmark_queue_search.py) verifies that the benchmark
+measurement loops and [example input](example/neighbor-queue.json) match the fixed
+#1600 revision before building. Fixture generation, per-item reset, timing loops, method order,
+and repetition counts are unchanged. It does not generate additional cases or run a
+lookup-only benchmark. Historical timings are not pooled with this experiment.
+
+Run the driver's `build`, `run`, and `summarize` operations in that order, passing
+`--output <artifact-directory>` to each. The candidate strategy comes from
+[the search configuration](example/neighbor-queue-search-strategy.json); `build`
+accepts `--search-config <path>` to select another configuration and
+`--input-file <path>` to select a workload, defaulting to the original example.
+The search-comparison CI uses the separate [large-L workload](example/neighbor-queue-large-l.json).
+The driver saves the selected workload and its hash, then changes
+only `insertion_search` in a copy of that input. The original and configured
+inputs run three independent processes each, in alternating order after compilation
+finishes. No source rewriting or Cargo feature is used. Do not build or run other
+benchmarks during `run`.
+
+The artifact contains source snapshots, binaries and hashes, build logs, the original
+input, exact commands, raw samples, and per-process comparisons. Speedup is original
+over optimized time for the same update method. The repeatability screen requires
+consistent paired direction exceeding the observed process range; it is not a
+confidence interval. Shared CI is not presumed quieter, and these microbenchmarks
+do not measure end-to-end ANN search. `new(L)` keeps the original linear strategy.
+Only the benchmark opts into alternatives with `.with_insertion_search(...)`;
+existing constructor callers are unchanged.
 
 Registered benchmarks are queries using the following.
 ```sh
@@ -504,4 +586,3 @@ for a successful or unsuccessful match with the enclosed value. Doing these two 
 error reporting in the event of a dispatch fail much easier for the user to understand and fix.
 
 Refer to implementations within the benchmarking framework for what some of this may look like.
-
