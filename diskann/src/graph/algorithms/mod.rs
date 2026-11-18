@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use std::{fmt::Debug, num::NonZeroUsize};
+use std::{borrow::BorrowMut, fmt::Debug, num::NonZeroUsize};
 
 use diskann_utils::{
     Reborrow,
@@ -15,9 +15,9 @@ use hashbrown::HashSet;
 use super::{
     AdjacencyList, Config,
     glue::{self, PruneAccessor, SearchAccessor},
-    internal::{SortedNeighbors, prune},
+    internal::prune,
     search::{
-        record::{SearchRecord, VisitedSearchRecord},
+        record::{self, SearchRecord},
         scratch::{self, PriorityQueueConfiguration, SearchScratch},
     },
     workingset::View,
@@ -38,6 +38,7 @@ use crate::{
 //-------------//
 
 pub mod inplace_delete;
+pub mod multi_insert;
 
 /// Statistics collected during a search operation.
 ///
@@ -100,70 +101,68 @@ impl InternalSearchStats {
     }
 }
 
-pub(crate) fn search<A, SR, Q>(
+pub(crate) async fn search<A, SR, Q>(
     accessor: &mut A,
     beam_width: NonZeroUsize,
     scratch: &mut SearchScratch<A::Id, Q>,
     search_record: &mut SR,
-) -> impl SendFuture<ANNResult<InternalSearchStats>>
+) -> ANNResult<InternalSearchStats>
 where
     A: SearchAccessor,
     SR: SearchRecord<A::Id> + ?Sized,
     Q: NeighborQueue<A::Id>,
 {
-    async move {
-        // paged search can call search_internal multiple times, we only need to initialize
-        // state if not already initialized.
-        if scratch.visited.is_empty() {
-            accessor
-                .start_point_distances(|id, distance| {
-                    scratch.visited.insert(id);
-                    scratch.best.insert(Neighbor::new(id, distance));
-                    scratch.cmps += 1;
-                })
-                .await?;
-        }
-
-        let mut neighbors =
-            Vec::with_capacity(accessor.max_degree_hint().map(|v| v.get()).unwrap_or(32));
-
-        while scratch.best.has_notvisited_node() && !accessor.terminate_early() {
-            scratch.beam_nodes.clear();
-
-            while scratch.beam_nodes.len() < beam_width.get()
-                && let Some(closest_node) = scratch.best.closest_notvisited()
-            {
-                search_record.record(closest_node, scratch.hops, scratch.cmps);
-                scratch.beam_nodes.push(*closest_node.id());
-            }
-
-            neighbors.clear();
-            accessor
-                .expand_beam(
-                    scratch.beam_nodes.iter().copied(),
-                    glue::NotInMut::new(&mut scratch.visited),
-                    |id, distance| neighbors.push(Neighbor::new(id, distance)),
-                )
-                .await?;
-
-            // The predicate ensures that the contents of `neighbors` are unique.
-            //
-            // We insert into the priority queue outside of the expansion for
-            // code-locality purposes.
-            neighbors
-                .iter()
-                .for_each(|neighbor| scratch.best.insert(*neighbor));
-
-            scratch.cmps += neighbors.len() as u32;
-            scratch.hops += scratch.beam_nodes.len() as u32;
-        }
-
-        Ok(InternalSearchStats {
-            cmps: scratch.cmps,
-            hops: scratch.hops,
-            range_search_second_round: false,
-        })
+    // paged search can call search_internal multiple times, we only need to initialize
+    // state if not already initialized.
+    if scratch.visited.is_empty() {
+        accessor
+            .start_point_distances(|id, distance| {
+                scratch.visited.insert(id);
+                scratch.best.insert(Neighbor::new(id, distance));
+                scratch.cmps += 1;
+            })
+            .await?;
     }
+
+    let mut neighbors =
+        Vec::with_capacity(accessor.max_degree_hint().map(|v| v.get()).unwrap_or(32));
+
+    while scratch.best.has_notvisited_node() && !accessor.terminate_early() {
+        scratch.beam_nodes.clear();
+
+        while scratch.beam_nodes.len() < beam_width.get()
+            && let Some(closest_node) = scratch.best.closest_notvisited()
+        {
+            search_record.record(closest_node, scratch.hops, scratch.cmps);
+            scratch.beam_nodes.push(*closest_node.id());
+        }
+
+        neighbors.clear();
+        accessor
+            .expand_beam(
+                scratch.beam_nodes.iter().copied(),
+                glue::NotInMut::new(&mut scratch.visited),
+                |id, distance| neighbors.push(Neighbor::new(id, distance)),
+            )
+            .await?;
+
+        // The predicate ensures that the contents of `neighbors` are unique.
+        //
+        // We insert into the priority queue outside of the expansion for
+        // code-locality purposes.
+        neighbors
+            .iter()
+            .for_each(|neighbor| scratch.best.insert(*neighbor));
+
+        scratch.cmps += neighbors.len() as u32;
+        scratch.hops += scratch.beam_nodes.len() as u32;
+    }
+
+    Ok(InternalSearchStats {
+        cmps: scratch.cmps,
+        hops: scratch.hops,
+        range_search_second_round: false,
+    })
 }
 
 //--------//
@@ -189,72 +188,10 @@ where
     A: Insert,
 {
     async move {
-        use std::borrow::BorrowMut;
-
-        let mut scratch = {
-            // FIXME: There's got to be a better way of doing this.
-            let num_start_ids = accessor
-                .search_accessor()
-                .borrow_mut()
-                .num_starting_points()
-                .await?;
-            search_scratch(config, config.l_build().get(), num_start_ids)
-        };
-
-        let mut search_l = scratch.best.search_l();
-
-        // If the experimental config is present, use it to obtain the maximum number
-        // of retries. Otherwise, we stick with the default of 1.
-        let insert_retry = config.experimental_insert_retry();
-        let num_insert_attempts = insert_retry.map_or(1, |v| v.max_retries().get());
-
-        let mut prune_scratch = prune::Scratch::new();
-        let mut new_neighbors = AdjacencyList::with_capacity(config.max_degree().get());
-
-        for attempt in 0..num_insert_attempts {
-            let mut search_record =
-                VisitedSearchRecord::new(estimate_visited_set_capacity(config, Some(search_l)));
-
-            search(
-                accessor.search_accessor().borrow_mut(),
-                NonZeroUsize::MIN,
-                &mut scratch,
-                &mut search_record,
-            )
+        let mut find = FindInsertCandidates::new();
+        find.find_insert_candidates(accessor, id, config, std::iter::empty())
             .await?;
-
-            let context = prune::Context {
-                pool: SortedNeighbors::new(
-                    &mut search_record.visited,
-                    config.max_occlusion_size().get(),
-                ),
-                states: &mut prune_scratch.states,
-                neighbors: &mut new_neighbors,
-            };
-
-            let options = prune::Options {
-                force_saturate: insert_retry.is_some_and(|v| v.should_saturate(attempt)),
-            };
-
-            robust_prune(
-                accessor.prune_accessor().borrow_mut(),
-                id,
-                context,
-                options,
-                config,
-            )
-            .await?;
-
-            let should_retry =
-                insert_retry.is_some_and(|v| v.should_retry(attempt, new_neighbors.len()));
-            if !should_retry {
-                break;
-            }
-
-            search_l *= 2;
-            scratch.resize(search_l);
-            scratch.clear();
-        }
+        let new_neighbors = std::mem::take(find.candidates());
 
         tracked_trace!(
             "Inserting out edges for vector_id: {} new_out_neighbors: {:?}",
@@ -280,12 +217,158 @@ where
                 prune.borrow_mut(),
                 std::slice::from_ref(&id),
                 *source,
-                &mut prune_scratch,
+                find.prune(),
                 None,
                 config,
             )
             .await?;
         }
+        Ok(())
+    }
+}
+
+//----------------------//
+// FindInsertCandidates //
+//----------------------//
+
+#[derive(Debug)]
+pub(crate) struct FindInsertCandidates<I>
+where
+    I: VectorId,
+{
+    search: SearchScratch<I>,
+    prune: prune::Scratch<I>,
+    additional: Vec<I>,
+}
+
+impl<I> FindInsertCandidates<I>
+where
+    I: VectorId,
+{
+    pub(crate) fn new() -> Self {
+        Self {
+            search: SearchScratch::new(PriorityQueueConfiguration::Fixed(0), None),
+            prune: prune::Scratch::new(),
+            additional: Vec::new(),
+        }
+    }
+
+    /// Return the candidates discovered during search.
+    ///
+    /// This is only valid after a successful run of [`Self::find_insert_candidates`].
+    pub(crate) fn candidates(&mut self) -> &mut AdjacencyList<I> {
+        &mut self.prune.neighbors
+    }
+
+    /// Return the prune scratch in an undefined state.
+    ///
+    /// The returned [`prune::Scratch`] should **only** be used for unrelated pruning operations.
+    pub(crate) fn prune(&mut self) -> &mut prune::Scratch<I> {
+        &mut self.prune
+    }
+
+    /// # FIXME
+    ///
+    /// * Get rid of the insert retry loop. No-one uses is.
+    pub(crate) async fn find_insert_candidates<A, Itr>(
+        &mut self,
+        accessor: &mut A,
+        id: I,
+        config: &Config,
+        extras: Itr,
+    ) -> ANNResult<()>
+    where
+        A: Insert<Id = I>,
+        Itr: IntoIterator<Item = I>,
+    {
+        // Materialize the extras iterator into `candidates` and then drop into the inner
+        // method. This avoids some unnecessary monomorphizations for the main work function.
+        self.additional.clear();
+        self.additional.extend(extras);
+        self.find_insert_candidates_inner(accessor, id, config)
+            .await
+    }
+
+    /// # Implicit Arguments
+    ///
+    /// Requires [`Self::additional`] to be pre-populated with additional candidates to mix
+    /// in with those discovered during search. This can be empty if no such candidates
+    /// are needed.
+    async fn find_insert_candidates_inner<A>(
+        &mut self,
+        accessor: &mut A,
+        id: I,
+        config: &Config,
+    ) -> ANNResult<()>
+    where
+        A: Insert<Id = I>,
+    {
+        let insert_retry = config.experimental_insert_retry();
+        let num_insert_attempts = insert_retry.map_or(1, |v| v.max_retries().get());
+
+        // This will be over-written in the first iteration of search.
+        let mut l_build = 0;
+
+        for attempt in 0..num_insert_attempts {
+            // Search Phase
+            {
+                let mut searcher = accessor.search_accessor();
+
+                // Decide whether or not we've sized our scratch data structures.
+                //
+                // This requires access to the `SearchAccessor`, so we wait until the first attempt
+                // to avoid calling `Insert::search_accessor` unnecessarily.
+                if attempt == 0 {
+                    let num_start_ids = searcher.borrow_mut().num_starting_points().await?;
+
+                    self.search.clear();
+                    self.search.resize(config.l_build().get() + num_start_ids);
+                    l_build = self.search.best.search_l();
+
+                    self.prune
+                        .pool
+                        .reserve(estimate_visited_set_capacity(config, Some(l_build)));
+                }
+
+                search(
+                    searcher.borrow_mut(),
+                    NonZeroUsize::MIN,
+                    &mut self.search,
+                    &mut record::VisitedRef::new_cleared(&mut self.prune.pool),
+                )
+                .await?;
+            }
+
+            let options = prune::Options {
+                force_saturate: insert_retry.is_some_and(|v| v.should_saturate(attempt)),
+            };
+
+            // Search candidates are pushed directly into `self.prune.pool`, so `self.prune`
+            // can be passed directly.
+            //
+            // Pruned results are available in `self.prune.neighbors`.
+            robust_prune_with(
+                accessor.prune_accessor().borrow_mut(),
+                id,
+                &self.additional,
+                &mut self.prune,
+                options,
+                config,
+            )
+            .await
+            .escalate("self element must be retrievable during insert algorithms")?;
+
+            let should_retry =
+                insert_retry.is_some_and(|v| v.should_retry(attempt, self.prune.neighbors.len()));
+            if !should_retry {
+                break;
+            }
+
+            l_build *= 2;
+            self.search.resize(l_build);
+            self.search.clear();
+        }
+
         Ok(())
     }
 }
@@ -402,6 +485,7 @@ where
     async move {
         // Early exit.
         if context.pool.is_empty() {
+            context.neighbors.clear();
             return Ok(());
         }
 
@@ -452,6 +536,7 @@ where
     async move {
         // Early exit.
         if list.is_empty() {
+            scratch.neighbors.clear();
             return Ok(());
         }
 
@@ -518,25 +603,44 @@ where
 ///
 /// Forwards errors from [`PruneAccessor::fill`]. If `internal_id` cannot be retrieved,
 /// [`prune::ListError::FailedVectorRetrieval`] is returned.
-fn robust_prune_with<A, Itr>(
+///
+/// # FIXME
+///
+/// This method is awkward since it manually uses [`PruneAccessor::fill`] to populate extra
+/// distances. This functionality should be rolled into a prune trait to both move it behind
+/// the user controlled for efficiency and make the intent clearer and to avoid fetching `id`.
+fn robust_prune_with<A>(
     accessor: &mut A,
-    internal_id: A::Id,
-    extras: Itr,
-    record: &mut VisitedSearchRecord<A::Id>,
+    id: A::Id,
+    extras: &[A::Id],
     scratch: &mut prune::Scratch<A::Id>,
     options: prune::Options,
     config: &Config,
 ) -> impl SendFuture<Result<(), prune::ListError<A::Id>>>
 where
     A: PruneAccessor,
-    Itr: ExactSizeIterator<Item = A::Id> + Clone + Send + Sync,
 {
     async move {
+        if extras.is_empty() {
+            robust_prune(
+                accessor,
+                id,
+                scratch.as_context(config.max_occlusion_size().get()),
+                options,
+                config,
+            )
+            .await?;
+
+            return Ok(());
+        }
+
+        // FIXME: We should really sort `scratch.pool`. This is kept to be behavior
+        // preserving with an earlier version of the code during a large refactor.
         let (view, computer) = accessor
             .fill(
                 internal::chain(
-                    std::iter::once(internal_id),
-                    internal::chain(extras.clone(), record.ids()),
+                    std::iter::once(id),
+                    internal::chain(extras.iter().copied(), scratch.pool.iter().map(|n| *n.id())),
                 )
                 .take(config.max_occlusion_size().get()),
             )
@@ -544,30 +648,24 @@ where
 
         if extras.len() != 0 {
             let this_vector = view
-                .get(internal_id)
-                .ok_or_else(|| prune::ListError::failed_retrieval(internal_id))?;
+                .get(id)
+                .ok_or_else(|| prune::ListError::failed_retrieval(id))?;
 
-            for id in extras {
-                if let Some(element) = view.get(id) {
-                    record.push(Neighbor::new(
-                        id,
+            for &extra in extras.iter() {
+                if let Some(element) = view.get(extra) {
+                    scratch.pool.push(Neighbor::new(
+                        extra,
                         computer.evaluate_similarity(this_vector.reborrow(), element.reborrow()),
                     ))
                 }
             }
         }
 
-        let mut context = prune::Context {
-            pool: SortedNeighbors::new(&mut record.visited, config.max_occlusion_size().get()),
-            states: &mut scratch.states,
-            neighbors: &mut scratch.neighbors,
-        };
-
         occlude_list::<A::View<'_>, A::Id, _, _>(
             &computer,
-            &mut context,
+            &mut scratch.as_context(config.max_occlusion_size().get()),
             view,
-            |id| id == internal_id,
+            |i| i == id,
             options,
             config,
         );

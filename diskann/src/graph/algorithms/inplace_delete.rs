@@ -3,39 +3,27 @@
  * Licensed under the MIT license.
  */
 
-use std::{
-    borrow::BorrowMut,
-    fmt::Debug,
-};
+use std::{borrow::BorrowMut, fmt::Debug};
 
-use diskann_utils::{
-    Reborrow,
-    future::{SendFuture},
-};
+use diskann_utils::{Reborrow, future::SendFuture};
 use diskann_vector::DistanceFunction;
 use hashbrown::{HashMap, HashSet};
 
 use crate::graph::{
     AdjacencyList, Config, algorithms,
-    glue::{
-        PruneAccessor, SearchAccessor,
-    },
+    glue::{PruneAccessor, SearchAccessor},
     internal::{BackedgeBuffer, prune},
     workingset::View,
 };
 
 use crate::{
     ANNResult,
-    error::{IntoANNResult},
+    error::IntoANNResult,
     internal,
     neighbor::{self, Neighbor},
     provider::HasId,
-    provider::{
-        NeighborAccessor, NeighborAccessorMut,
-    },
-    utils::{
-        VectorId,
-    },
+    provider::{NeighborAccessor, NeighborAccessorMut},
+    utils::VectorId,
 };
 
 pub trait InplaceDelete: HasId + Send {
@@ -51,6 +39,26 @@ pub trait InplaceDelete: HasId + Send {
     fn keep_live(&mut self, ids: &mut AdjacencyList<Self::Id>);
 }
 
+pub trait SearchInplaceDelete: InplaceDelete {
+    type SearchAccessor<'a>: SearchAccessor<Id = Self::Id>
+    where
+        Self: 'a;
+
+    fn search_accessor(&mut self) -> impl std::borrow::BorrowMut<Self::SearchAccessor<'_>> + Send;
+
+    //----------//
+    // Provided //
+    //----------//
+
+    /// Return `true` if [`Self::SearchAccessor`] already removes deleted items from its results.
+    ///
+    /// When in doubt, do not extend this method. Incorrectly implementing it can severely
+    /// degrade the quality of the deletion algorithms.
+    fn hint_deleted_already_excluded(&self) -> bool {
+        false
+    }
+}
+
 #[derive(Debug)]
 pub struct Scratch<I>
 where
@@ -59,6 +67,12 @@ where
     edges: HashMap<I, BackedgeBuffer<I>>,
     prune: prune::Scratch<I>,
     pool: Vec<Neighbor<I>>,
+    // Candidates
+    out_neighbors: AdjacencyList<I>,
+    in_neighbors: AdjacencyList<I>,
+    replace: AdjacencyList<I>,
+    // Algorithm specific
+    set: HashSet<I>,
 }
 
 impl<I> Scratch<I>
@@ -70,6 +84,10 @@ where
             edges: HashMap::new(),
             prune: prune::Scratch::new(),
             pool: Vec::new(),
+            out_neighbors: AdjacencyList::new(),
+            in_neighbors: AdjacencyList::new(),
+            replace: AdjacencyList::new(),
+            set: HashSet::new(),
         }
     }
 }
@@ -101,46 +119,38 @@ impl OneHop {
         let Self { replacements } = self.clone();
 
         let max_degree = config.max_degree().get();
-        let mut out_neighbors = AdjacencyList::with_capacity(max_degree);
 
         accessor
             .prune_accessor()
             .borrow_mut()
             .neighbors()
-            .get_neighbors(id, &mut out_neighbors)
+            .get_neighbors(id, &mut scratch.out_neighbors)
             .await?;
 
-        accessor.keep_live(&mut out_neighbors);
+        accessor.keep_live(&mut scratch.out_neighbors);
 
-        let mut in_neighbors = out_neighbors.clone();
-        let mut buf = AdjacencyList::with_capacity(max_degree);
+        scratch.in_neighbors.clear();
+        scratch
+            .in_neighbors
+            .overwrite_trusted(&scratch.out_neighbors);
 
+        let mut temp = &mut scratch.replace;
         keep_items_referencing(
-            &mut in_neighbors,
+            &mut scratch.in_neighbors,
             id,
             &mut accessor.prune_accessor().borrow_mut().neighbors(),
-            &mut buf,
+            temp,
         )
         .await?;
 
         // The candidates are just the filtered `out_neighbors`.
         //
         // We can reuse `buf` as the target to save an allocation.
-        buf.overwrite_trusted(&out_neighbors);
-
-        let candidates = Candidates {
-            out_neighbors,
-            in_neighbors,
-            replace: buf,
-        };
+        scratch.replace.overwrite_trusted(&scratch.out_neighbors);
 
         let mut prune = accessor.prune_accessor();
         FilterCandidates { replacements }
-            .filter_candidates(
-                prune.borrow_mut(),
-                &candidates,
-                scratch,
-            )
+            .filter_candidates(prune.borrow_mut(), scratch)
             .await?;
 
         add_edges_and_drop(
@@ -149,7 +159,8 @@ impl OneHop {
             config,
             &scratch.edges,
             &mut scratch.prune,
-        ).await?;
+        )
+        .await?;
 
         Ok(())
     }
@@ -168,19 +179,87 @@ where
     async move { one_hop.one_hop(accessor, id, config, scratch).await }
 }
 
+//--------//
+// TwoHop //
+//--------//
+
+#[derive(Debug, Clone)]
+pub struct TwoHop {
+    replacements: usize,
+}
+
+impl TwoHop {
+    pub fn new(replacements: usize) -> Self {
+        Self { replacements }
+    }
+
+    pub async fn two_hop<A>(
+        &self,
+        accessor: &mut A,
+        id: A::Id,
+        config: &Config,
+        scratch: &mut Scratch<A::Id>,
+    ) -> ANNResult<()>
+    where
+        A: InplaceDelete,
+    {
+        let Self { replacements } = self.clone();
+        accessor
+            .prune_accessor()
+            .borrow_mut()
+            .neighbors()
+            .get_neighbors(id, &mut scratch.out_neighbors)
+            .await?;
+
+        accessor.keep_live(&mut scratch.out_neighbors);
+
+        let set = &mut scratch.set;
+        set.clear();
+
+        scratch.in_neighbors.clear();
+        let mut temp = &mut scratch.replace;
+
+        let mut prune = accessor.prune_accessor();
+
+        {
+            let mut neighbors = prune.borrow_mut().neighbors();
+            for neighbor in scratch.out_neighbors.iter() {
+                set.insert(*neighbor);
+                neighbors.get_neighbors(*neighbor, &mut temp).await?;
+                set.extend(temp.iter().copied());
+
+                if temp.contains(id) {
+                    // We can use `push_unique` because this is already coming from an
+                    // adjacency list.
+                    scratch.in_neighbors.push_unique(id);
+                }
+            }
+        }
+
+        scratch
+            .replace
+            .replace_from_iter_unique(set.iter().copied());
+
+        FilterCandidates { replacements }
+            .filter_candidates(prune.borrow_mut(), scratch)
+            .await?;
+
+        add_edges_and_drop(
+            prune.borrow_mut(),
+            id,
+            config,
+            &scratch.edges,
+            &mut scratch.prune,
+        )
+        .await?;
+
+        Ok(())
+    }
+}
+
 /////////////
 // Helpers //
 /////////////
-
-#[derive(Debug)]
-struct Candidates<I> {
-    // The out-neighbors of the node.
-    out_neighbors: AdjacencyList<I>,
-    // The in-neighbors of the node.
-    in_neighbors: AdjacencyList<I>,
-    // Replacement candidates for all `in_neighbors`.
-    replace: AdjacencyList<I>,
-}
 
 #[derive(Debug, Clone, Copy)]
 struct FilterCandidates {
@@ -188,13 +267,9 @@ struct FilterCandidates {
 }
 
 impl FilterCandidates {
-    // FIXME: This has one small async bit and then a large synchronous bit.
-    //
-    // It would be nice to split these two once prune gets overhauled.
     async fn filter_candidates<A>(
         &self,
         prune: &mut A,
-        candidates: &Candidates<A::Id>,
         scratch: &mut Scratch<A::Id>,
     ) -> ANNResult<()>
     where
@@ -206,27 +281,21 @@ impl FilterCandidates {
         let (view, computer) = prune
             .fill(internal::chain(
                 internal::chain(
-                    candidates.replace.iter().copied(),
-                    candidates.in_neighbors.iter().copied(),
+                    scratch.replace.iter().copied(),
+                    scratch.in_neighbors.iter().copied(),
                 ),
-                candidates.out_neighbors.iter().copied(),
+                scratch.out_neighbors.iter().copied(),
             ))
             .await
             .into_ann_result()?;
 
-        self.filter_candidates_inner::<A::View<'_>, A::Id, _>(view, &computer, candidates, scratch);
-
+        self.filter_candidates_inner::<A::View<'_>, A::Id, _>(view, &computer, scratch);
 
         Ok(())
     }
 
-    fn filter_candidates_inner<M, I, C>(
-        &self,
-        view: M,
-        computer: &C,
-        candidates: &Candidates<I>,
-        scratch: &mut Scratch<I>,
-    ) where
+    fn filter_candidates_inner<M, I, C>(&self, view: M, computer: &C, scratch: &mut Scratch<I>)
+    where
         I: VectorId,
         M: View<I>,
         C: for<'a, 'b> DistanceFunction<M::ElementRef<'a>, M::ElementRef<'b>, f32>,
@@ -238,15 +307,19 @@ impl FilterCandidates {
         let edges = &mut scratch.edges;
         let pool = &mut scratch.pool;
 
+        let in_neighbors = &scratch.in_neighbors;
+        let out_neighbors = &scratch.out_neighbors;
+        let replace = &scratch.replace;
+
         edges.clear();
-        for neighbor in candidates.in_neighbors.iter() {
+        for neighbor in in_neighbors.iter() {
             pool.clear();
             let candidate = match view.get(*neighbor) {
                 Some(candidate) => candidate,
                 None => continue,
             };
 
-            for other_id in candidates.replace.iter() {
+            for other_id in replace.iter() {
                 // Don't add a self edge.
                 if other_id == neighbor {
                     continue;
@@ -268,7 +341,7 @@ impl FilterCandidates {
             edges.insert(*neighbor, best);
         }
 
-        for &neighbor in candidates.out_neighbors.iter() {
+        for &neighbor in out_neighbors.iter() {
             pool.clear();
 
             let candidate = match view.get(neighbor) {
@@ -276,7 +349,7 @@ impl FilterCandidates {
                 None => continue,
             };
 
-            for other_id in candidates.replace.iter() {
+            for other_id in replace.iter() {
                 // Don't add a self edge.
                 if other_id == &neighbor {
                     continue;
@@ -295,7 +368,10 @@ impl FilterCandidates {
 
             pool.sort_unstable_by(neighbor::ord::fast_distance);
             pool.iter().take(*replacements).for_each(|n| {
-                edges.entry(*n.id()).or_insert_with(BackedgeBuffer::default).push(neighbor);
+                edges
+                    .entry(*n.id())
+                    .or_insert_with(BackedgeBuffer::default)
+                    .push(neighbor);
             });
         }
     }
@@ -313,7 +389,8 @@ where
 {
     let delete_set = HashSet::from_iter(std::iter::once(id));
     for (src, dsts) in edges {
-        algorithms::add_edge_and_prune(prune, dsts, *src, scratch, Some(&delete_set), config).await?;
+        algorithms::add_edge_and_prune(prune, dsts, *src, scratch, Some(&delete_set), config)
+            .await?;
     }
 
     prune.neighbors().clear(id).await?;

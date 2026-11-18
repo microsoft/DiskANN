@@ -8,7 +8,7 @@ use std::fmt::Display;
 use crate::neighbor::Neighbor;
 
 /// A logger provided to various search tasks
-pub trait SearchRecord<T>: Send + Sync + 'static
+pub trait SearchRecord<T>: Send
 where
     T: Eq,
 {
@@ -54,7 +54,7 @@ impl NoopSearchRecord {
 
 impl<T> SearchRecord<T> for NoopSearchRecord where T: Eq {}
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct VisitedSearchRecord<T>
 where
     T: Eq + Clone + Send + Sync + 'static,
@@ -147,6 +147,30 @@ where
 {
     fn record(&mut self, neighbor: Neighbor<T>, hops: u32, _cmps: u32) {
         self.push(neighbor, hops);
+    }
+}
+
+//-----//
+// Ref //
+//-----//
+
+#[derive(Debug)]
+pub(crate) struct VisitedRef<'a, I>(&'a mut Vec<Neighbor<I>>);
+
+impl<'a, I> VisitedRef<'a, I> {
+    /// Construct a new [`VisitedRef`] referencing `neighbors` that clears `neighbors`.
+    pub(crate) fn new_cleared(neighbors: &'a mut Vec<Neighbor<I>>) -> Self {
+        neighbors.clear();
+        Self(neighbors)
+    }
+}
+
+impl<I> SearchRecord<I> for VisitedRef<'_, I>
+where
+    I: Eq + Clone + Send + Sync + 'static,
+{
+    fn record(&mut self, neighbor: Neighbor<I>, _hops: u32, _cmps: u32) {
+        self.0.push(neighbor);
     }
 }
 
