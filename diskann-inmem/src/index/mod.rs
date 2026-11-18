@@ -5,15 +5,15 @@
 
 use std::sync::Arc;
 
-use diskann_utils::views::rowmajor;
 use diskann::{
     ANNResult,
     graph::{DiskANNIndex, SearchOutputBuffer},
 };
+use diskann_utils::views::rowmajor;
 
 use crate::{
-    bitvector::BitVector,
     Context, Provider, Strategy,
+    bitvector::BitVector,
     num::{Capacity, MaxDegree},
     poll,
     provider::{self, Id},
@@ -177,9 +177,7 @@ where
         F: FnMut(&M) -> bool,
     {
         let provider = self.index.provider();
-        let mut bitvec = BitVector::new(<R as repr::Representation>::id_limit(
-            provider.repr(),
-        ));
+        let mut bitvec = BitVector::new(<R as repr::Representation>::id_limit(provider.repr()));
 
         // We need to protect against the case where a predicate also tries to insert and
         // delete items, which would acquire the ID translation locks.
@@ -240,7 +238,10 @@ where
         O: diskann::graph::SearchOutputBuffer<M> + Send,
     {
         let strategy = provider::Smuggle::new(&mut self.accessor);
-        let fut = self.read.index.search(params, &strategy, &Context, (), output);
+        let fut = self
+            .read
+            .index
+            .search(params, &strategy, &Context, (), output);
         crate::poll(fut)
     }
 
@@ -254,7 +255,10 @@ where
         O: diskann::graph::SearchOutputBuffer<M> + Send,
     {
         let strategy = provider::Smuggle::new(&mut self.accessor);
-        let fut = self.read.index.search(params, &strategy, &Context, (), output);
+        let fut = self
+            .read
+            .index
+            .search(params, &strategy, &Context, (), output);
         crate::poll(fut)
     }
 }
@@ -306,7 +310,10 @@ where
         T: Send + Sync + 'static, // FIXME: simplify bounds
     {
         Box::pin(async move {
-            self.index.clone().multi_insert(Strategy, &Context, data, ids).await
+            self.index
+                .clone()
+                .multi_insert(Strategy, &Context, data, ids)
+                .await
         })
     }
 }

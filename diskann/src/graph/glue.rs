@@ -222,6 +222,10 @@ pub trait SearchAccessor: HasId + Send + Sync {
     // Provided methods //
     //////////////////////
 
+    fn max_degree_hint(&self) -> Option<std::num::NonZeroUsize> {
+        None
+    }
+
     /// Indicate that search should terminate as soon as possible.
     ///
     /// The provided implementation always returns `false`.

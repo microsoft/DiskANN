@@ -128,7 +128,9 @@ impl<'a> ReadGuard<'a> {
     }
 
     pub(crate) fn share(&self) -> Self {
-        Self { guard: self.guard.share() }
+        Self {
+            guard: self.guard.share(),
+        }
     }
 }
 
