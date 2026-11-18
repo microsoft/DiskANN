@@ -8,7 +8,7 @@ mod disk_index_build_config;
 pub use disk_index_build_config::{DiskIndexBuildConfig, GraphBuildConfig};
 
 pub mod disk_index_build_parameter;
-pub use disk_index_build_parameter::{DiskIndexBuildParameters, MemoryBudget, NumPQChunks};
+pub use disk_index_build_parameter::{MemoryBudget, NumPQChunks};
 
 pub mod filter_parameter;
 
