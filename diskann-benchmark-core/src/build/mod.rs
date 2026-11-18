@@ -78,6 +78,11 @@
 //! assert_eq!(results.output().iter().map(|o| o.output.num_built).sum::<usize>(), 100, "expected 100 items built");
 //! ```
 //!
+//! # Synchronous Execution
+//!
+//! When the "sync" feature is enabled, the [`sync`] module provides a synchronous version
+//! of this interface while sharing similar setup and result aggregation.
+//!
 //! # Built-In Runners
 //!
 //! ## Graph Index
@@ -95,3 +100,7 @@ pub use api::{
 
 pub mod graph;
 pub mod ids;
+
+#[cfg(feature = "sync")]
+#[cfg_attr(docsrs, doc(cfg(feature = "sync")))]
+pub mod sync;

@@ -118,6 +118,28 @@
 //! assert_eq!(&*results.output(), &[0, 1, 2, 3].map(Output::new));
 //! ```
 //!
+//! # Synchronous Execution
+//!
+//! When the "sync" feature is enabled, the [`sync`] module provides a synchronous version
+//! of this interface while sharing similar setup and result aggregation.
+//! The search object and parameters are borrowed and do not need to be `'static`.
+//!
+//! # Batch Execution
+//!
+//! Batch interfaces like [`search_all`], [`search_all_with`], [`sync::search_all`], and
+//! [`sync::search_all_with`] take iterators yielding [`Run`] objects.
+//!
+//! These will be executed sequentially with a new runtime/threadpool created for each [`Run`],
+//! reused across its repetitions, and destroyed afterward. Results will be returned as a [`Vec`]
+//! with one entry for each provided [`Run`], in the same order, containing the aggregated results.
+//!
+//! Each run will be repeated `R` times where `R` is defined by [`Run::setup`]. Callers are
+//! encouraged to use multiple repetitions to obtain more stable performance metrics. Result
+//! aggregation can summarize the results across a repetition group to reduce memory consumption.
+//!
+//! Result aggregation is defined using the [`Aggregate`] trait. [`Aggregate::aggregate`] will
+//! be provided with the raw results of all repetitions of a single [`Run`].
+//!
 //! # Built-in Runners
 //!
 //! ## Graph Index
@@ -134,5 +156,9 @@ mod api;
 pub use api::{
     Aggregate, Id, IdCount, Run, Search, SearchResults, Setup, search, search_all, search_all_with,
 };
+
+#[cfg(feature = "sync")]
+#[cfg_attr(docsrs, doc(cfg(feature = "sync")))]
+pub mod sync;
 
 pub mod graph;

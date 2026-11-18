@@ -17,13 +17,20 @@ futures-util = { workspace = true, default-features = false }
 thiserror.workspace = true
 tokio.workspace = true
 
+# bigann
 serde_yaml = { version = "0.9.34", optional = true }
+
+# sync
+rayon = { workspace = true, optional = true }
 
 [features]
 default = []
 
 # BigANN Runbook support requires parsing a YAML file.
 bigann = ["dep:serde_yaml"]
+
+# Support synchronous execution.
+sync = ["dep:rayon"]
 
 [lints]
 workspace = true
@@ -34,3 +41,16 @@ diskann = { workspace = true, features = ["testing"] }
 diskann-vector = { workspace = true }
 diskann-benchmark-runner = { workspace = true, features = ["ux-tools"] }
 tempfile = { workspace = true }
+
+# Note
+#
+# Build docs locally with
+# ```
+# RUSTDOCFLAGS="--cfg docsrs" cargo +nightly doc \
+#    --package diskann-benchmark-core \
+#    --features bigann,sync \
+#    --no-deps
+# ```
+[package.metadata.docs.rs]
+features = ["bigann", "sync"]
+rustdoc-args = ["--cfg", "docsrs"]
