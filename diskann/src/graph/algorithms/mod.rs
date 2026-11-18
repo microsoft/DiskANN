@@ -92,10 +92,7 @@ where
 {
     SearchScratch::new(
         PriorityQueueConfiguration::Fixed(l + additional),
-        Some(scratch::estimate_node_visited_set_size(
-            degree.get(),
-            l,
-        )),
+        Some(scratch::estimate_node_visited_set_size(degree.get(), l)),
     )
 }
 

@@ -3,13 +3,13 @@
  * Licensed under the MIT license.
  */
 
-use std::sync::Arc;
+use std::{num::NonZeroUsize, sync::Arc};
 
 use diskann_vector::distance::Metric;
 
 use crate::{
     graph::{
-        self, DiskANNIndex,
+        self,
         search::Knn,
         test::{provider as test_provider, synthetic::Grid},
     },
@@ -85,21 +85,8 @@ verbose_eq!(GridSearch {
 /// of `size`.
 ///
 /// The provider will be configured with the L2 metric.
-fn setup_grid_search(grid: Grid, size: usize) -> Arc<DiskANNIndex<test_provider::Provider>> {
-    // Initialize the provider.
-    let provider = test_provider::Provider::grid(grid, size).unwrap();
-
-    // Initialize the index.
-    let index_config = graph::config::Builder::new(
-        provider.max_degree(),
-        graph::config::MaxDegree::same(),
-        100,
-        (Metric::L2).into(),
-    )
-    .build()
-    .unwrap();
-
-    Arc::new(DiskANNIndex::new(index_config, provider, None))
+fn setup_grid_search(grid: Grid, size: usize) -> Arc<test_provider::Provider> {
+    Arc::new(test_provider::Provider::grid(grid, size).unwrap())
 }
 
 const BEAM_WIDTHS: [usize; 3] = [1, 2, 4];
@@ -129,23 +116,17 @@ fn _grid_search(grid: Grid, size: usize, mut parent: TestPath<'_>) {
 
             let k_value = 10;
             let params = Knn::new(10, Some(beam_width)).unwrap();
-            let context = test_provider::Context::new();
 
-            let mut neighbors = vec![Neighbor::<u32>::default(); k_value];
-            let graph::index::SearchStats {
+            let (neighbors, stats) = rt
+                .block_on(index.search(params, query.as_slice(), NonZeroUsize::new(k_value)))
+                .unwrap();
+
+            let graph::algorithms::SearchStats {
                 cmps,
                 hops,
                 result_count,
                 range_search_second_round,
-            } = rt
-                .block_on(index.search(
-                    params,
-                    &test_provider::Strategy::new(),
-                    &context,
-                    query.as_slice(),
-                    &mut crate::neighbor::BackInserter::new(neighbors.as_mut_slice()),
-                ))
-                .unwrap();
+            } = stats;
 
             assert!(
                 result_count.into_usize() <= k_value,
@@ -157,7 +138,7 @@ fn _grid_search(grid: Grid, size: usize, mut parent: TestPath<'_>) {
                 "range search should not activate for k-nearest-neighbors",
             );
 
-            let metrics = index.provider().metrics();
+            let metrics = index.metrics();
 
             // Check that the mutation metrics are zero.
             assert_eq!(metrics.set_vector, 0);
@@ -176,12 +157,6 @@ fn _grid_search(grid: Grid, size: usize, mut parent: TestPath<'_>) {
                 cmps.into_usize(),
                 "recorded comparisons should have a one-to-one correspondence with `get_vector`",
             );
-
-            {
-                let test_provider::ContextMetrics { spawns, clones } = context.metrics();
-                assert_eq!(spawns, 0);
-                assert_eq!(clones, 0);
-            }
 
             results.push(GridSearch {
                 query: query.clone(),

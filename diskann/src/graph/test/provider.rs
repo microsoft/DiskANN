@@ -6,7 +6,7 @@
 //! A pedantic provider implementation used for testing alorithmic logic.
 
 use std::{
-    borrow::Cow,
+    borrow::{BorrowMut, Cow},
     collections::{HashMap, HashSet},
     num::NonZeroUsize,
     sync::Arc,
@@ -21,7 +21,9 @@ use crate::{
     ANNResult, convert_error, default_post_processor,
     error::ranked::ErrorExt,
     error::{Infallible, RankedError, StandardError, ToRanked, TransientError, message},
-    graph::{AdjacencyList, SearchOutputBuffer, glue, test::synthetic, workingset},
+    graph::{
+        self, AdjacencyList, SearchOutputBuffer, algorithms, glue, test::synthetic, workingset,
+    },
     internal::counter::{Counter, LocalCounter},
     neighbor::Neighbor,
     provider,
@@ -197,6 +199,7 @@ convert_error!(ConfigError);
 pub struct Provider {
     terms: DashMap<u32, Term>,
     config: Config,
+    graph: graph::Config,
 
     // Counters
     pub(crate) get_vector: Counter,
@@ -210,10 +213,11 @@ impl Provider {
     /// Create a new [`Provider`].
     ///
     /// All counters will be initialized to zero.
-    pub fn new(config: Config) -> Self {
+    pub fn new(config: Config, graph: graph::Config) -> Self {
         let this = Self {
             terms: DashMap::new(),
             config,
+            graph,
             get_vector: Counter::new(),
             set_vector: Counter::new(),
             get_neighbors: Counter::new(),
@@ -246,12 +250,17 @@ impl Provider {
     ///
     /// After initialization, all adjacency lists are verified to ensure that they only
     /// contain either start point IDs or IDs yielded by the `points` iterator.
-    pub fn new_from<I, T>(config: Config, start_points: I, points: T) -> ANNResult<Self>
+    pub fn new_from<I, T>(
+        config: Config,
+        start_points: I,
+        points: T,
+        graph: graph::Config,
+    ) -> ANNResult<Self>
     where
         I: IntoIterator<Item = (u32, AdjacencyList<u32>)>,
         T: IntoIterator<Item = (u32, Vec<f32>, AdjacencyList<u32>)>,
     {
-        let this = Self::new(config);
+        let this = Self::new(config, graph);
         let max_degree = this.config.max_degree.get();
 
         // Add the start points.
@@ -331,8 +340,21 @@ impl Provider {
             StartPoint::new(setup.start_id(), setup.start_point()),
         )?;
 
+        let graph_config = graph::config::Builder::new(
+            max_degree,
+            graph::config::MaxDegree::same(),
+            100,
+            (Metric::L2).into(),
+        )
+        .build()?;
+
         // Initialize the provider.
-        Self::new_from(provider_config, setup.start_neighbors(), setup.setup())
+        Self::new_from(
+            provider_config,
+            setup.start_neighbors(),
+            setup.setup(),
+            graph_config,
+        )
     }
 
     /// Return the dimensionality of data contained by this provider.
@@ -477,6 +499,27 @@ impl Provider {
         self.config.start_points.keys().copied()
     }
 
+    /// Return a search accesor.
+    pub(crate) fn search_accessor(&self, query: &[f32]) -> Result<Accessor<'_>, DimMismatch> {
+        Accessor::new(self, query)
+    }
+
+    /// Return a prune accessor.
+    fn prune_accessor<'a>(&'a self, options: &'a Strategy, capacity: usize) -> PruneAccessor<'a> {
+        let cap = if options.working_set_reuse {
+            workingset::map::Capacity::Default
+        } else {
+            workingset::map::Capacity::None
+        };
+
+        let set = workingset::map::Builder::new(cap).build(capacity);
+
+        match &options.transient_ids {
+            Some(ids) => PruneAccessor::new(self, Some(Cow::Borrowed(ids)), set),
+            None => PruneAccessor::new(self, None, set),
+        }
+    }
+
     /// Run the provided closure on the associated term.
     fn get<F, R>(&self, id: u32, f: F) -> Result<R, AccessedInvalidId>
     where
@@ -486,6 +529,190 @@ impl Provider {
             Some(term) => Ok(f(&term.data)),
             None => Err(AccessedInvalidId(id)),
         }
+    }
+
+    fn set(&self, vector: &[f32], id: u32) -> ANNResult<()> {
+        #[derive(Debug, Clone, Copy, Error)]
+        enum SetError {
+            #[error("vector id {0} is already assigned")]
+            AlreadyAssigned(u32),
+            #[error("wrong dim - got {0}, expected {1}")]
+            WrongDim(usize, usize),
+        }
+
+        convert_error!(SetError);
+
+        // Ensure that the assigned vector has the correct length.
+        if vector.len() != self.dim() {
+            return Err(SetError::WrongDim(vector.len(), self.dim()).into());
+        }
+
+        match self.terms.entry(id) {
+            Entry::Occupied(_) => Err(SetError::AlreadyAssigned(id).into()),
+            Entry::Vacant(term) => {
+                term.insert(Term {
+                    neighbors: AdjacencyList::new(),
+                    data: Vector::Valid(vector.into()),
+                });
+                self.set_vector.increment();
+                Ok(())
+            }
+        }
+    }
+
+    //------------//
+    // Algorithms //
+    //------------//
+
+    fn insert_accessor<'a>(
+        &'a self,
+        vector: &'a [f32],
+        options: &'a Strategy,
+    ) -> Result<Insert<'a>, DimMismatch> {
+        Ok(Insert {
+            search: self.search_accessor(vector)?,
+            prune: self.prune_accessor(options, self.graph.max_occlusion_size().get()),
+        })
+    }
+
+    pub async fn insert(&self, vector: &[f32], id: u32, options: &Strategy) -> ANNResult<()> {
+        // Step 1 - try to insert the vector.
+        self.set(vector, id)?;
+
+        // Step 2 - run the insertion algorithm.
+        algorithms::insert(&mut self.insert_accessor(vector, options)?, id, &self.graph).await?;
+
+        Ok(())
+    }
+
+    pub async fn search<'a, P>(
+        &'a self,
+        search: P,
+        vector: &'a [f32],
+        knn: Option<NonZeroUsize>,
+    ) -> ANNResult<(Vec<Neighbor<u32>>, P::Output)>
+    where
+        P: graph::Search<Accessor<'a>>,
+    {
+        let mut accessor = self.search_accessor(vector)?;
+        let mut buf = MaybeCapped::new(knn);
+        let post_processor = glue::DefaultPostProcessor::default_post_processor(&accessor);
+        let output = search
+            .search(&mut accessor, post_processor, &mut buf)
+            .await?;
+        Ok((buf.into_inner(), output))
+    }
+
+    // pub(crate) async fn search_with<'a, P, PP>(
+    //     &'a self,
+    //     search: P,
+    //     vector: &'a [f32],
+    //     knn: Option<NonZeroUsize>,
+    //     post_processor: PP,
+    // ) -> ANNResult<(Vec<Neighbor<u32>>, P::Output)>
+    // where
+    //     P: graph::Search<Accessor<'a>>,
+    //     PP: glue::SearchPostProcess<Accessor<'a>> + Send + Sync,
+    // {
+    //     let mut accessor = self.search_accessor(vector)?;
+    //     let mut buf = MaybeCapped::new(knn);
+    //     let output = search
+    //         .search(&mut accessor, post_processor, &mut buf)
+    //         .await?;
+    //     Ok((buf.into_inner(), output))
+    // }
+}
+
+#[derive(Debug)]
+struct Insert<'a> {
+    search: Accessor<'a>,
+    prune: PruneAccessor<'a>,
+}
+
+impl provider::HasId for Insert<'_> {
+    type Id = u32;
+}
+
+impl<'a> algorithms::Insert for Insert<'a> {
+    type SearchAccessor<'b>
+        = Accessor<'a>
+    where
+        Self: 'b;
+
+    type PruneAccessor<'b>
+        = PruneAccessor<'a>
+    where
+        Self: 'b;
+
+    fn search_accessor(&mut self) -> impl BorrowMut<Accessor<'a>> + Send {
+        &mut self.search
+    }
+    fn prune_accessor(&mut self) -> impl BorrowMut<PruneAccessor<'a>> + Send {
+        &mut self.prune
+    }
+}
+
+#[derive(Debug)]
+struct MaybeCapped {
+    data: Vec<Neighbor<u32>>,
+    max: Option<NonZeroUsize>,
+}
+
+impl MaybeCapped {
+    fn new(max: Option<NonZeroUsize>) -> Self {
+        Self {
+            data: Vec::with_capacity(max.unwrap_or(NonZeroUsize::MIN).get()),
+            max,
+        }
+    }
+
+    fn into_inner(self) -> Vec<Neighbor<u32>> {
+        self.data
+    }
+}
+
+impl SearchOutputBuffer<u32> for MaybeCapped {
+    fn size_hint(&self) -> Option<usize> {
+        match self.max {
+            Some(max) => Some(max.get().saturating_sub(self.data.len())),
+            None => None,
+        }
+    }
+
+    fn push(&mut self, neighbor: Neighbor<u32>) -> graph::BufferState {
+        match self.size_hint() {
+            Some(remaining) => {
+                if remaining != 0 {
+                    self.data.push(neighbor);
+                }
+                if remaining > 1 {
+                    graph::BufferState::Available
+                } else {
+                    graph::BufferState::Full
+                }
+            }
+            None => {
+                self.data.push(neighbor);
+                graph::BufferState::Available
+            }
+        }
+    }
+
+    fn current_len(&self) -> usize {
+        self.data.len()
+    }
+
+    fn extend<Itr>(&mut self, itr: Itr) -> usize
+    where
+        Itr: IntoIterator<Item = Neighbor<u32>>,
+    {
+        let start = self.data.len();
+        let mut itr = itr.into_iter();
+        while let Some(neighbor) = itr.next()
+            && self.push(neighbor) == graph::BufferState::Available
+        {}
+
+        self.data.len() - start
     }
 }
 
@@ -1267,184 +1494,184 @@ impl Default for Strategy {
     }
 }
 
-impl<'a> glue::SearchStrategy<'a, Provider, &'a [f32]> for Strategy {
-    type SearchAccessorError = DimMismatch;
-    type SearchAccessor = Accessor<'a>;
+// impl<'a> glue::SearchStrategy<'a, Provider, &'a [f32]> for Strategy {
+//     type SearchAccessorError = DimMismatch;
+//     type SearchAccessor = Accessor<'a>;
+//
+//     fn search_accessor(
+//         &'a self,
+//         provider: &'a Provider,
+//         _context: &'a Context,
+//         query: &'a [f32],
+//     ) -> Result<Accessor<'a>, DimMismatch> {
+//         Accessor::new(provider, query)
+//     }
+// }
 
-    fn search_accessor(
-        &'a self,
-        provider: &'a Provider,
-        _context: &'a Context,
-        query: &'a [f32],
-    ) -> Result<Accessor<'a>, DimMismatch> {
-        Accessor::new(provider, query)
-    }
-}
-
-impl<'a> glue::DefaultPostProcessor<'a, Provider, &'a [f32]> for Strategy {
+impl glue::DefaultPostProcessor<u32> for Accessor<'_> {
     default_post_processor!(glue::Pipeline<glue::FilterStartPoints, glue::CopyIds>);
 }
 
-impl glue::PruneStrategy<Provider> for Strategy {
-    type PruneAccessor<'a> = PruneAccessor<'a>;
-    type PruneAccessorError = Infallible;
+// impl glue::PruneStrategy<Provider> for Strategy {
+//     type PruneAccessor<'a> = PruneAccessor<'a>;
+//     type PruneAccessorError = Infallible;
+//
+//     fn prune_accessor<'a>(
+//         &'a self,
+//         provider: &'a Provider,
+//         _context: &'a Context,
+//         capacity: usize,
+//     ) -> Result<Self::PruneAccessor<'a>, Self::PruneAccessorError> {
+//         let cap = if self.working_set_reuse {
+//             workingset::map::Capacity::Default
+//         } else {
+//             workingset::map::Capacity::None
+//         };
+//
+//         let set = workingset::map::Builder::new(cap).build(capacity);
+//
+//         match &self.transient_ids {
+//             Some(ids) => Ok(PruneAccessor::new(provider, Some(Cow::Borrowed(ids)), set)),
+//             None => Ok(PruneAccessor::new(provider, None, set)),
+//         }
+//     }
+// }
 
-    fn prune_accessor<'a>(
-        &'a self,
-        provider: &'a Provider,
-        _context: &'a Context,
-        capacity: usize,
-    ) -> Result<Self::PruneAccessor<'a>, Self::PruneAccessorError> {
-        let cap = if self.working_set_reuse {
-            workingset::map::Capacity::Default
-        } else {
-            workingset::map::Capacity::None
-        };
+// impl<'a> glue::InsertStrategy<'a, Provider, &'a [f32]> for Strategy {
+//     type SearchAccessor = Accessor<'a>;
+//     type SearchAccessorError = DimMismatch;
+//     type PruneStrategy = Self;
+//
+//     fn insert_search_accessor(
+//         &'a self,
+//         provider: &'a Provider,
+//         _context: &'a Context,
+//         vector: &'a [f32],
+//     ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
+//         Accessor::new(provider, vector)
+//     }
+//
+//     fn prune_strategy(&self) -> Self::PruneStrategy {
+//         self.clone()
+//     }
+// }
 
-        let set = workingset::map::Builder::new(cap).build(capacity);
+// impl glue::MultiInsertStrategy<Provider, rowmajor::Owned<f32>> for Strategy {
+//     type Seed = workingset::map::Builder<u32, workingset::map::Ref<[f32]>>;
+//     type FinishError = Infallible;
+//     type PruneStrategy = Self;
+//     type InsertStrategy = Self;
+//
+//     fn insert_strategy(&self) -> Self::InsertStrategy {
+//         self.clone()
+//     }
+//
+//     fn finish<Itr>(
+//         &self,
+//         _provider: &Provider,
+//         _ctx: &Context,
+//         batch: &Arc<rowmajor::Owned<f32>>,
+//         ids: Itr,
+//     ) -> impl std::future::Future<Output = Result<Self::Seed, Self::FinishError>> + Send
+//     where
+//         Itr: ExactSizeIterator<Item = u32> + Send,
+//     {
+//         use workingset::map::{Builder, Capacity, Overlay};
+//
+//         let capacity = if self.working_set_reuse {
+//             Capacity::Default
+//         } else {
+//             Capacity::None
+//         };
+//
+//         std::future::ready(Ok(
+//             Builder::new(capacity).with_overlay(Overlay::from_batch(batch.clone(), ids))
+//         ))
+//     }
+//
+//     fn seeded_prune_accessor<'a>(
+//         &'a self,
+//         provider: &'a Provider,
+//         _context: &'a Context,
+//         builder: &'a Self::Seed,
+//         capacity: usize,
+//     ) -> ANNResult<PruneAccessor<'a>> {
+//         let set = builder.clone().build(capacity);
+//         let transient_ids = self.transient_ids.as_deref().map(Cow::Borrowed);
+//
+//         Ok(PruneAccessor::new(provider, transient_ids, set))
+//     }
+// }
 
-        match &self.transient_ids {
-            Some(ids) => Ok(PruneAccessor::new(provider, Some(Cow::Borrowed(ids)), set)),
-            None => Ok(PruneAccessor::new(provider, None, set)),
-        }
-    }
-}
-
-impl<'a> glue::InsertStrategy<'a, Provider, &'a [f32]> for Strategy {
-    type SearchAccessor = Accessor<'a>;
-    type SearchAccessorError = DimMismatch;
-    type PruneStrategy = Self;
-
-    fn insert_search_accessor(
-        &'a self,
-        provider: &'a Provider,
-        _context: &'a Context,
-        vector: &'a [f32],
-    ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
-        Accessor::new(provider, vector)
-    }
-
-    fn prune_strategy(&self) -> Self::PruneStrategy {
-        self.clone()
-    }
-}
-
-impl glue::MultiInsertStrategy<Provider, rowmajor::Owned<f32>> for Strategy {
-    type Seed = workingset::map::Builder<u32, workingset::map::Ref<[f32]>>;
-    type FinishError = Infallible;
-    type PruneStrategy = Self;
-    type InsertStrategy = Self;
-
-    fn insert_strategy(&self) -> Self::InsertStrategy {
-        self.clone()
-    }
-
-    fn finish<Itr>(
-        &self,
-        _provider: &Provider,
-        _ctx: &Context,
-        batch: &Arc<rowmajor::Owned<f32>>,
-        ids: Itr,
-    ) -> impl std::future::Future<Output = Result<Self::Seed, Self::FinishError>> + Send
-    where
-        Itr: ExactSizeIterator<Item = u32> + Send,
-    {
-        use workingset::map::{Builder, Capacity, Overlay};
-
-        let capacity = if self.working_set_reuse {
-            Capacity::Default
-        } else {
-            Capacity::None
-        };
-
-        std::future::ready(Ok(
-            Builder::new(capacity).with_overlay(Overlay::from_batch(batch.clone(), ids))
-        ))
-    }
-
-    fn seeded_prune_accessor<'a>(
-        &'a self,
-        provider: &'a Provider,
-        _context: &'a Context,
-        builder: &'a Self::Seed,
-        capacity: usize,
-    ) -> ANNResult<PruneAccessor<'a>> {
-        let set = builder.clone().build(capacity);
-        let transient_ids = self.transient_ids.as_deref().map(Cow::Borrowed);
-
-        Ok(PruneAccessor::new(provider, transient_ids, set))
-    }
-}
-
-/// A [`glue::SearchPostProcessStep`] that removes deleted IDs from the candidate stream.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct FilterDeleted;
-
-impl<'a, 'b, O> glue::SearchPostProcessStep<Accessor<'a>, &'b [f32], O> for FilterDeleted {
-    type Error<NextError>
-        = NextError
-    where
-        NextError: StandardError;
-
-    type NextAccessor = Accessor<'a>;
-
-    fn post_process_step<I, B, Next>(
-        &self,
-        next: &Next,
-        accessor: &mut Accessor<'a>,
-        query: &'b [f32],
-        candidates: I,
-        output: &mut B,
-    ) -> impl std::future::Future<Output = Result<usize, Self::Error<Next::Error>>> + Send
-    where
-        I: Iterator<Item = Neighbor<u32>> + Send,
-        B: SearchOutputBuffer<O> + Send + ?Sized,
-        Next: glue::SearchPostProcess<Self::NextAccessor, &'b [f32], O> + Sync,
-    {
-        let provider = accessor.provider;
-        next.post_process(
-            accessor,
-            query,
-            candidates.filter(|n| !provider.is_deleted(*n.id()).unwrap_or(true)),
-            output,
-        )
-    }
-}
-
-impl glue::InplaceDeleteStrategy<Provider> for Strategy {
-    type DeleteElement<'a> = &'a [f32];
-    type DeleteElementGuard = Box<[f32]>;
-    type DeleteElementError = AccessedInvalidId;
-    type PruneStrategy = Self;
-    type DeleteSearchAccessor<'a> = Accessor<'a>;
-    type SearchStrategy = Self;
-    type SearchPostProcessor = glue::Pipeline<FilterDeleted, glue::CopyIds>;
-
-    fn prune_strategy(&self) -> Self::PruneStrategy {
-        self.clone()
-    }
-
-    fn search_strategy(&self) -> Self::SearchStrategy {
-        self.clone()
-    }
-
-    fn search_post_processor(&self) -> Self::SearchPostProcessor {
-        glue::Pipeline::new(FilterDeleted, glue::CopyIds)
-    }
-
-    async fn get_delete_element<'a>(
-        &'a self,
-        provider: &'a Provider,
-        _context: &'a <Provider as provider::DataProvider>::Context,
-        id: <Provider as provider::DataProvider>::InternalId,
-    ) -> Result<Self::DeleteElementGuard, Self::DeleteElementError> {
-        provider
-            .terms
-            .get(&id)
-            .map(|v| (*v.data).into())
-            .ok_or(AccessedInvalidId(id))
-    }
-}
+// /// A [`glue::SearchPostProcessStep`] that removes deleted IDs from the candidate stream.
+// #[derive(Debug, Clone, Copy, Default)]
+// pub struct FilterDeleted;
+//
+// impl<'a, 'b, O> glue::SearchPostProcessStep<Accessor<'a>, &'b [f32], O> for FilterDeleted {
+//     type Error<NextError>
+//         = NextError
+//     where
+//         NextError: StandardError;
+//
+//     type NextAccessor = Accessor<'a>;
+//
+//     fn post_process_step<I, B, Next>(
+//         &self,
+//         next: &Next,
+//         accessor: &mut Accessor<'a>,
+//         query: &'b [f32],
+//         candidates: I,
+//         output: &mut B,
+//     ) -> impl std::future::Future<Output = Result<usize, Self::Error<Next::Error>>> + Send
+//     where
+//         I: Iterator<Item = Neighbor<u32>> + Send,
+//         B: SearchOutputBuffer<O> + Send + ?Sized,
+//         Next: glue::SearchPostProcess<Self::NextAccessor, &'b [f32], O> + Sync,
+//     {
+//         let provider = accessor.provider;
+//         next.post_process(
+//             accessor,
+//             query,
+//             candidates.filter(|n| !provider.is_deleted(*n.id()).unwrap_or(true)),
+//             output,
+//         )
+//     }
+// }
+//
+// impl glue::InplaceDeleteStrategy<Provider> for Strategy {
+//     type DeleteElement<'a> = &'a [f32];
+//     type DeleteElementGuard = Box<[f32]>;
+//     type DeleteElementError = AccessedInvalidId;
+//     type PruneStrategy = Self;
+//     type DeleteSearchAccessor<'a> = Accessor<'a>;
+//     type SearchStrategy = Self;
+//     type SearchPostProcessor = glue::Pipeline<FilterDeleted, glue::CopyIds>;
+//
+//     fn prune_strategy(&self) -> Self::PruneStrategy {
+//         self.clone()
+//     }
+//
+//     fn search_strategy(&self) -> Self::SearchStrategy {
+//         self.clone()
+//     }
+//
+//     fn search_post_processor(&self) -> Self::SearchPostProcessor {
+//         glue::Pipeline::new(FilterDeleted, glue::CopyIds)
+//     }
+//
+//     async fn get_delete_element<'a>(
+//         &'a self,
+//         provider: &'a Provider,
+//         _context: &'a <Provider as provider::DataProvider>::Context,
+//         id: <Provider as provider::DataProvider>::InternalId,
+//     ) -> Result<Self::DeleteElementGuard, Self::DeleteElementError> {
+//         provider
+//             .terms
+//             .get(&id)
+//             .map(|v| (*v.data).into())
+//             .ok_or(AccessedInvalidId(id))
+//     }
+// }
 
 ///////////
 // Tests //
@@ -1601,6 +1828,16 @@ mod tests {
 
     #[test]
     fn test_provider_new_from() {
+        // A dummy graph config.
+        let graph = graph::config::Builder::new(
+            5,
+            graph::config::MaxDegree::same(),
+            100,
+            (Metric::L2).into(),
+        )
+        .build()
+        .unwrap();
+
         // Happy path - valid provider with start points and additional points
         {
             let config = Config::new(
@@ -1620,7 +1857,7 @@ mod tests {
                 AdjacencyList::from_iter_untrusted([0, 1]),
             )];
 
-            let provider = Provider::new_from(config, start_points, points).unwrap();
+            let provider = Provider::new_from(config, start_points, points, graph.clone()).unwrap();
             assert_eq!(provider.dim(), 2);
             assert_eq!(provider.max_degree(), 3);
         }
@@ -1628,7 +1865,7 @@ mod tests {
         // Happy Path: empty iterators (only start points from config)
         {
             let config = Config::new(Metric::L2, 5, [StartPoint::new(0, vec![1.0])]).unwrap();
-            let provider = Provider::new_from(config, [], []).unwrap();
+            let provider = Provider::new_from(config, [], [], graph.clone()).unwrap();
             assert_eq!(provider.dim(), 1);
         }
 
@@ -1637,7 +1874,7 @@ mod tests {
             let config = Config::new(Metric::L2, 2, [StartPoint::new(0, vec![1.0])]).unwrap();
             // Exceeds max degree of 2
             let start_points = [(0, AdjacencyList::from_iter_untrusted([1, 2, 3]))];
-            let err = Provider::new_from(config, start_points, []).unwrap_err();
+            let err = Provider::new_from(config, start_points, [], graph.clone()).unwrap_err();
             assert_contains!(err.to_string(), "max degree");
         }
 
@@ -1645,7 +1882,7 @@ mod tests {
         {
             let config = Config::new(Metric::L2, 5, [StartPoint::new(0, vec![1.0])]).unwrap();
             let start_points = [(999, AdjacencyList::new())]; // 999 is not a valid start point
-            let err = Provider::new_from(config, start_points, []).unwrap_err();
+            let err = Provider::new_from(config, start_points, [], graph.clone()).unwrap_err();
             assert_contains!(err.to_string(), "not a valid start point");
         }
 
@@ -1655,7 +1892,7 @@ mod tests {
 
             // Exceeds max degree
             let points = [(1, vec![2.0], AdjacencyList::from_iter_untrusted([0, 2, 3]))];
-            let err = Provider::new_from(config, [], points).unwrap_err();
+            let err = Provider::new_from(config, [], points, graph.clone()).unwrap_err();
             assert_contains!(err.to_string(), "max degree");
         }
 
@@ -1663,7 +1900,7 @@ mod tests {
         {
             let config = Config::new(Metric::L2, 5, [StartPoint::new(0, vec![1.0])]).unwrap();
             let points = [(0, vec![2.0], AdjacencyList::new())]; // 0 is already a start point
-            let err = Provider::new_from(config, [], points).unwrap_err();
+            let err = Provider::new_from(config, [], points, graph.clone()).unwrap_err();
             assert_contains!(err.to_string(), "cannot assign start point");
         }
 
@@ -1671,7 +1908,7 @@ mod tests {
         {
             let config = Config::new(Metric::L2, 5, [StartPoint::new(0, vec![1.0, 2.0])]).unwrap();
             let points = [(1, vec![3.0], AdjacencyList::new())]; // Wrong dimension (1 instead of 2)
-            let err = Provider::new_from(config, [], points).unwrap_err();
+            let err = Provider::new_from(config, [], points, graph.clone()).unwrap_err();
             assert_contains!(err.to_string(), "expecting dim");
         }
 
@@ -1683,7 +1920,7 @@ mod tests {
                 vec![2.0],
                 AdjacencyList::from_iter_unique(std::iter::once(999)),
             )]; // 999 doesn't exist
-            let err = Provider::new_from(config, [], points).unwrap_err();
+            let err = Provider::new_from(config, [], points, graph.clone()).unwrap_err();
             assert_contains!(err.to_string(), "not in the provider");
         }
     }
@@ -1699,6 +1936,14 @@ mod tests {
             ],
         )
         .unwrap();
+
+        let graph_config = graph::config::Builder::new(
+            4,
+            graph::config::MaxDegree::same(),
+            100,
+            (Metric::L2).into()
+        ).build().unwrap();
+
         let start_points = [
             (0, AdjacencyList::from_iter_untrusted([1, 2, 3])),
             (1, AdjacencyList::from_iter_untrusted([0, 3])),
@@ -1716,7 +1961,7 @@ mod tests {
                 AdjacencyList::from_iter_untrusted([0, 1, 2]),
             ),
         ];
-        let provider = Provider::new_from(config, start_points, points).unwrap();
+        let provider = Provider::new_from(config, start_points, points, graph_config).unwrap();
 
         assert_eq!(provider.dim(), 2);
         assert_eq!(provider.max_degree(), 4);
