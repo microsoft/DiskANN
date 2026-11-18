@@ -32,6 +32,10 @@ and consists of:
   Argument `test_name` consists of paths separated by a `/` like `a/b/test` that will get
   saved beneath [`test/generated`](test/generated).
 
+  To keep numeric pairs inline while regenerating, use
+  `get_or_save_test_results_with_format(..., TestFormat::InlineNumericPairs)`.
+  This changes whitespace only; the default API keeps standard pretty-printing.
+
 * `TestRoot` and `TestPath`: Utilities for efficiently incrementally building `test_name`.
 
 The above API will return the previously saved baseline in the normal test mode, which can

@@ -80,10 +80,6 @@ fn compute_groundtruth_results(
     active_entries: &[(u32, usize)],
     recall_at: usize,
 ) -> anyhow::Result<Vec<NeighborPriorityQueue<u32>>> {
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "using the global threadpool is generally fine in diskann-tools"
-    )]
     let results = (0..distance.n_queries())
         .into_par_iter()
         .map(|query_id| {
