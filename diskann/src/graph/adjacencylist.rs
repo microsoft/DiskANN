@@ -247,6 +247,16 @@ where
         self.debug_check_uniqueness();
     }
 
+    pub(crate) fn replace_from_iter_trusted<Itr>(&mut self, itr: Itr)
+    where
+        Itr: IntoIterator<Item = I>,
+        I: Ord + ContainsSimd,
+    {
+        self.edges.clear();
+        self.edges.extend(itr);
+        self.debug_check_uniqueness();
+    }
+
     /// Apply the function `f` to each element in the adjacency list.
     ///
     /// The caller asserts that after `f` has been applied to each element, the result will

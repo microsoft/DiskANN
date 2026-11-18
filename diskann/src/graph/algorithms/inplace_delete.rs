@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use std::{borrow::BorrowMut, fmt::Debug};
+use std::{borrow::BorrowMut, fmt::Debug, num::NonZeroUsize};
 
 use diskann_utils::{Reborrow, future::SendFuture};
 use diskann_vector::DistanceFunction;
@@ -14,6 +14,7 @@ use crate::graph::{
     glue::{PruneAccessor, SearchAccessor},
     internal::{BackedgeBuffer, prune},
     workingset::View,
+    search::record::NoopSearchRecord,
 };
 
 use crate::{
@@ -21,8 +22,7 @@ use crate::{
     error::IntoANNResult,
     internal,
     neighbor::{self, Neighbor},
-    provider::HasId,
-    provider::{NeighborAccessor, NeighborAccessorMut},
+    provider::{NeighborAccessor, NeighborAccessorMut, HasId},
     utils::VectorId,
 };
 
@@ -33,7 +33,10 @@ pub trait InplaceDelete: HasId + Send {
 
     fn prune_accessor(&mut self) -> impl std::borrow::BorrowMut<Self::PruneAccessor<'_>> + Send;
 
-    /// Keep only the non-deleted entries of `ids`.
+    /// Keep only the non-deleted entries of `ids` without changing relative ordering.
+    ///
+    /// It is important that order of the non-deleted entries is preserved. Use
+    /// [`AdjacencyList::retain`] for this purpose.
     ///
     /// Out-of-bounds IDs may be considered as deleted.
     fn keep_live(&mut self, ids: &mut AdjacencyList<Self::Id>);
@@ -64,10 +67,11 @@ pub struct Scratch<I>
 where
     I: VectorId,
 {
+    /// Output: The delta to apply as a result of running the algorithm.
     edges: HashMap<I, BackedgeBuffer<I>>,
+
     prune: prune::Scratch<I>,
     pool: Vec<Neighbor<I>>,
-    // Candidates
     out_neighbors: AdjacencyList<I>,
     in_neighbors: AdjacencyList<I>,
     replace: AdjacencyList<I>,
@@ -90,6 +94,10 @@ where
             set: HashSet::new(),
         }
     }
+
+    pub(crate) fn delta(&self) -> &HashMap<I, BackedgeBuffer<I>> {
+        &self.edges
+    }
 }
 
 //--------//
@@ -98,15 +106,15 @@ where
 
 #[derive(Debug, Clone)]
 pub struct OneHop {
-    replacements: usize,
+    replacements: NonZeroUsize,
 }
 
 impl OneHop {
-    pub fn new(replacements: usize) -> Self {
+    pub fn new(replacements: NonZeroUsize) -> Self {
         Self { replacements }
     }
 
-    pub async fn one_hop<A>(
+    pub(crate) async fn discover<A>(
         &self,
         accessor: &mut A,
         id: A::Id,
@@ -153,15 +161,6 @@ impl OneHop {
             .filter_candidates(prune.borrow_mut(), scratch)
             .await?;
 
-        add_edges_and_drop(
-            prune.borrow_mut(),
-            id,
-            config,
-            &scratch.edges,
-            &mut scratch.prune,
-        )
-        .await?;
-
         Ok(())
     }
 }
@@ -176,7 +175,7 @@ fn assert_send_one_hop<A>(
 where
     A: InplaceDelete,
 {
-    async move { one_hop.one_hop(accessor, id, config, scratch).await }
+    async move { one_hop.discover(accessor, id, config, scratch).await }
 }
 
 //--------//
@@ -185,15 +184,15 @@ where
 
 #[derive(Debug, Clone)]
 pub struct TwoHop {
-    replacements: usize,
+    replacements: NonZeroUsize,
 }
 
 impl TwoHop {
-    pub fn new(replacements: usize) -> Self {
+    pub fn new(replacements: NonZeroUsize) -> Self {
         Self { replacements }
     }
 
-    pub async fn two_hop<A>(
+    pub(crate) async fn discover<A>(
         &self,
         accessor: &mut A,
         id: A::Id,
@@ -244,14 +243,99 @@ impl TwoHop {
             .filter_candidates(prune.borrow_mut(), scratch)
             .await?;
 
-        add_edges_and_drop(
-            prune.borrow_mut(),
+        Ok(())
+    }
+}
+
+//----------------//
+// VisitedAndTopK //
+//----------------//
+
+#[derive(Debug, Clone)]
+pub struct VisitedAndTopK {
+    replacements: NonZeroUsize,
+    l_value: NonZeroUsize,
+    k_value: NonZeroUsize,
+}
+
+impl VisitedAndTopK {
+    pub fn new(
+        replacements: NonZeroUsize,
+        l_value: NonZeroUsize,
+        k_value: NonZeroUsize,
+    ) -> Self {
+        Self { replacements, l_value, k_value }
+    }
+
+
+    pub(crate) async fn discover<A>(
+        &self,
+        accessor: &mut A,
+        id: A::Id,
+        config: &Config,
+        scratch: &mut Scratch<A::Id>,
+    ) -> ANNResult<()>
+    where
+        A: SearchInplaceDelete,
+    {
+        let Self { replacements, l_value, k_value } = self;
+
+        // Find the replacement candidates using graph search.
+        {
+            let mut search_accessor = accessor.search_accessor();
+            let num_start_points = search_accessor.borrow_mut().num_starting_points().await?;
+
+            let mut search_scratch = algorithms::search_scratch(
+                config,
+                l_value.get(),
+                num_start_points,
+            );
+
+            algorithms::search(
+                search_accessor.borrow_mut(),
+                NonZeroUsize::MIN,
+                &mut search_scratch,
+                &mut NoopSearchRecord::new(),
+            ).await?;
+
+            scratch.replace.replace_from_iter_trusted(
+                search_scratch.best.iter().take(l_value.get()).map(|n| *n.id())
+            );
+        }
+
+
+        // Get the current out-neighbors and filter out deleted points from the candidate
+        // stream (if needed) as well as the out-neighbors.
+        accessor
+            .prune_accessor()
+            .borrow_mut()
+            .neighbors()
+            .get_neighbors(id, &mut scratch.out_neighbors)
+            .await?;
+
+        if !accessor.hint_deleted_already_excluded() {
+            accessor.keep_live(&mut scratch.replace);
+        }
+
+        accessor.keep_live(&mut scratch.out_neighbors);
+
+        scratch.in_neighbors.clear();
+        scratch.in_neighbors.overwrite_trusted(&scratch.replace);
+
+        let mut prune = accessor.prune_accessor();
+
+        // The in-neighbors are those in the replacement stream that have an edge `id`.
+        keep_items_referencing(
+            &mut scratch.in_neighbors,
             id,
-            config,
-            &scratch.edges,
-            &mut scratch.prune,
-        )
-        .await?;
+            &mut prune.borrow_mut().neighbors(),
+            &mut AdjacencyList::with_capacity(config.max_degree().get()),
+        ).await?;
+
+        scratch.replace.truncate(k_value.get());
+        FilterCandidates { replacements: *replacements }
+            .filter_candidates(prune.borrow_mut(), scratch)
+            .await?;
 
         Ok(())
     }
@@ -263,7 +347,7 @@ impl TwoHop {
 
 #[derive(Debug, Clone, Copy)]
 struct FilterCandidates {
-    replacements: usize,
+    replacements: NonZeroUsize,
 }
 
 impl FilterCandidates {
@@ -337,7 +421,7 @@ impl FilterCandidates {
             }
 
             pool.sort_unstable_by(neighbor::ord::fast_distance);
-            let best = pool.iter().take(*replacements).map(|x| *x.id()).collect();
+            let best = pool.iter().take(replacements.get()).map(|x| *x.id()).collect();
             edges.insert(*neighbor, best);
         }
 
@@ -367,7 +451,7 @@ impl FilterCandidates {
             }
 
             pool.sort_unstable_by(neighbor::ord::fast_distance);
-            pool.iter().take(*replacements).for_each(|n| {
+            pool.iter().take(replacements.get()).for_each(|n| {
                 edges
                     .entry(*n.id())
                     .or_insert_with(BackedgeBuffer::default)
@@ -424,63 +508,36 @@ where
     Ok(())
 }
 
-// /// This method deletes a vertex without needing to loop over the entire graph to find
-// /// its out-neighbors. It is meant to be called in conjunction with
-// /// [`Self::drop_deleted_neighbors`] run occasionally as a background process.
-// ///
-// /// See `https://arxiv.org/abs/2502.13826` for full description and experiments
-// pub fn inplace_delete<S>(
-//     &self,
-//     strategy: S,
-//     context: &DP::Context,
-//     id: &DP::ExternalId,
-//     num_to_replace: usize,
-//     inplace_delete_method: InplaceDeleteMethod,
-// ) -> impl SendFuture<ANNResult<()>>
-// where
-//     S: InplaceDeleteStrategy<DP> + Sync + Clone,
-//     DP: Delete,
-// {
-//     async move {
-//         let vector_id = self
-//             .data_provider
-//             .to_internal_id(context, id)
-//             .escalate("id translation for `inplace_delete` must succeed")?;
-//
-//         let edges_to_add = self
-//             .inplace_delete_inner(
-//                 &strategy,
-//                 context,
-//                 id,
-//                 num_to_replace,
-//                 &inplace_delete_method,
-//             )
-//             .await?;
-//
-//         let mut delete_set = HashSet::with_capacity(1);
-//         delete_set.insert(vector_id);
-//         let prune_strategy = strategy.prune_strategy();
-//
-//         let mut accessor = prune_strategy
-//             .prune_accessor(self.provider(), context, self.max_occlusion_size())
-//             .into_ann_result()?;
-//
-//         let mut prune_scratch = prune::Scratch::new();
-//
-//         for (neighbor, edges) in edges_to_add.iter() {
-//             self.add_edge_and_prune(
-//                 &mut accessor,
-//                 edges,
-//                 *neighbor,
-//                 &mut prune_scratch,
-//                 Some(&delete_set), // delete the edge to the deleted point as part of add_edge_and_prune
-//             )
-//             .await?
-//         }
-//
-//         self.drop_adj_list(&mut accessor.neighbors(), vector_id)
-//             .await?;
-//
-//         Ok(())
-//     }
-// }
+//-------//
+// Batch //
+//-------//
+
+#[derive(Debug)]
+pub struct Delta<I> {
+    delta: HashMap<I, BackedgeBuffer<I>>,
+}
+
+impl<I> Delta<I> {
+    pub fn new() -> Self {
+        Self {
+            delta: HashMap::new(),
+        }
+    }
+
+    fn accumulate(&mut self, other: &HashMap<I, BackedgeBuffer<I>>)
+    where
+        I: VectorId,
+    {
+        for (src, dst) in other.iter() {
+            self.delta.entry(*src)
+                .and_modify(|b| {
+                    for d in dst.iter() {
+                        b.push(*d);
+                    }
+                })
+                .or_insert_with(|| dst.clone());
+        }
+    }
+}
+
+

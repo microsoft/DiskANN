@@ -241,11 +241,11 @@ impl<T> Clone for BatchPosition<'_, T> {
 impl<T> Copy for BatchPosition<'_, T> {}
 
 //-------------//
-// MultiInsert //
+// BatchInsert //
 //-------------//
 
 #[derive(Debug)]
-pub struct MultiInsert<I>
+pub struct BatchInsert<I>
 where
     I: VectorId,
 {
@@ -253,7 +253,7 @@ where
     buf: AdjacencyList<I>,
 }
 
-impl<I> MultiInsert<I>
+impl<I> BatchInsert<I>
 where
     I: VectorId,
 {
