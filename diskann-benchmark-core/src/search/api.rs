@@ -635,10 +635,10 @@ pub(super) mod tests {
             let num_queries = self.queries;
 
             // End-to-end latency should not be zero.
-            assert_ne!(
-                results.end_to_end_latency().as_seconds(),
-                0.0,
-                "end to end latency should be non-zero"
+            let latency = results.end_to_end_latency().as_seconds();
+            assert!(
+                latency > 0.0,
+                "end to end latency ({latency}s) should be non-negative"
             );
 
             assert_eq!(results.latencies().len(), num_queries);
