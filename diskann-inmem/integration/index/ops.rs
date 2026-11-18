@@ -49,11 +49,10 @@ pub(super) fn load_data(input: &parse::Data, data_type: DataType) -> anyhow::Res
 pub(super) fn insert(
     index: &dyn PartialIndex,
     dataset: DatasetView<'_>,
-    rt: &tokio::runtime::Handle,
 ) -> anyhow::Result<Counters> {
     let before = index.counters();
     for (i, r) in dataset.iter().enumerate() {
-        rt.block_on(index.insert(r, i as u64))?;
+        index.insert(r, i as u64)?;
     }
     before.delta(&index.counters())
 }
@@ -77,7 +76,7 @@ pub(super) fn multi_insert(
             .expect("this should be in-bounds by construction");
 
         let ids = (start as u64)..(end as u64);
-        rt.block_on(index.clone().multi_insert(batch, ids))?;
+        rt.block_on(index.multi_insert(batch, ids))?;
         start = end;
     }
     before.delta(&index.counters())
@@ -87,7 +86,6 @@ pub(super) fn knn(
     index: &dyn PartialIndex,
     searches: &parse::Knn,
     queries: DatasetView<'_>,
-    rt: &tokio::runtime::Handle,
 ) -> anyhow::Result<Vec<KnnStats>> {
     let parse::Knn {
         searches,
@@ -118,7 +116,7 @@ pub(super) fn knn(
         for (out, query) in std::iter::zip(ids.rows_mut(), queries.iter()) {
             neighbors.clear();
 
-            let stats = rt.block_on(index.search(query, *params, &mut neighbors))?;
+            let stats = index.search(query, *params, &mut neighbors)?;
             misc += stats;
 
             std::iter::zip(out.iter_mut(), neighbors.iter()).for_each(|(d, s)| *d = *s.id());

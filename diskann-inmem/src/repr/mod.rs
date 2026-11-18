@@ -105,6 +105,12 @@ pub trait Representation: Send + Sync + 'static {
     /// Holding onto the resulting [`ReadGuard`] prevents ID reuse in the parent and thus
     /// should be held for as short a duration as possible.
     fn read_guard(&self) -> ANNResult<ReadGuard<'_>>;
+
+    /// Protect the [`Representation`] against recycling IDs.
+    ///
+    /// Holding onto the resulting [`ReadGuard`] prevents ID reuse in the parent and thus
+    /// should be held for as short a duration as possible.
+    fn write_guard(&self) -> ANNResult<WriteGuard<'_>>;
 }
 
 #[derive(Debug)]
@@ -118,6 +124,25 @@ impl<'a> ReadGuard<'a> {
     }
 
     pub(crate) fn into_inner(self) -> epoch::ReadGuard<'a> {
+        self.guard
+    }
+
+    pub(crate) fn share(&self) -> Self {
+        Self { guard: self.guard.share() }
+    }
+}
+
+#[derive(Debug)]
+pub struct WriteGuard<'a> {
+    guard: epoch::WriteGuard<'a>,
+}
+
+impl<'a> WriteGuard<'a> {
+    pub(crate) fn new(guard: epoch::WriteGuard<'a>) -> Self {
+        Self { guard }
+    }
+
+    pub(crate) fn into_inner(self) -> epoch::WriteGuard<'a> {
         self.guard
     }
 }
@@ -159,7 +184,7 @@ pub trait Search: Representation {
     /// The type of the query. This should be equivalent to the generic parameter in
     /// [`Set`], but needs to be replicated here due to limitations in the current trait
     /// design.
-    type Query<'a>;
+    type Query<'a>: Send + Sync + Copy; // FIXME: Remove unnecessary bounds
 
     /// Construct a [`crate::provider::SearchAccessor`] for the query.
     ///
