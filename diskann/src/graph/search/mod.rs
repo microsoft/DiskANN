@@ -36,11 +36,7 @@
 
 use diskann_utils::future::SendFuture;
 
-use crate::{
-    ANNResult,
-    graph::{self, index::DiskANNIndex},
-    provider::DataProvider,
-};
+use crate::{ANNResult, graph, provider::HasId};
 
 mod filtered_range_search;
 mod inline_filter_search;
@@ -69,10 +65,9 @@ pub(crate) mod scratch;
 /// - [`MultihopFilterSearch`] - Label-filtered search with multi-hop expansion
 /// - [`InlineFilterSearch`] - Inline filtered search with optional adaptive L sizing
 /// - [`RecordedKnn`] - K-NN search with path recording for debugging
-pub trait Search<'a, DP, S, T>
+pub trait Search<A>
 where
-    DP: DataProvider,
-    S: graph::glue::SearchStrategy<'a, DP, T>,
+    A: HasId,
 {
     /// The result type returned by this search.
     type Output;
@@ -101,16 +96,13 @@ where
     /// Returns an error if there is a failure accessing elements or computing distances.
     fn search<O, PP, OB>(
         self,
-        index: &'a DiskANNIndex<DP>,
-        strategy: &'a S,
+        accessor: &mut A,
         processor: PP,
-        context: &'a DP::Context,
-        query: T,
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<Self::Output>>
     where
         O: Send,
-        PP: graph::glue::SearchPostProcess<S::SearchAccessor, T, O> + Send + Sync,
+        PP: graph::glue::SearchPostProcess<A, O> + Send + Sync,
         OB: graph::search_output_buffer::SearchOutputBuffer<O> + Send + ?Sized;
 }
 

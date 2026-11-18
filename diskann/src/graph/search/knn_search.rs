@@ -15,12 +15,11 @@ use crate::{
     ANNResult, convert_error,
     error::IntoANNResult,
     graph::{
-        glue::{SearchAccessor, SearchPostProcess, SearchStrategy},
-        index::{DiskANNIndex, SearchStats},
+        algorithms::{self, SearchStats},
+        glue::{SearchAccessor, SearchPostProcess},
         search::record::NoopSearchRecord,
         search_output_buffer::SearchOutputBuffer,
     },
-    provider::DataProvider,
 };
 
 /// Error type for [`Knn`] parameter validation.
@@ -119,11 +118,9 @@ impl Knn {
     }
 }
 
-impl<'a, DP, S, T> Search<'a, DP, S, T> for Knn
+impl<A> Search<A> for Knn
 where
-    DP: DataProvider,
-    S: SearchStrategy<'a, DP, T, SearchAccessor: SearchAccessor>,
-    T: Copy + Send + Sync,
+    A: SearchAccessor,
 {
     type Output = SearchStats;
 
@@ -154,37 +151,31 @@ where
     /// Returns an error if there is a failure accessing elements or computing distances.
     fn search<O, PP, OB>(
         self,
-        index: &'a DiskANNIndex<DP>,
-        strategy: &'a S,
+        accessor: &mut A,
         processor: PP,
-        context: &'a DP::Context,
-        query: T,
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<Self::Output>>
     where
         O: Send,
-        PP: SearchPostProcess<S::SearchAccessor, T, O> + Send + Sync,
+        PP: SearchPostProcess<A, O> + Send + Sync,
         OB: SearchOutputBuffer<O> + Send + ?Sized,
     {
         async move {
-            let mut accessor = strategy
-                .search_accessor(&index.data_provider, context, query)
-                .into_ann_result()?;
-
             let num_start_ids = accessor.num_starting_points().await?;
-            let mut scratch = index.search_scratch(self.l_value.get(), num_start_ids);
+            let max_degree = algorithms::max_degree_from_hint(accessor.max_degree_hint());
+            let mut scratch =
+                algorithms::search_scratch_2(max_degree, self.l_value.get(), num_start_ids);
 
-            let stats = index
-                .search_internal(
-                    Some(self.beam_width.get()),
-                    &mut accessor,
-                    &mut scratch,
-                    &mut NoopSearchRecord::new(),
-                )
-                .await?;
+            let stats = algorithms::search(
+                accessor,
+                self.beam_width(),
+                &mut scratch,
+                &mut NoopSearchRecord::new(),
+            )
+            .await?;
 
             let result_count = processor
-                .post_process(&mut accessor, query, scratch.best.iter(), output)
+                .post_process(accessor, scratch.best.iter(), output)
                 .await
                 .into_ann_result()?;
 
@@ -193,9 +184,9 @@ where
     }
 }
 
-////////////////////////
+//////////////////
 // Recorded Knn //
-////////////////////////
+//////////////////
 
 /// K-NN search with traversal path recording.
 ///
@@ -215,48 +206,40 @@ impl<'r, SR: ?Sized> RecordedKnn<'r, SR> {
     }
 }
 
-impl<'a, DP, S, T, SR> Search<'a, DP, S, T> for RecordedKnn<'a, SR>
+impl<A, SR> Search<A> for RecordedKnn<'_, SR>
 where
-    DP: DataProvider,
-    S: SearchStrategy<'a, DP, T, SearchAccessor: SearchAccessor>,
-    T: Copy + Send + Sync,
-    SR: super::record::SearchRecord<DP::InternalId> + ?Sized,
+    A: SearchAccessor,
+    SR: super::record::SearchRecord<A::Id> + ?Sized,
 {
     type Output = SearchStats;
 
     fn search<O, PP, OB>(
         self,
-        index: &'a DiskANNIndex<DP>,
-        strategy: &'a S,
+        accessor: &mut A,
         processor: PP,
-        context: &'a DP::Context,
-        query: T,
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<Self::Output>>
     where
         O: Send,
-        PP: SearchPostProcess<S::SearchAccessor, T, O> + Send + Sync,
+        PP: SearchPostProcess<A, O> + Send + Sync,
         OB: SearchOutputBuffer<O> + Send + ?Sized,
     {
         async move {
-            let mut accessor = strategy
-                .search_accessor(&index.data_provider, context, query)
-                .into_ann_result()?;
-
             let num_start_ids = accessor.num_starting_points().await?;
-            let mut scratch = index.search_scratch(self.inner.l_value.get(), num_start_ids);
+            let max_degree = algorithms::max_degree_from_hint(accessor.max_degree_hint());
+            let mut scratch =
+                algorithms::search_scratch_2(max_degree, self.inner.l_value.get(), num_start_ids);
 
-            let stats = index
-                .search_internal(
-                    Some(self.inner.beam_width.get()),
-                    &mut accessor,
-                    &mut scratch,
-                    self.recorder,
-                )
-                .await?;
+            let stats = algorithms::search(
+                accessor,
+                self.inner.beam_width(),
+                &mut scratch,
+                self.recorder,
+            )
+            .await?;
 
             let result_count = processor
-                .post_process(&mut accessor, query, scratch.best.iter(), output)
+                .post_process(accessor, scratch.best.iter(), output)
                 .await
                 .into_ann_result()?;
 

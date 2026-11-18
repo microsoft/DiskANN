@@ -3,17 +3,18 @@
  * Licensed under the MIT license.
  */
 
+use std::num::NonZeroUsize;
+
 use diskann_utils::future::SendFuture;
 
 use crate::{
     ANNError, ANNResult,
     graph::{
-        DiskANNIndex,
+        algorithms,
         glue::SearchAccessor,
         search::{record::NoopSearchRecord, scratch::SearchScratch},
     },
     neighbor::{Neighbor, NeighborPriorityQueue},
-    provider::DataProvider,
     utils::VectorId,
 };
 
@@ -24,23 +25,20 @@ use crate::{
 ///
 /// See also: [`DiskANNIndex::paged_search`], [`DiskANNIndex::paged_search_with_init_ids`].
 #[derive(Debug)]
-pub struct PagedSearch<'a, DP, A>
+pub struct PagedSearch<A>
 where
-    DP: DataProvider,
-    A: SearchAccessor<Id = DP::InternalId> + 'a,
+    A: SearchAccessor,
 {
-    pub(in crate::graph) index: &'a DiskANNIndex<DP>,
-    pub(in crate::graph) scratch: SearchScratch<DP::InternalId>,
-    pub(in crate::graph) computed_result: Vec<Neighbor<DP::InternalId>>,
+    pub(in crate::graph) scratch: SearchScratch<A::Id>,
+    pub(in crate::graph) computed_result: Vec<Neighbor<A::Id>>,
     pub(in crate::graph) next_result_index: usize,
     pub(in crate::graph) search_param_l: usize,
     pub(in crate::graph) accessor: A,
 }
 
-impl<'a, DP, A> PagedSearch<'a, DP, A>
+impl<A> PagedSearch<A>
 where
-    DP: DataProvider,
-    A: SearchAccessor<Id = DP::InternalId> + 'a,
+    A: SearchAccessor,
 {
     /// Return the contained [`SearchAccessor`].
     ///
@@ -50,10 +48,9 @@ where
     }
 }
 
-impl<'a, DP, A> PagedSearch<'a, DP, A>
+impl<A> PagedSearch<A>
 where
-    DP: DataProvider,
-    A: SearchAccessor<Id = DP::InternalId> + 'a,
+    A: SearchAccessor,
 {
     /// Returns the next page of at most `k` nearest-neighbor results.
     ///
@@ -66,7 +63,7 @@ where
     pub fn next_page(
         &mut self,
         k: usize,
-    ) -> impl SendFuture<ANNResult<Vec<Neighbor<DP::InternalId>>>> {
+    ) -> impl SendFuture<ANNResult<Vec<Neighbor<A::Id>>>> {
         async move {
             if k > self.search_param_l {
                 return ANNResult::Err(ANNError::message(
@@ -98,14 +95,13 @@ where
             }
 
             // Resume graph search to fill the next batch.
-            self.index
-                .search_internal(
-                    None, // beam_width
-                    &mut self.accessor,
-                    &mut self.scratch,
-                    &mut NoopSearchRecord::new(),
-                )
-                .await?;
+            algorithms::search(
+                &mut self.accessor,
+                NonZeroUsize::MIN,
+                &mut self.scratch,
+                &mut NoopSearchRecord::new(),
+            )
+            .await?;
 
             let start_points = self.accessor.starting_points().await?;
             let (mut candidates, total_considered) =

@@ -13,13 +13,12 @@ use crate::{
     ANNResult, convert_error,
     error::IntoANNResult,
     graph::{
-        glue::{self, FilteredAccessor, SearchPostProcess, SearchStrategy},
-        index::{DiskANNIndex, SearchStats},
+        algorithms::{self, SearchStats},
+        glue::{self, FilteredAccessor, SearchPostProcess},
         search::record::NoopSearchRecord,
         search_output_buffer::SearchOutputBuffer,
     },
     neighbor::{self, Neighbor},
-    provider::DataProvider,
     utils::VectorId,
 };
 
@@ -102,45 +101,41 @@ impl InlineFilterSearch {
     }
 }
 
-impl<'a, DP, S, T> Search<'a, DP, S, T> for InlineFilterSearch
+impl<A> Search<A> for InlineFilterSearch
 where
-    DP: DataProvider,
-    S: SearchStrategy<'a, DP, T, SearchAccessor: FilteredAccessor>,
-    T: Copy + Send + Sync,
+    A: FilteredAccessor,
 {
     type Output = SearchStats;
 
     fn search<O, PP, OB>(
         self,
-        index: &'a DiskANNIndex<DP>,
-        strategy: &'a S,
+        accessor: &mut A,
         processor: PP,
-        context: &'a DP::Context,
-        query: T,
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<Self::Output>>
     where
         O: Send,
-        PP: SearchPostProcess<S::SearchAccessor, T, O> + Send + Sync,
+        PP: SearchPostProcess<A, O> + Send + Sync,
         OB: SearchOutputBuffer<O> + Send + ?Sized,
     {
         async move {
-            let mut accessor = strategy
-                .search_accessor(&index.data_provider, context, query)
-                .into_ann_result()?;
-
             let num_starting_points = accessor.num_starting_points().await?;
+            let max_degree = algorithms::max_degree_from_hint(accessor.max_degree_hint());
 
-            let mut scratch = index.search_scratch(self.inner.l_value().get(), num_starting_points);
+            let mut scratch = algorithms::search_scratch_2(
+                max_degree,
+                self.inner.l_value().get(),
+                num_starting_points,
+            );
 
             let Ret {
                 cmps,
                 hops,
                 matched_results,
             } = inline_filter_search_internal(
-                index.max_degree_with_slack(),
+                max_degree.get(),
                 &self.inner,
-                &mut accessor,
+                accessor,
                 &mut scratch,
                 &mut NoopSearchRecord::new(),
                 self.adaptive_l,
@@ -149,8 +144,7 @@ where
 
             let result_count = processor
                 .post_process(
-                    &mut accessor,
-                    query,
+                    accessor,
                     matched_results.into_iter().take(self.inner.l_value().get()),
                     output,
                 )

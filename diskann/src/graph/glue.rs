@@ -95,9 +95,7 @@
 //!
 //!   Like insertion, this trait delegates pruning to a dedicated `PruneStrategy`.
 
-use std::{future::Future, sync::Arc};
-
-use diskann_utils::{Reborrow, future::SendFuture, views::rowmajor::Matrix};
+use diskann_utils::{future::SendFuture, views::rowmajor::Matrix};
 use diskann_vector::DistanceFunction;
 use futures_util::FutureExt;
 
@@ -106,7 +104,7 @@ use crate::{
     error::StandardError,
     graph::{SearchOutputBuffer, workingset},
     neighbor::Neighbor,
-    provider::{self, DataProvider, HasId},
+    provider::{self, HasId},
 };
 
 /// The main extension point for graph search.
@@ -491,6 +489,10 @@ pub trait FilteredAccessor: HasId + Send + Sync {
     // Provided methods //
     //////////////////////
 
+    fn max_degree_hint(&self) -> Option<std::num::NonZeroUsize> {
+        None
+    }
+
     /// Indicate that search should terminate as soon as possible.
     ///
     /// The provided implementation always returns `false`.
@@ -576,30 +578,30 @@ where
 /// The interfaces `contains` and `insert` agree with each other.
 impl<T> HybridPredicate<T> for NotInMut<'_, T> where T: Clone + Eq + std::hash::Hash {}
 
-/// A search strategy for query objects of type `T`.
-///
-/// This trait should be overloaded by data providers wishing to extend
-/// (search)[`crate::graph::DiskANNIndex::search`].
-pub trait SearchStrategy<'a, Provider, T>: Send + Sync
-where
-    Provider: DataProvider,
-{
-    /// An error that can occur when getting a search_accessor.
-    type SearchAccessorError: StandardError;
-
-    /// The concrete type of the accessor that is used to access `Self` during the greedy
-    /// graph search. The query will be provided to the accessor exactly once during search
-    /// to construct the query computer.
-    type SearchAccessor: HasId<Id = Provider::InternalId> + Send + Sync;
-
-    /// Construct and return the search accessor.
-    fn search_accessor(
-        &'a self,
-        provider: &'a Provider,
-        context: &'a Provider::Context,
-        query: T,
-    ) -> Result<Self::SearchAccessor, Self::SearchAccessorError>;
-}
+// /// A search strategy for query objects of type `T`.
+// ///
+// /// This trait should be overloaded by data providers wishing to extend
+// /// (search)[`crate::graph::DiskANNIndex::search`].
+// pub trait SearchStrategy<'a, Provider, T>: Send + Sync
+// where
+//     Provider: DataProvider,
+// {
+//     /// An error that can occur when getting a search_accessor.
+//     type SearchAccessorError: StandardError;
+//
+//     /// The concrete type of the accessor that is used to access `Self` during the greedy
+//     /// graph search. The query will be provided to the accessor exactly once during search
+//     /// to construct the query computer.
+//     type SearchAccessor: HasId<Id = Provider::InternalId> + Send + Sync;
+//
+//     /// Construct and return the search accessor.
+//     fn search_accessor(
+//         &'a self,
+//         provider: &'a Provider,
+//         context: &'a Provider::Context,
+//         query: T,
+//     ) -> Result<Self::SearchAccessor, Self::SearchAccessorError>;
+// }
 
 /// Opt-in trait for strategies that have a default post-processor.
 ///
@@ -608,35 +610,33 @@ where
 /// post-processor is specified. The search infrastructure will call
 /// `default_post_processor()` to obtain the processor and invoke its
 /// [`SearchPostProcess::post_process`] method.
-pub trait DefaultPostProcessor<'a, Provider, T, O = <Provider as DataProvider>::InternalId>:
-    SearchStrategy<'a, Provider, T>
+pub trait DefaultPostProcessor<O>: HasId + Sized
 where
-    Provider: DataProvider,
     O: Send,
 {
     /// The default post-processor type.
-    type Processor: SearchPostProcess<Self::SearchAccessor, T, O> + Send + Sync;
+    type Processor: SearchPostProcess<Self, O> + Send + Sync;
 
     /// Create the default post-processor.
-    fn default_post_processor(&'a self) -> Self::Processor;
+    fn default_post_processor(&self) -> Self::Processor;
 }
 
-/// Aggregate trait for strategies that support both search access and a default post-processor.
-pub trait DefaultSearchStrategy<'a, Provider, T, O = <Provider as DataProvider>::InternalId>:
-    SearchStrategy<'a, Provider, T> + DefaultPostProcessor<'a, Provider, T, O>
-where
-    Provider: DataProvider,
-    O: Send,
-{
-}
-
-impl<'a, S, Provider, T, O> DefaultSearchStrategy<'a, Provider, T, O> for S
-where
-    S: SearchStrategy<'a, Provider, T> + DefaultPostProcessor<'a, Provider, T, O>,
-    Provider: DataProvider,
-    O: Send,
-{
-}
+// /// Aggregate trait for strategies that support both search access and a default post-processor.
+// pub trait DefaultSearchStrategy<'a, Provider, T, O = <Provider as DataProvider>::InternalId>:
+//     SearchStrategy<'a, Provider, T> + DefaultPostProcessor<'a, Provider, T, O>
+// where
+//     Provider: DataProvider,
+//     O: Send,
+// {
+// }
+//
+// impl<'a, S, Provider, T, O> DefaultSearchStrategy<'a, Provider, T, O> for S
+// where
+//     S: SearchStrategy<'a, Provider, T> + DefaultPostProcessor<'a, Provider, T, O>,
+//     Provider: DataProvider,
+//     O: Send,
+// {
+// }
 
 /// Convenience macro for implementing [`DefaultPostProcessor`] when the processor
 /// is a [`Default`]-constructible type.
@@ -662,7 +662,7 @@ macro_rules! default_post_processor {
 ///
 /// Simple implementations include [`CopyIds`], which simply forwards the search results
 /// directly into the output buffer.
-pub trait SearchPostProcess<A, T, O = <A as HasId>::Id>
+pub trait SearchPostProcess<A, O = <A as HasId>::Id>
 where
     A: HasId,
 {
@@ -673,7 +673,6 @@ where
     fn post_process<I, B>(
         &self,
         accessor: &mut A,
-        query: T,
         candidates: I,
         output: &mut B,
     ) -> impl std::future::Future<Output = Result<usize, Self::Error>> + Send
@@ -687,7 +686,7 @@ where
 #[derive(Debug, Default, Clone, Copy)]
 pub struct CopyIds;
 
-impl<A, T> SearchPostProcess<A, T> for CopyIds
+impl<A> SearchPostProcess<A> for CopyIds
 where
     A: HasId,
 {
@@ -695,7 +694,6 @@ where
     fn post_process<I, B>(
         &self,
         _accessor: &mut A,
-        _query: T,
         candidates: I,
         output: &mut B,
     ) -> impl std::future::Future<Output = Result<usize, Self::Error>> + Send
@@ -711,7 +709,7 @@ where
 /// A transformation step helpful for modifying input iterators and accessor types for
 /// [`SearchPostProcess`]. Multiple instances of [`SearchPostProcessStep`] can be cascaded
 /// using a [`Pipeline`].
-pub trait SearchPostProcessStep<A, T, O = <A as HasId>::Id>
+pub trait SearchPostProcessStep<A, O = <A as HasId>::Id>
 where
     A: HasId,
 {
@@ -730,24 +728,22 @@ where
         &self,
         next: &Next,
         accessor: &mut A,
-        query: T,
         candidates: I,
         output: &mut B,
     ) -> impl std::future::Future<Output = Result<usize, Self::Error<Next::Error>>> + Send
     where
         I: Iterator<Item = Neighbor<A::Id>> + Send,
         B: SearchOutputBuffer<O> + Send + ?Sized,
-        Next: SearchPostProcess<Self::NextAccessor, T, O> + Sync;
+        Next: SearchPostProcess<Self::NextAccessor, O> + Sync;
 }
 
 /// A [`SearchPostProcessStep`] that filters out start points from the candidate stream.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct FilterStartPoints;
 
-impl<A, T, O> SearchPostProcessStep<A, T, O> for FilterStartPoints
+impl<A, O> SearchPostProcessStep<A, O> for FilterStartPoints
 where
     A: SearchAccessor,
-    T: Copy + Send + Sync,
 {
     /// A this level, sub-errors are converted into [`ANNError`] to provide additional
     /// context idenfying the problem as occurring in a sub-process of filtering.
@@ -763,27 +759,21 @@ where
         &self,
         next: &Next,
         accessor: &mut A,
-        query: T,
         candidates: I,
         output: &mut B,
     ) -> ANNResult<usize>
     where
         I: Iterator<Item = Neighbor<A::Id>> + Send,
         B: SearchOutputBuffer<O> + Send + ?Sized,
-        Next: SearchPostProcess<A, T, O> + Sync,
+        Next: SearchPostProcess<A, O> + Sync,
     {
         let filter = accessor.is_not_start_point().await?;
-        next.post_process(
-            accessor,
-            query,
-            candidates.filter(|n| filter(*n.id())),
-            output,
-        )
-        .await
-        .map_err(|err| {
-            let err = err.into();
-            err.context("after filtering start points")
-        })
+        next.post_process(accessor, candidates.filter(|n| filter(*n.id())), output)
+            .await
+            .map_err(|err| {
+                let err = err.into();
+                err.context("after filtering start points")
+            })
     }
 }
 
@@ -811,18 +801,17 @@ impl<Head, Tail> Pipeline<Head, Tail> {
     }
 }
 
-impl<A, T, O, Head, Tail> SearchPostProcess<A, T, O> for Pipeline<Head, Tail>
+impl<A, O, Head, Tail> SearchPostProcess<A, O> for Pipeline<Head, Tail>
 where
     A: HasId,
-    Head: SearchPostProcessStep<A, T, O>,
-    Tail: SearchPostProcess<Head::NextAccessor, T, O> + Sync,
+    Head: SearchPostProcessStep<A, O>,
+    Tail: SearchPostProcess<Head::NextAccessor, O> + Sync,
 {
     type Error = Head::Error<Tail::Error>;
 
     fn post_process<I, B>(
         &self,
         accessor: &mut A,
-        query: T,
         candidates: I,
         output: &mut B,
     ) -> impl std::future::Future<Output = Result<usize, Self::Error>> + Send
@@ -831,7 +820,7 @@ where
         B: SearchOutputBuffer<O> + Send + ?Sized,
     {
         self.head
-            .post_process_step(&self.tail, accessor, query, candidates, output)
+            .post_process_step(&self.tail, accessor, candidates, output)
     }
 }
 
@@ -922,119 +911,119 @@ pub trait PruneAccessor: HasId + Send + Sync {
         Itr: ExactSizeIterator<Item = Self::Id> + Clone + Send + Sync;
 }
 
-/// A strategy for inserting elements from the data provider.
-///
-/// This strategy is used during the greedy search portion of index construction.
-/// After the candidate list has been retrieved from greedy search, the [`PruneStrategy`]
-/// is used for the rest.
-pub trait InsertStrategy<'a, Provider, T>: Send + Sync + 'static
-where
-    Provider: DataProvider,
-{
-    /// The type of the [`SearchAccessor`] used for candidate generation.
-    type SearchAccessor: SearchAccessor<Id = Provider::InternalId>;
+// /// A strategy for inserting elements from the data provider.
+// ///
+// /// This strategy is used during the greedy search portion of index construction.
+// /// After the candidate list has been retrieved from greedy search, the [`PruneStrategy`]
+// /// is used for the rest.
+// pub trait InsertStrategy<'a, Provider, T>: Send + Sync + 'static
+// where
+//     Provider: DataProvider,
+// {
+//     /// The type of the [`SearchAccessor`] used for candidate generation.
+//     type SearchAccessor: SearchAccessor<Id = Provider::InternalId>;
+//
+//     /// An error that can occur when getting a search_accessor.
+//     type SearchAccessorError: StandardError;
+//
+//     /// The pruning strategy associated with the insertion strategy.
+//     type PruneStrategy: PruneStrategy<Provider>;
+//
+//     /// This API is invoked during inserts to create the associated [`SearchAccessor`].
+//     fn insert_search_accessor(
+//         &'a self,
+//         provider: &'a Provider,
+//         context: &'a Provider::Context,
+//         vector: T,
+//     ) -> Result<Self::SearchAccessor, Self::SearchAccessorError>;
+//
+//     /// Return the prune strategy used for insertion.
+//     fn prune_strategy(&self) -> Self::PruneStrategy;
+// }
 
-    /// An error that can occur when getting a search_accessor.
-    type SearchAccessorError: StandardError;
-
-    /// The pruning strategy associated with the insertion strategy.
-    type PruneStrategy: PruneStrategy<Provider>;
-
-    /// This API is invoked during inserts to create the associated [`SearchAccessor`].
-    fn insert_search_accessor(
-        &'a self,
-        provider: &'a Provider,
-        context: &'a Provider::Context,
-        vector: T,
-    ) -> Result<Self::SearchAccessor, Self::SearchAccessorError>;
-
-    /// Return the prune strategy used for insertion.
-    fn prune_strategy(&self) -> Self::PruneStrategy;
-}
-
-/// A strategy for pruning elements from the data provider.
-///
-/// This strategy type does not have an additional `T` parameter because there is not a
-/// well-defined query-type to hook onto. Instead, `PruneStrategies` are reached via
-/// other types like [`InsertStrategy`] or [`InplaceDeleteStrategy`].
-pub trait PruneStrategy<Provider>: Send + Sync + 'static
-where
-    Provider: DataProvider,
-{
-    /// The concrete type of the [`PruneAccessor`] that is used during index construction.
-    type PruneAccessor<'a>: PruneAccessor<Id = Provider::InternalId>;
-
-    /// An error that can occur when getting the prune accessor.
-    type PruneAccessorError: StandardError;
-
-    /// Return the [`PruneAccessor`]. Argument `capacity` provides an upper bound on the
-    /// length of the iterator passed to [`PruneAccessor::fill`].
-    fn prune_accessor<'a>(
-        &'a self,
-        provider: &'a Provider,
-        context: &'a Provider::Context,
-        capacity: usize,
-    ) -> Result<Self::PruneAccessor<'a>, Self::PruneAccessorError>;
-}
-
-/// Strategy for bulk insertion via [`multi_insert`](crate::graph::DiskANNIndex::multi_insert).
-///
-/// Multi-insert bulk-inserts a batch of vectors and provides this batch to
-/// [`MultiInsertStrategy::finish`] to create a seed. This seed is then provided to
-/// multiple calls to [`MultiInsertStrategy::seeded_prune_accessor`] to construct the various
-/// [`PruneAccessor`] instances needed during build.
-///
-/// This architecture allows implementations to use overlays like
-/// [`Overlay`](crate::graph::workingset::map::Overlay) so accesses to batch elements can
-/// be routed locally rather than all the way back to the underlying provider.
-pub trait MultiInsertStrategy<Provider, B>: Send + Sync + 'static
-where
-    Provider: DataProvider,
-    B: Batch,
-{
-    /// The prune-accessor "seed", potentially containing `B` for faster access.
-    type Seed: Send + Sync + 'static;
-
-    /// Any critical error that occurs during [`finish`](Self::finish).
-    type FinishError: Into<ANNError> + std::fmt::Debug + Send + Sync;
-
-    /// The delegated [`PruneStrategy`] used for pruning.
-    type PruneStrategy: PruneStrategy<Provider>;
-
-    /// The delegated [`InsertStrategy`] for most insertion related decisions.
-    type InsertStrategy: for<'a> InsertStrategy<'a, Provider, B::Element<'a>, PruneStrategy = Self::PruneStrategy>;
-
-    /// Construct the associated [`InsertStrategy`].
-    fn insert_strategy(&self) -> Self::InsertStrategy;
-
-    /// Package `batch` and the associated internal IDs into an intermediate seed.
-    ///
-    /// This seed type will be used to create the actual pruning working set on the various
-    /// threads processing the batch insertion.
-    ///
-    /// Implementations may assume that `batch.len() == ids.len()`.
-    fn finish<Itr>(
-        &self,
-        provider: &Provider,
-        context: &Provider::Context,
-        batch: &Arc<B>,
-        ids: Itr,
-    ) -> impl std::future::Future<Output = Result<Self::Seed, Self::FinishError>> + Send
-    where
-        Itr: ExactSizeIterator<Item = Provider::InternalId> + Send;
-
-    /// Construct a [`PruneAccessor`] from a seed returned by [`Self::finish`].
-    ///
-    /// Argument `capacity` provides an upper bound on the iterator length for
-    /// [`PruneAccessor::fill`].
-    fn seeded_prune_accessor<'a>(
-        &'a self,
-        provider: &'a Provider,
-        context: &'a Provider::Context,
-        seed: &'a Self::Seed,
-        capacity: usize,
-    ) -> ANNResult<<Self::PruneStrategy as PruneStrategy<Provider>>::PruneAccessor<'a>>;
-}
+// /// A strategy for pruning elements from the data provider.
+// ///
+// /// This strategy type does not have an additional `T` parameter because there is not a
+// /// well-defined query-type to hook onto. Instead, `PruneStrategies` are reached via
+// /// other types like [`InsertStrategy`] or [`InplaceDeleteStrategy`].
+// pub trait PruneStrategy<Provider>: Send + Sync + 'static
+// where
+//     Provider: DataProvider,
+// {
+//     /// The concrete type of the [`PruneAccessor`] that is used during index construction.
+//     type PruneAccessor<'a>: PruneAccessor<Id = Provider::InternalId>;
+//
+//     /// An error that can occur when getting the prune accessor.
+//     type PruneAccessorError: StandardError;
+//
+//     /// Return the [`PruneAccessor`]. Argument `capacity` provides an upper bound on the
+//     /// length of the iterator passed to [`PruneAccessor::fill`].
+//     fn prune_accessor<'a>(
+//         &'a self,
+//         provider: &'a Provider,
+//         context: &'a Provider::Context,
+//         capacity: usize,
+//     ) -> Result<Self::PruneAccessor<'a>, Self::PruneAccessorError>;
+// }
+//
+// /// Strategy for bulk insertion via [`multi_insert`](crate::graph::DiskANNIndex::multi_insert).
+// ///
+// /// Multi-insert bulk-inserts a batch of vectors and provides this batch to
+// /// [`MultiInsertStrategy::finish`] to create a seed. This seed is then provided to
+// /// multiple calls to [`MultiInsertStrategy::seeded_prune_accessor`] to construct the various
+// /// [`PruneAccessor`] instances needed during build.
+// ///
+// /// This architecture allows implementations to use overlays like
+// /// [`Overlay`](crate::graph::workingset::map::Overlay) so accesses to batch elements can
+// /// be routed locally rather than all the way back to the underlying provider.
+// pub trait MultiInsertStrategy<Provider, B>: Send + Sync + 'static
+// where
+//     Provider: DataProvider,
+//     B: Batch,
+// {
+//     /// The prune-accessor "seed", potentially containing `B` for faster access.
+//     type Seed: Send + Sync + 'static;
+//
+//     /// Any critical error that occurs during [`finish`](Self::finish).
+//     type FinishError: Into<ANNError> + std::fmt::Debug + Send + Sync;
+//
+//     /// The delegated [`PruneStrategy`] used for pruning.
+//     type PruneStrategy: PruneStrategy<Provider>;
+//
+//     /// The delegated [`InsertStrategy`] for most insertion related decisions.
+//     type InsertStrategy: for<'a> InsertStrategy<'a, Provider, B::Element<'a>, PruneStrategy = Self::PruneStrategy>;
+//
+//     /// Construct the associated [`InsertStrategy`].
+//     fn insert_strategy(&self) -> Self::InsertStrategy;
+//
+//     /// Package `batch` and the associated internal IDs into an intermediate seed.
+//     ///
+//     /// This seed type will be used to create the actual pruning working set on the various
+//     /// threads processing the batch insertion.
+//     ///
+//     /// Implementations may assume that `batch.len() == ids.len()`.
+//     fn finish<Itr>(
+//         &self,
+//         provider: &Provider,
+//         context: &Provider::Context,
+//         batch: &Arc<B>,
+//         ids: Itr,
+//     ) -> impl std::future::Future<Output = Result<Self::Seed, Self::FinishError>> + Send
+//     where
+//         Itr: ExactSizeIterator<Item = Provider::InternalId> + Send;
+//
+//     /// Construct a [`PruneAccessor`] from a seed returned by [`Self::finish`].
+//     ///
+//     /// Argument `capacity` provides an upper bound on the iterator length for
+//     /// [`PruneAccessor::fill`].
+//     fn seeded_prune_accessor<'a>(
+//         &'a self,
+//         provider: &'a Provider,
+//         context: &'a Provider::Context,
+//         seed: &'a Self::Seed,
+//         capacity: usize,
+//     ) -> ANNResult<<Self::PruneStrategy as PruneStrategy<Provider>>::PruneAccessor<'a>>;
+// }
 
 /// A batch of elements indexed positionally.
 ///
@@ -1076,84 +1065,84 @@ impl<T: Send + Sync + 'static> Batch for diskann_utils::views::rowmajor::Owned<T
     }
 }
 
-/// A strategy for supporting inplace deletes.
-///
-/// In place deletes consist of two phases:
-///
-/// 1. An initial graph search using a value extracted from the index to generate a list
-///    of candidates.
-///
-/// 2. Multiple rounds of pruning on the extracted candidates list.
-///
-/// Like [`PruneStrategy`], inplace-deletion does not have a query type `T` to be generic
-/// over. Thus, interfaces accept an [`InplaceDeleteStrategy`] directly.
-pub trait InplaceDeleteStrategy<Provider>: Send + Sync + 'static
-where
-    Provider: DataProvider,
-{
-    /// The type provided to the search portion of inplace-deletion and used to instantiate
-    /// the required `SearchStrategy`.
-    ///
-    /// With the by-value `T` parameter design, `DeleteElement<'a>` is expected to be a
-    /// sized, `Copy` type (typically a reference like `&'a [f32]`).
-    type DeleteElement<'a>: Copy + Send + Sync;
-
-    /// The guard type returned by `get_delete_element`.
-    ///
-    /// The guard holds the retrieved element data and must be convertible to
-    /// `DeleteElement<'a>` via [`Reborrow`]. This allows the guard's lifetime to scope the
-    /// validity of the extracted element.
-    type DeleteElementGuard: Send
-        + Sync
-        + for<'a> Reborrow<'a, Target = Self::DeleteElement<'a>>
-        + 'static;
-
-    /// Error type for accessing for search.
-    type DeleteElementError: StandardError;
-
-    /// The pruning strategy to use after the initial search is complete.
-    type PruneStrategy: PruneStrategy<Provider>;
-
-    /// The accessor used during the delete-search phase.
-    ///
-    /// This is technically redundant information as in theory, we could project through
-    /// [`Self::SearchStrategy`]. However, when trying to write generic wrappers (read,
-    /// the "caching" provider), rustc is unable to project all the way through the layers
-    /// of associated types.
-    ///
-    /// Lifting the accessor all the way to the trait level makes the caching provider possible.
-    type DeleteSearchAccessor<'a>: SearchAccessor<Id = Provider::InternalId>;
-
-    /// The processor used during the delete-search phase.
-    type SearchPostProcessor: for<'a> SearchPostProcess<Self::DeleteSearchAccessor<'a>, Self::DeleteElement<'a>>
-        + Send
-        + Sync;
-
-    /// The type of the search strategy to use for graph traversal.
-    type SearchStrategy: for<'a> SearchStrategy<
-            'a,
-            Provider,
-            Self::DeleteElement<'a>,
-            SearchAccessor = Self::DeleteSearchAccessor<'a>,
-        >;
-
-    /// Construct the prune strategy object.
-    fn prune_strategy(&self) -> Self::PruneStrategy;
-
-    /// Construct the search strategy object.
-    fn search_strategy(&self) -> Self::SearchStrategy;
-
-    /// Construct the search post-processor for the delete-search phase.
-    fn search_post_processor(&self) -> Self::SearchPostProcessor;
-
-    /// Construct the accessor used to retrieve the item being deleted.
-    fn get_delete_element<'a>(
-        &'a self,
-        provider: &'a Provider,
-        context: &'a Provider::Context,
-        id: Provider::InternalId,
-    ) -> impl Future<Output = Result<Self::DeleteElementGuard, Self::DeleteElementError>> + Send;
-}
+// /// A strategy for supporting inplace deletes.
+// ///
+// /// In place deletes consist of two phases:
+// ///
+// /// 1. An initial graph search using a value extracted from the index to generate a list
+// ///    of candidates.
+// ///
+// /// 2. Multiple rounds of pruning on the extracted candidates list.
+// ///
+// /// Like [`PruneStrategy`], inplace-deletion does not have a query type `T` to be generic
+// /// over. Thus, interfaces accept an [`InplaceDeleteStrategy`] directly.
+// pub trait InplaceDeleteStrategy<Provider>: Send + Sync + 'static
+// where
+//     Provider: DataProvider,
+// {
+//     /// The type provided to the search portion of inplace-deletion and used to instantiate
+//     /// the required `SearchStrategy`.
+//     ///
+//     /// With the by-value `T` parameter design, `DeleteElement<'a>` is expected to be a
+//     /// sized, `Copy` type (typically a reference like `&'a [f32]`).
+//     type DeleteElement<'a>: Copy + Send + Sync;
+//
+//     /// The guard type returned by `get_delete_element`.
+//     ///
+//     /// The guard holds the retrieved element data and must be convertible to
+//     /// `DeleteElement<'a>` via [`Reborrow`]. This allows the guard's lifetime to scope the
+//     /// validity of the extracted element.
+//     type DeleteElementGuard: Send
+//         + Sync
+//         + for<'a> Reborrow<'a, Target = Self::DeleteElement<'a>>
+//         + 'static;
+//
+//     /// Error type for accessing for search.
+//     type DeleteElementError: StandardError;
+//
+//     /// The pruning strategy to use after the initial search is complete.
+//     type PruneStrategy: PruneStrategy<Provider>;
+//
+//     /// The accessor used during the delete-search phase.
+//     ///
+//     /// This is technically redundant information as in theory, we could project through
+//     /// [`Self::SearchStrategy`]. However, when trying to write generic wrappers (read,
+//     /// the "caching" provider), rustc is unable to project all the way through the layers
+//     /// of associated types.
+//     ///
+//     /// Lifting the accessor all the way to the trait level makes the caching provider possible.
+//     type DeleteSearchAccessor<'a>: SearchAccessor<Id = Provider::InternalId>;
+//
+//     /// The processor used during the delete-search phase.
+//     type SearchPostProcessor: for<'a> SearchPostProcess<Self::DeleteSearchAccessor<'a>, Self::DeleteElement<'a>>
+//         + Send
+//         + Sync;
+//
+//     /// The type of the search strategy to use for graph traversal.
+//     type SearchStrategy: for<'a> SearchStrategy<
+//             'a,
+//             Provider,
+//             Self::DeleteElement<'a>,
+//             SearchAccessor = Self::DeleteSearchAccessor<'a>,
+//         >;
+//
+//     /// Construct the prune strategy object.
+//     fn prune_strategy(&self) -> Self::PruneStrategy;
+//
+//     /// Construct the search strategy object.
+//     fn search_strategy(&self) -> Self::SearchStrategy;
+//
+//     /// Construct the search post-processor for the delete-search phase.
+//     fn search_post_processor(&self) -> Self::SearchPostProcessor;
+//
+//     /// Construct the accessor used to retrieve the item being deleted.
+//     fn get_delete_element<'a>(
+//         &'a self,
+//         provider: &'a Provider,
+//         context: &'a Provider::Context,
+//         id: Provider::InternalId,
+//     ) -> impl Future<Output = Result<Self::DeleteElementGuard, Self::DeleteElementError>> + Send;
+// }
 
 ///////////
 // Tests //

@@ -13,8 +13,8 @@ use crate::{
     ANNResult,
     error::IntoANNResult,
     graph::{
-        glue::{self, FilteredAccessor, SearchStrategy},
-        index::{DiskANNIndex, InternalSearchStats, SearchStats},
+        algorithms::{self, InternalSearchStats, SearchStats},
+        glue::{self, FilteredAccessor},
         search::inline_filter_search::{Ret, inline_filter_search_internal},
         search::{
             Range, RangeSearchError, Search,
@@ -25,7 +25,6 @@ use crate::{
         search_output_buffer::SearchOutputBuffer,
     },
     neighbor::Neighbor,
-    provider::DataProvider,
 };
 
 /// Parameters for range-based search.
@@ -116,35 +115,29 @@ impl From<Range> for FilteredRange {
     }
 }
 
-impl<'a, DP, S, T> Search<'a, DP, S, T> for FilteredRange
+impl<A> Search<A> for FilteredRange
 where
-    DP: DataProvider,
-    S: SearchStrategy<'a, DP, T, SearchAccessor: FilteredAccessor>,
-    T: Copy + Send + Sync,
+    A: FilteredAccessor,
 {
     type Output = SearchStats;
 
     fn search<O, PP, OB>(
         self,
-        index: &'a DiskANNIndex<DP>,
-        strategy: &'a S,
+        accessor: &mut A,
         processor: PP,
-        context: &'a DP::Context,
-        query: T,
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<Self::Output>>
     where
         O: Send,
-        PP: glue::SearchPostProcess<S::SearchAccessor, T, O> + Send + Sync,
+        PP: glue::SearchPostProcess<A, O> + Send + Sync,
         OB: SearchOutputBuffer<O> + Send + ?Sized,
     {
         async move {
-            let mut accessor = strategy
-                .search_accessor(&index.data_provider, context, query)
-                .into_ann_result()?;
             let num_start_ids = accessor.num_starting_points().await?;
+            let degree = algorithms::max_degree_from_hint(accessor.max_degree_hint());
+
             let starting_l = self.starting_l().get();
-            let mut scratch = index.search_scratch(starting_l, num_start_ids);
+            let mut scratch = algorithms::search_scratch_2(degree, starting_l, num_start_ids);
 
             let search_knn = self.range_params.to_knn();
 
@@ -154,9 +147,9 @@ where
                 hops,
                 matched_results,
             } = inline_filter_search_internal(
-                index.max_degree_with_slack(),
+                degree.get(),
                 &search_knn,
-                &mut accessor,
+                accessor,
                 &mut scratch,
                 &mut NoopSearchRecord::new(),
                 None,
@@ -209,9 +202,9 @@ where
 
                 // Move to filtered range search
                 let range_stats = filtered_range_search_internal(
-                    index.max_degree_with_slack(),
+                    degree.get(),
                     &self,
-                    &mut accessor,
+                    accessor,
                     &mut scratch,
                     &mut matched_in_outer_range,
                     &mut range_frontier,
@@ -232,7 +225,7 @@ where
             };
 
             let result_count = processor
-                .post_process(&mut accessor, query, matched_in_outer_range.iter(), output)
+                .post_process(accessor, matched_in_outer_range.iter(), output)
                 .await
                 .into_ann_result()?;
 
