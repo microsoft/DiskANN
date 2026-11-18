@@ -73,23 +73,10 @@ where
     where
         Storage: StorageReadProvider + StorageWriteProvider,
     {
+        let timer = Instant::now();
+
         let metadata =
             validate_data_generation_input(storage_provider, &self.data_path, max_block_size)?;
-        self.generate_data_with_metadata(storage_provider, pool, max_block_size, metadata)
-    }
-
-    /// Compress using metadata and block size already validated at the disk-build boundary.
-    pub(crate) fn generate_data_with_metadata<Storage>(
-        &self,
-        storage_provider: &Storage,
-        pool: RayonThreadPoolRef<'_>,
-        max_block_size: usize,
-        metadata: Metadata,
-    ) -> ANNResult<()>
-    where
-        Storage: StorageReadProvider + StorageWriteProvider,
-    {
-        let timer = Instant::now();
         let (num_points, dim) = metadata.into_dims();
 
         let compressed_path = self.compressed_data_path.as_str();
