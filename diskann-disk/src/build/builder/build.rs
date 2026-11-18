@@ -91,8 +91,8 @@ where
     /// # Errors
     /// Returns compression, graph-construction or storage errors.
     pub fn build(&mut self) -> ANNResult<()> {
-        let metadata =
-            load_metadata_from_file(self.storage_provider, &self.index_writer.get_dataset_file())?;
+        let data_path = self.index_writer.get_dataset_file();
+        let metadata = load_metadata_from_file(self.storage_provider, &data_path)?;
         match &self.config.graph {
             GraphBuildConfig::Vamana {
                 graph,
@@ -106,11 +106,10 @@ where
                 );
                 let backend = Backend::<Data::VectorDataType>::new(
                     build_quantization,
-                    self.config.metric,
-                    self.config.num_threads,
-                    self.config.seed,
+                    &self.config,
                     metadata.npoints(),
-                    &self.index_writer,
+                    &data_path,
+                    &self.index_writer.get_index_path_prefix(),
                     self.storage_provider,
                 )?;
                 let runtime = create_runtime(self.config.num_threads)?;
@@ -156,7 +155,7 @@ where
                                     )?,
                                     self.config.seed,
                                     &backend,
-                                    &self.index_writer.get_dataset_file(),
+                                    &data_path,
                                     &self.index_writer.get_mem_index_file(),
                                     self.storage_provider,
                                 )
@@ -180,7 +179,7 @@ where
                         self.config.metric,
                         self.config.seed,
                         graph,
-                        &self.index_writer.get_dataset_file(),
+                        &data_path,
                         &self.index_writer.get_mem_index_file(),
                         self.storage_provider,
                         pool,
