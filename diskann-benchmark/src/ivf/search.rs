@@ -13,7 +13,7 @@ use std::{
 };
 
 use anyhow::{ensure, Context, Result};
-use diskann::{graph::SearchOutputBuffer, neighbor::Neighbor, provider::DefaultContext, ANNResult};
+use diskann::{graph::SearchOutputBuffer, neighbor::Neighbor, ANNResult};
 use diskann_benchmark_core::{
     recall::{self, GroundTruthMode},
     search,
@@ -53,12 +53,10 @@ impl BuiltIndex {
         let count = self
             .index
             .search(
-                provider,
-                &DefaultContext,
-                Query {
+                provider.search_accessor(Query {
                     vector,
                     stats: &stats,
-                },
+                })?,
                 k,
                 NonZeroUsize::new(nprobe)
                     .ok_or_else(|| diskann::ANNError::message("zero nprobe"))?,

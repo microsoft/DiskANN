@@ -6,13 +6,7 @@
 use std::{num::NonZeroUsize, sync::Arc};
 
 use anyhow::Result;
-use diskann::{
-    ivf::{
-        region::Update,
-        traits::{BuildAccessor, BuildStrategy},
-    },
-    provider::DefaultContext,
-};
+use diskann::ivf::{region::Region, traits::BuildAccessor};
 use diskann_benchmark_runner::utils::datatype::DataType;
 use diskann_utils::views::rowmajor::Matrix;
 use tempfile::NamedTempFile;
@@ -130,15 +124,15 @@ fn dropped_build_abandons_routing_and_finished_updates() -> Result<()> {
         let provider = InMemProvider::new(base.clone())?;
         let before = build::layout(&*provider.read()?);
         {
-            let mut transaction = provider.build_accessor(&DefaultContext)?;
+            let mut transaction = provider.build_accessor()?;
             transaction.route(0..32, |_, _| {}).await?;
-            let (_region, mut update) = transaction.fill(std::iter::once(0)).await?;
+            let mut update = transaction.fill(std::iter::once(0)).await?;
             update.retire(0)?;
             update.create(&base[1], &(0..32).collect::<Vec<_>>())?;
             update.finish().await?;
         }
         assert_eq!(before, build::layout(&*provider.read()?));
-        let mut transaction = provider.build_accessor(&DefaultContext)?;
+        let mut transaction = provider.build_accessor()?;
         transaction.route(0..32, |_, _| {}).await?;
         transaction.finish().await?;
         assert_eq!(provider.read()?.inserted, 32);
@@ -309,8 +303,8 @@ fn cosine_centroids_are_normalized_before_list_selection() -> Result<()> {
     runtime.block_on(async {
         let base: Arc<data::Rows> = Arc::new(vec![vec![1.0, 0.0], vec![0.0, 1.0], vec![-1.0, 0.0]]);
         let (index, _) = build::build(base.clone(), &config(), &mut || Ok(())).await?;
-        let mut transaction = index.provider.build_accessor(&DefaultContext)?;
-        let (_, mut update) = transaction.fill(std::iter::once(0)).await?;
+        let mut transaction = index.provider.build_accessor()?;
+        let mut update = transaction.fill(std::iter::once(0)).await?;
         update.retire(0)?;
         update.create(&[0.1, 0.0], &[0])?;
         update.create(&[0.8, 0.6], &[1])?;

@@ -11,10 +11,8 @@ use std::{
 };
 
 use anyhow::{ensure, Context, Result};
-use diskann::{
-    ivf::{Config, IVFIndex, ReassignCount},
-    provider::DefaultContext,
-};
+use diskann::ivf::{Config, IVFIndex, ReassignCount};
+use diskann_quantization::Parallelism;
 use serde::Serialize;
 
 use super::{
@@ -100,9 +98,9 @@ pub(super) async fn build(
         let start = Instant::now();
         let stats = index
             .insert_batch(
-                provider.as_ref(),
-                &DefaultContext,
+                provider.build_accessor()?,
                 offset..(offset + config.batch_size.get()).min(count),
+                Parallelism::Sequential,
             )
             .await?;
         insert_time += start.elapsed();

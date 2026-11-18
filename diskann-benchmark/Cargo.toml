@@ -15,7 +15,7 @@ bytemuck.workspace = true
 roaring.workspace = true
 clap = { workspace = true, features = ["derive"] }
 diskann-providers = { workspace = true }
-diskann.workspace = true
+diskann = { workspace = true, features = ["ivf"] }
 diskann-utils.workspace = true
 half = { workspace = true, features = ["rand_distr", "num-traits"] }
 indicatif = "0.18.3"

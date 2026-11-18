@@ -15,10 +15,9 @@ use std::{
 
 use diskann::{
     ivf::{
-        region::{self, View},
-        traits::{BuildAccessor, BuildStrategy, HasIds, Nearest},
+        region,
+        traits::{BuildAccessor, HasIds},
     },
-    provider::DefaultContext,
     ANNError, ANNResult,
 };
 use diskann_utils::{
@@ -93,11 +92,8 @@ impl HasIds for Build<'_> {
     type ListId = u32;
 }
 
-impl<'a> BuildStrategy<'a, Range<usize>, DefaultContext> for InMemProvider {
-    type Accessor = Build<'a>;
-    type Error = ANNError;
-
-    fn build_accessor(&'a self, _: &'a DefaultContext) -> ANNResult<Build<'a>> {
+impl InMemProvider {
+    pub(super) fn build_accessor(&self) -> ANNResult<Build<'_>> {
         let store = self.store.try_write().map_err(ANNError::new)?;
         let next_list = store.next_list;
         let end = store.inserted;
@@ -153,36 +149,26 @@ pub(super) fn select<'a>(
     selected
 }
 
-impl Nearest for Coarse<'_> {
-    type Id = u32;
-
-    fn find<P, F>(
-        &self,
-        id: u32,
-        nprobe: NonZeroUsize,
-        pred: P,
-        mut emit: F,
-    ) -> impl SendFuture<ANNResult<usize>>
+impl Coarse<'_> {
+    fn find<P, F>(&self, id: u32, nprobe: NonZeroUsize, pred: P, mut emit: F) -> ANNResult<usize>
     where
         P: Fn(u32) -> bool + Send,
         F: FnMut(u32, f32) + Send,
     {
-        async move {
-            let query = &self
-                .get(id)
-                .ok_or_else(|| ANNError::message("unknown IVF list"))?
-                .centroid;
-            let selected = select(
-                self.lists().filter(|(id, _)| pred(*id)),
-                query,
-                nprobe.get(),
-                |query, centroid| SquaredL2::evaluate(query, centroid),
-            );
-            for &(id, distance) in &selected {
-                emit(id, distance);
-            }
-            Ok(selected.len())
+        let query = &self
+            .get(id)
+            .ok_or_else(|| ANNError::message("unknown IVF list"))?
+            .centroid;
+        let selected = select(
+            self.lists().filter(|(id, _)| pred(*id)),
+            query,
+            nprobe.get(),
+            |query, centroid| SquaredL2::evaluate(query, centroid),
+        );
+        for &(id, distance) in &selected {
+            emit(id, distance);
         }
+        Ok(selected.len())
     }
 }
 
@@ -191,28 +177,8 @@ struct Source {
     vectors: rowmajor::Owned<f32>,
 }
 
-pub(super) struct Region {
+pub(super) struct Region<'a> {
     sources: BTreeMap<u32, Source>,
-}
-
-impl View<u32, u32> for Region {
-    type VectorsRef<'a> = rowmajor::Ref<'a, f32>;
-    type Vectors<'a> = rowmajor::Ref<'a, f32>;
-
-    fn get_list(&self, id: u32) -> Option<region::List<'_, u32, u32>> {
-        self.sources.get(&id).map(|source| region::List {
-            id,
-            centroid: &source.list.centroid,
-            members: &source.list.members,
-        })
-    }
-
-    fn get_vectors(&self, id: u32) -> Option<Self::Vectors<'_>> {
-        self.sources.get(&id).map(|source| source.vectors.as_view())
-    }
-}
-
-pub(super) struct Update<'a> {
     stored: &'a BTreeMap<u32, List>,
     changes: &'a mut BTreeMap<u32, Option<List>>,
     filled: BTreeSet<u32>,
@@ -220,7 +186,7 @@ pub(super) struct Update<'a> {
     dim: usize,
 }
 
-impl Update<'_> {
+impl Region<'_> {
     fn edit(&mut self, id: u32) -> ANNResult<&mut List> {
         if !self.filled.contains(&id) {
             return Err(ANNError::message("IVF update targets an unfilled list"));
@@ -233,7 +199,24 @@ impl Update<'_> {
     }
 }
 
-impl region::Update<u32, u32> for Update<'_> {
+impl region::Region<u32, u32> for Region<'_> {
+    type VectorsRef<'a> = rowmajor::Ref<'a, f32>;
+    type Vectors<'a>
+        = rowmajor::Ref<'a, f32>
+    where
+        Self: 'a;
+
+    fn get_list(&self, id: u32) -> Option<region::List<'_, u32>> {
+        self.sources.get(&id).map(|source| region::List {
+            centroid: &source.list.centroid,
+            members: &source.list.members,
+        })
+    }
+
+    fn get_vectors(&self, id: u32) -> Option<Self::Vectors<'_>> {
+        self.sources.get(&id).map(|source| source.vectors.as_view())
+    }
+
     fn append_members(&mut self, id: u32, members: &[u32]) -> ANNResult<()> {
         if !members.is_empty() {
             self.edit(id)?.members.extend_from_slice(members);
@@ -280,23 +263,28 @@ impl region::Update<u32, u32> for Update<'_> {
 
 impl BuildAccessor<Range<usize>> for Build<'_> {
     type VectorsRef<'a> = rowmajor::Ref<'a, f32>;
-    type Nearest<'a>
-        = Coarse<'a>
-    where
-        Self: 'a;
     type Region<'a>
-        = Region
-    where
-        Self: 'a;
-    type Update<'a>
-        = Update<'a>
+        = Region<'a>
     where
         Self: 'a;
 
-    fn nearest(&mut self) -> Coarse<'_> {
-        Coarse {
-            stored: &self.store.lists,
-            changes: &self.changes,
+    fn find<P, F>(
+        &self,
+        id: u32,
+        nprobe: NonZeroUsize,
+        pred: P,
+        emit: F,
+    ) -> impl SendFuture<ANNResult<usize>>
+    where
+        P: Fn(u32) -> bool + Send,
+        F: FnMut(u32, f32) + Send,
+    {
+        async move {
+            Coarse {
+                stored: &self.store.lists,
+                changes: &self.changes,
+            }
+            .find(id, nprobe, pred, emit)
         }
     }
 
@@ -352,7 +340,7 @@ impl BuildAccessor<Range<usize>> for Build<'_> {
         }
     }
 
-    fn fill<Itr>(&mut self, lists: Itr) -> impl SendFuture<ANNResult<(Region, Update<'_>)>>
+    fn fill<Itr>(&mut self, lists: Itr) -> impl SendFuture<ANNResult<Region<'_>>>
     where
         Itr: Iterator<Item = u32> + Clone + Send + Sync,
     {
@@ -376,16 +364,14 @@ impl BuildAccessor<Range<usize>> for Build<'_> {
                 sources.insert(id, Source { list, vectors });
             }
             let filled = sources.keys().copied().collect();
-            Ok((
-                Region { sources },
-                Update {
-                    stored: &self.store.lists,
-                    changes: &mut self.changes,
-                    filled,
-                    next_list: &mut self.next_list,
-                    dim,
-                },
-            ))
+            Ok(Region {
+                sources,
+                stored: &self.store.lists,
+                changes: &mut self.changes,
+                filled,
+                next_list: &mut self.next_list,
+                dim,
+            })
         }
     }
 

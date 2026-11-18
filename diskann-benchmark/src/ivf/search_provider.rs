@@ -15,8 +15,7 @@ use std::{
 };
 
 use diskann::{
-    ivf::traits::{Accumulator, HasIds, SearchAccessor, SearchStrategy},
-    provider::DefaultContext,
+    ivf::traits::{Accumulator, HasIds, SearchAccessor},
     ANNError, ANNResult,
 };
 use diskann_utils::future::SendFuture;
@@ -130,11 +129,8 @@ impl HasIds for Search<'_> {
     type ListId = u32;
 }
 
-impl<'a> SearchStrategy<'a, Query<'a>, DefaultContext> for SearchProvider {
-    type Accessor = Search<'a>;
-    type Error = ANNError;
-
-    fn search_accessor(&'a self, _: &'a DefaultContext, query: Query<'a>) -> ANNResult<Search<'a>> {
+impl SearchProvider {
+    pub(super) fn search_accessor<'a>(&'a self, query: Query<'a>) -> ANNResult<Search<'a>> {
         if query.vector.len() != self.points[0].len() || !query.vector.iter().all(|x| x.is_finite())
         {
             return Err(ANNError::message("invalid IVF query"));
