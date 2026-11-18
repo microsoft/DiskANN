@@ -94,18 +94,13 @@ where
         let data_path = self.index_writer.get_dataset_file();
         let metadata = load_metadata_from_file(self.storage_provider, &data_path)?;
         match &self.config.graph {
-            GraphBuildConfig::Vamana {
-                graph,
-                memory_budget,
-                build_quantization,
-                prefetch_lookahead,
-            } => {
+            GraphBuildConfig::Vamana(vamana) => {
                 info!(
                     "Training quantizer for {} quantized builds.",
-                    build_quantization.to_string()
+                    vamana.build_quantization.to_string()
                 );
                 let backend = Backend::<Data::VectorDataType>::new(
-                    build_quantization,
+                    &vamana.build_quantization,
                     &self.config,
                     metadata.npoints(),
                     &data_path,
@@ -115,19 +110,14 @@ where
                 let runtime = create_runtime(self.config.num_threads)?;
                 info!(
                     "Starting index build: R={} L={} Indexing RAM budget={} T={}",
-                    graph.pruned_degree(),
-                    graph.l_build(),
-                    memory_budget.in_bytes(),
+                    vamana.graph.pruned_degree(),
+                    vamana.graph.l_build(),
+                    vamana.memory_budget.in_bytes(),
                     self.config.num_threads
                 );
                 self.build_with(metadata, |pool| {
                     runtime.block_on(async {
-                        match determine_build_strategy::<Data>(
-                            metadata,
-                            graph,
-                            memory_budget.in_bytes() as f64,
-                            build_quantization,
-                        ) {
+                        match determine_build_strategy::<Data>(metadata, vamana) {
                             IndexBuildStrategy::Merged => {
                                 MergedVamanaIndexBuilder::<Data, _>::new(
                                     &self.config,
@@ -135,23 +125,16 @@ where
                                     &backend,
                                     self.storage_provider,
                                 )
-                                .build(
-                                    graph,
-                                    metadata,
-                                    *memory_budget,
-                                    build_quantization,
-                                    *prefetch_lookahead,
-                                    pool,
-                                )
+                                .build(vamana, metadata, pool)
                                 .await
                             }
                             IndexBuildStrategy::OneShot => {
                                 build_inmem_index::<Data::VectorDataType, _>(
-                                    graph.clone(),
+                                    vamana.graph.clone(),
                                     inmem_builder::Config::new(
                                         metadata.npoints(),
                                         self.config.num_threads,
-                                        *prefetch_lookahead,
+                                        vamana.prefetch_lookahead,
                                     )?,
                                     self.config.seed,
                                     &backend,

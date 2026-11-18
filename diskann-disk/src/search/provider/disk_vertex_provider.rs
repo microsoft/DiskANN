@@ -282,7 +282,7 @@ mod disk_vertex_provider_tests {
         QuantizationType,
         build::{
             builder::build::DiskIndexBuilder,
-            configuration::{DiskIndexBuildConfig, GraphBuildConfig},
+            configuration::{DiskIndexBuildConfig, GraphBuildConfig, VamanaBuildConfig},
         },
         data_model::{CachingStrategy, GraphHeader},
         disk_index_build_parameter::{DISK_SECTOR_LEN, MemoryBudget, NumPQChunks},
@@ -328,12 +328,12 @@ mod disk_vertex_provider_tests {
             diskann_vector::distance::Metric::L2,
             1,
             num_pq_chunks,
-            GraphBuildConfig::Vamana {
+            GraphBuildConfig::Vamana(VamanaBuildConfig {
                 graph: config,
                 memory_budget,
                 build_quantization: QuantizationType::FP,
                 prefetch_lookahead: None,
-            },
+            }),
         );
         let disk_index_writer = DiskIndexWriter::new(
             data_path.to_string(),

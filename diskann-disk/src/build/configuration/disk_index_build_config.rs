@@ -31,21 +31,25 @@ pub struct DiskIndexBuildConfig {
     pub graph: GraphBuildConfig,
 }
 
+/// Vamana settings for one-shot and sharded disk builds.
+#[derive(Clone, Debug)]
+pub struct VamanaBuildConfig {
+    /// Vamana search and pruning policy.
+    pub graph: Config,
+    /// Budget used to select one-shot or sharded construction.
+    pub memory_budget: MemoryBudget,
+    /// Vamana build representation, independent of search-time PQ.
+    pub build_quantization: QuantizationType,
+    /// Vector-provider prefetch lookahead.
+    pub prefetch_lookahead: Option<NonZeroUsize>,
+}
+
 /// Graph-specific configuration; search-PQ settings stay outside it.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub enum GraphBuildConfig {
     /// Vamana insertion and build-provider settings.
-    Vamana {
-        /// Vamana search and pruning policy.
-        graph: Config,
-        /// Budget used to select one-shot or sharded construction.
-        memory_budget: MemoryBudget,
-        /// Vamana build representation, independent of search-time PQ.
-        build_quantization: QuantizationType,
-        /// Vector-provider prefetch lookahead.
-        prefetch_lookahead: Option<NonZeroUsize>,
-    },
+    Vamana(VamanaBuildConfig),
     /// PiPNN partitioning and pruning policy.
     #[cfg(feature = "pipnn")]
     Pipnn(diskann::graph::pipnn::Config),

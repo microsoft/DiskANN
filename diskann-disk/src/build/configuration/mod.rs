@@ -5,7 +5,7 @@
 const DEFAULT_DATA_COMPRESSION_CHUNK_VECTOR_COUNT: usize = 25_000;
 
 mod disk_index_build_config;
-pub use disk_index_build_config::{DiskIndexBuildConfig, GraphBuildConfig};
+pub use disk_index_build_config::{DiskIndexBuildConfig, GraphBuildConfig, VamanaBuildConfig};
 
 pub mod disk_index_build_parameter;
 pub use disk_index_build_parameter::{MemoryBudget, NumPQChunks};
