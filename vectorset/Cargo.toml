@@ -13,6 +13,10 @@ azure_core = "1.1"
 azure_identity = "1.0"
 bytemuck = "1.23.0"
 clap = { version = "4.5.45", features = ["derive"] }
+chrono = { version = "0.4.45", features = ["serde"] }
+diskann-benchmark-core = "0.55.0"
+diskann-benchmark-runner = "0.55.0"
+diskann-utils = "0.55.0"
 indicatif = "0.18.3"
 rand = "0.10.2"
 redis = { version = "1.4.1", features = [
@@ -20,6 +24,9 @@ redis = { version = "1.4.1", features = [
     "vector-sets",
 ] }
 serde = { version = "1.0.228", features = ["derive"] }
+serde-saphyr = "1.0.0-rc.1"
+serde_json = "1.0.151"
+thiserror = "2.0.19"
 tokio = { version = "1.48.0", features = [
     "rt-multi-thread",
     "net",
@@ -28,3 +35,6 @@ tokio = { version = "1.48.0", features = [
     "sync",
 ] }
 toml = "1.1.3"
+
+[dev-dependencies]
+tempfile = "3.27.0"
