@@ -270,23 +270,22 @@ mod disk_vertex_provider_tests {
     use std::sync::Arc;
 
     use crate::{data_model::GraphDataType, test_utils::GraphDataF32VectorU32Data};
-    use diskann::{graph::config, utils::ONE};
+    use diskann::graph::config;
     use diskann_providers::storage::{
         StorageReadProvider, StorageWriteProvider, VirtualStorageProvider,
     };
-    use diskann_providers::{
-        model::IndexConfiguration, storage::get_disk_index_file, utils::load_metadata_from_file,
-    };
+    use diskann_providers::{storage::get_disk_index_file, utils::load_metadata_from_file};
     use diskann_utils::test_data_root;
     use vfs::OverlayFS;
 
     use crate::{
         QuantizationType,
-        build::builder::build::DiskIndexBuilder,
-        data_model::{CachingStrategy, GraphHeader},
-        disk_index_build_parameter::{
-            DISK_SECTOR_LEN, DiskIndexBuildParameters, MemoryBudget, NumPQChunks,
+        build::{
+            builder::build::DiskIndexBuilder,
+            configuration::{DiskIndexBuildConfig, GraphBuildConfig, VamanaBuildConfig},
         },
+        data_model::{CachingStrategy, GraphHeader},
+        disk_index_build_parameter::{DISK_SECTOR_LEN, MemoryBudget, NumPQChunks},
         search::provider::aligned_file_reader::VirtualAlignedReaderFactory,
         search::{
             provider::disk_vertex_provider_factory::DiskVertexProviderFactory,
@@ -313,9 +312,6 @@ mod disk_vertex_provider_tests {
         let memory_budget = MemoryBudget::try_from_gb(1.0).unwrap();
         let num_pq_chunks = NumPQChunks::new_with(128, metadata.ndims()).unwrap();
 
-        let disk_index_build_parameters =
-            DiskIndexBuildParameters::new(memory_budget, QuantizationType::FP, num_pq_chunks);
-
         let config = config::Builder::new_with(
             max_degree,
             config::MaxDegree::default_slack(),
@@ -328,13 +324,16 @@ mod disk_vertex_provider_tests {
         .build()
         .unwrap();
 
-        let config = IndexConfiguration::new(
+        let config = DiskIndexBuildConfig::new(
             diskann_vector::distance::Metric::L2,
-            metadata.ndims(),
-            metadata.npoints(),
-            ONE,
             1,
-            config,
+            num_pq_chunks,
+            GraphBuildConfig::Vamana(VamanaBuildConfig {
+                graph: config,
+                memory_budget,
+                build_quantization: QuantizationType::FP,
+                prefetch_lookahead: None,
+            }),
         );
         let disk_index_writer = DiskIndexWriter::new(
             data_path.to_string(),
@@ -347,11 +346,9 @@ mod disk_vertex_provider_tests {
         let mut disk_index: DiskIndexBuilder<GraphDataF32VectorU32Data, StorageProviderType> =
             DiskIndexBuilder::<GraphDataF32VectorU32Data, StorageProviderType>::new(
                 storage_provider,
-                disk_index_build_parameters,
                 config,
                 disk_index_writer,
-            )
-            .unwrap();
+            );
 
         let mem_index_file_path = format!("{}_mem.index.data", index_path_prefix);
         let mem_index_associated_data_path =

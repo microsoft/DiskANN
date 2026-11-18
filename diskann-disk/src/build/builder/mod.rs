@@ -11,5 +11,8 @@ pub mod core;
 mod inmem_builder;
 pub mod tokio;
 
+#[cfg(feature = "pipnn")]
+mod pipnn;
+
 #[cfg(test)]
 mod tests;

@@ -27,12 +27,42 @@ use diskann_utils::{
 };
 use tracing::debug;
 
+use crate::error::{ErrorKind, diskann_error};
+
 /// Configuration for the in-memory builder.
 #[derive(Debug, Clone)]
 pub(super) struct Config {
     pub(super) non_frozen_points: usize,
     pub(super) prefetch_lookahead: Option<NonZeroUsize>,
     pub(super) num_threads: NonZeroUsize,
+}
+
+impl Config {
+    pub(super) fn new(
+        num_points: usize,
+        num_threads: usize,
+        prefetch_lookahead: Option<NonZeroUsize>,
+    ) -> ANNResult<Self> {
+        let num_threads = NonZeroUsize::new(num_threads)
+            .or_else(|| std::thread::available_parallelism().ok())
+            .ok_or_else(|| {
+                diskann_error!(
+                    ErrorKind::IndexError,
+                    "Failed to determine number of threads"
+                )
+            })?;
+        let non_frozen_points = num_points.checked_sub(1).ok_or_else(|| {
+            diskann_error!(
+                ErrorKind::IndexError,
+                "expected dataset to contain at least 1 point"
+            )
+        })?;
+        Ok(Self {
+            non_frozen_points,
+            prefetch_lookahead,
+            num_threads,
+        })
+    }
 }
 
 /// The start point for an inmem build.
