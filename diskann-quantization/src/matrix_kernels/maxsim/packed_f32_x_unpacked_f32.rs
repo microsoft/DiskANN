@@ -6,6 +6,8 @@
 //! The lowering of operations mimics a GEMM style operation with inplace application of the
 //! max-sim reduction operation. Currently, blocking across the contraction dimension "k"
 //! is not implemented. As such, expect a performance penalty for large-dimensional vectors.
+//! Dot tiles and cache traversal are shared with TopK.
+//! Each kernel applies its own reduction.
 //!
 //! The kernel is implemented as follows:
 //!
@@ -34,32 +36,95 @@ use crate::matrix_kernels::{
 
 /// Blocking parameters for the `packed x unpacked` kernel.
 #[derive(Debug, Clone, Copy)]
-pub(super) struct Params {
+pub(crate) struct Params {
     /// The (approximate) number of blocks of `A` that fit in the L2 cache.
-    pub(super) a_panels_in_l2: NonZeroUsize,
+    pub(in crate::matrix_kernels) a_panels_in_l2: NonZeroUsize,
     /// The (approximate) number of columns of `B` that fis in the L1 cache.
-    pub(super) b_cols_in_l1: NonZeroUsize,
+    pub(in crate::matrix_kernels) b_cols_in_l1: NonZeroUsize,
 }
 
 impl Params {
     /// Select hyper-parameters for the `packed x unpacked` kernel based on cache size.
-    pub(super) fn new(cache: Cache, a_panel: Bytes, b_col: Bytes, nr: usize) -> Self {
+    ///
+    /// # Panics
+    ///
+    /// Panics if panel sizes are zero, exceed `isize::MAX`, or blocking arithmetic overflows.
+    #[expect(clippy::expect_used)]
+    pub(in crate::matrix_kernels) fn new(
+        cache: Cache,
+        a_panel: Bytes,
+        b_col: Bytes,
+        nr: usize,
+    ) -> Self {
+        Self::try_new(cache, a_panel, b_col, nr).expect("invalid packed x unpacked working set")
+    }
+
+    /// Return `None` for zero panel sizes, oversized extents, or blocking overflow.
+    pub(in crate::matrix_kernels) fn try_new(
+        cache: Cache,
+        a_panel: Bytes,
+        b_col: Bytes,
+        nr: usize,
+    ) -> Option<Self> {
+        let a_panel = NonZeroUsize::new(a_panel.value())?.get();
+        let b_group = NonZeroUsize::new(nr.checked_mul(b_col.value())?)?.get();
+        if a_panel > isize::MAX as usize || b_group > isize::MAX as usize {
+            return None;
+        }
+
         // Pick the number of A-panels to process at a time so the working set is within
         // the L2 cache.
-        let a_panels_in_l2 = value_or_one(cache.l2().get() / a_panel.value());
+        let a_panels_in_l2 = value_or_one(cache.l2().get() / a_panel);
 
         // Pick the number of B-panels to process to the `B` working set plus a single
         // panel of `A` fits in the L1 cache.
         //
         // Make sure we process at least one B-panel at a time. Otherwise performance falls
         // off a cliff.
-        let b_budget = cache.l1().get().saturating_sub(a_panel.value()).max(1);
-        let b_cols_in_l1 = value_or_one(nr * (b_budget.div_ceil(nr * b_col.value())));
+        let b_budget = cache.l1().get().saturating_sub(a_panel).max(1);
+        let b_cols_in_l1 = value_or_one(nr.checked_mul(b_budget.div_ceil(b_group))?);
 
-        Self {
+        Some(Self {
             a_panels_in_l2,
             b_cols_in_l1,
-        }
+        })
+    }
+}
+
+/// Shared cache-subview and A-panel visitation, without binding a reduction output.
+///
+/// # Safety
+///
+/// Both views must have contraction dimension `k`.
+#[inline(always)]
+pub(in crate::matrix_kernels) unsafe fn visit_tiles<const MR: usize>(
+    a: packed::View<'_, f32, MR>,
+    b: unpacked::View<'_, f32>,
+    params: Params,
+    k: DimK,
+    mut visit: impl FnMut(packed::Panel<'_, f32, MR>, unpacked::View<'_, f32>, usize, usize),
+) {
+    // SAFETY: Subviews and panels retain the validated contraction dimension.
+    unsafe {
+        a.visit_sub_views(
+            params.a_panels_in_l2,
+            k,
+            #[inline(always)]
+            |a_view, a_base| {
+                b.visit_sub_views(
+                    params.b_cols_in_l1,
+                    k,
+                    #[inline(always)]
+                    |b_view, b_base| {
+                        a_view.visit_panels(
+                            k,
+                            #[inline(always)]
+                            |a_panel, a_offset| visit(a_panel, b_view, a_base + a_offset, b_base),
+                        );
+                    },
+                );
+            },
+        );
     }
 }
 
@@ -179,80 +244,61 @@ where
 
                 let mut c = MutSlice::new(self.c);
 
-                let on_a_panels = |a_panels: packed::View<'_, f32, MR>, a_block_base| {
-                    let on_b_panels = |b_panels: unpacked::View<'_, f32>, _| {
-                        let panel_kernel = |a_panel: packed::Panel<'_, f32, MR>, a_block_offset| {
-                            // If we are in the very last block and we need to sub-fill, do that.
-                            // Otherwise, reference the output in place.
-                            let a_block = a_block_base + a_block_offset;
-                            let handling_tail = a_block == last_a_block && remainder != 0;
+                let panel_kernel = |a_panel: packed::Panel<'_, f32, MR>,
+                                    b_panels: unpacked::View<'_, f32>,
+                                    a_block: usize,
+                                    _: usize| {
+                    // If we are in the very last block and we need to sub-fill, do that.
+                    // Otherwise, reference the output in place.
+                    let handling_tail = a_block == last_a_block && remainder != 0;
 
-                            let bound =
-                                bounds::Bound::from_fn(
-                                    || if handling_tail { remainder } else { MR },
-                                );
+                    let bound =
+                        bounds::Bound::from_fn(|| if handling_tail { remainder } else { MR });
 
-                            // SAFETY: By class invariant,
-                            //
-                            // `MR * (self.a.blocks() - 1) < c.len() <= MR * self.a.blocks()`.
-                            //
-                            // From the visitor, `a_block <= self.a.blocks()`.
-                            let mut region = unsafe { c.subslice(MR * a_block, bound) };
-                            let c = if handling_tail {
-                                util::LoadStore::<f32, MR>::load(
-                                    self.arch,
-                                    // SAFETY: `region` as length exactly `remainder`.
-                                    unsafe { region.as_std_slice(remainder) },
-                                )
-                            } else {
-                                // SAFETY: `region` has length exactly `MR`.
-                                unsafe { *region.as_array::<MR>() }
-                            };
-
-                            // run the kernel
-                            //
-                            // SAFETY: By class invariant, `a_panel.k()` and `b_panels.k()`
-                            // are both equal to `self.k`.
-                            let mut kernel = unsafe {
-                                PanelKernel::new(self.arch, a_panel, b_panels, c, self.k)
-                            };
-
-                            driver::PanelKernel::panel_kernel(&mut kernel);
-
-                            let c_final = kernel.take();
-
-                            // Put back `C`.
-                            if handling_tail {
-                                util::LoadStore::<f32, MR>::store(
-                                    self.arch,
-                                    c_final,
-                                    // SAFETY: `region` has length exactly `remainder`.
-                                    unsafe { region.as_std_mut_slice(remainder) },
-                                );
-                            } else {
-                                // SAFETY: `region` has length exactly `MR`.
-                                unsafe { *region.as_array::<MR>() = c_final };
-                            }
-                        };
-
-                        // SAFETY: By class invariant, `a_panels.k() == self.k`.
-                        unsafe {
-                            a_panels.visit_panels(self.k, panel_kernel);
-                        }
+                    // SAFETY: By class invariant,
+                    //
+                    // `MR * (self.a.blocks() - 1) < c.len() <= MR * self.a.blocks()`.
+                    //
+                    // From the visitor, `a_block <= self.a.blocks()`.
+                    let mut region = unsafe { c.subslice(MR * a_block, bound) };
+                    let c = if handling_tail {
+                        util::LoadStore::<f32, MR>::load(
+                            self.arch,
+                            // SAFETY: `region` as length exactly `remainder`.
+                            unsafe { region.as_std_slice(remainder) },
+                        )
+                    } else {
+                        // SAFETY: `region` has length exactly `MR`.
+                        unsafe { *region.as_array::<MR>() }
                     };
 
-                    // SAFETY: By class invariant, `self.b.k() == self.k`.
-                    unsafe {
-                        self.b
-                            .visit_sub_views(self.params.b_cols_in_l1, self.k, on_b_panels);
+                    // run the kernel
+                    //
+                    // SAFETY: By class invariant, `a_panel.k()` and `b_panels.k()`
+                    // are both equal to `self.k`.
+                    let mut kernel =
+                        unsafe { PanelKernel::new(self.arch, a_panel, b_panels, c, self.k) };
+
+                    driver::PanelKernel::panel_kernel(&mut kernel);
+
+                    let c_final = kernel.take();
+
+                    // Put back `C`.
+                    if handling_tail {
+                        util::LoadStore::<f32, MR>::store(
+                            self.arch,
+                            c_final,
+                            // SAFETY: `region` has length exactly `remainder`.
+                            unsafe { region.as_std_mut_slice(remainder) },
+                        );
+                    } else {
+                        // SAFETY: `region` has length exactly `MR`.
+                        unsafe { *region.as_array::<MR>() = c_final };
                     }
                 };
 
-                // SAFETY: By class invariant, `self.a.k() == self.k`.
-                unsafe {
-                    self.a
-                        .visit_sub_views(self.params.a_panels_in_l2, self.k, on_a_panels)
-                };
+                // SAFETY: By class invariant, both views have dimension `self.k`.
+                unsafe { visit_tiles(self.a, self.b, self.params, self.k, panel_kernel) };
             },
         );
     }
@@ -413,6 +459,26 @@ unsafe fn micro_kernel<W, const MR: usize, const NR: usize>(
     W: ExtraWide<MR>,
     Folder: Fold<NR>,
 {
+    // SAFETY: The caller establishes the panel dimensions required by `dot_tile`.
+    let acc = unsafe { dot_tile(wide, a, b, k) };
+    wide.max_into(Folder::fold(acc, W::max), c);
+}
+
+/// Compute complete dots without reducing the candidate columns.
+///
+/// # Safety
+///
+/// Both panels must have contraction dimension `k`.
+#[inline(always)]
+pub(in crate::matrix_kernels) unsafe fn dot_tile<W, const MR: usize, const NR: usize>(
+    wide: W,
+    a: packed::Panel<'_, f32, MR>,
+    b: unpacked::Panel<'_, f32, NR>,
+    k: DimK,
+) -> [W::Wide; NR]
+where
+    W: ExtraWide<MR>,
+{
     // Check that everyone agrees.
     bounds::check_eq!(a.k(), k);
     bounds::check_eq!(b.k(), k);
@@ -444,7 +510,7 @@ unsafe fn micro_kernel<W, const MR: usize, const NR: usize>(
         }
     }
 
-    wide.max_into(Folder::fold(acc, W::max), c);
+    acc
 }
 
 diskann_wide::alias!(f32x4<A> = f32x4);
@@ -468,7 +534,7 @@ macro_rules! micro_kernel {
 
 micro_kernel!(Scalar, 8, { 2, 1 });
 
-trait ExtraWide<const ELEMENTS: usize>: Copy {
+pub(crate) trait ExtraWide<const ELEMENTS: usize>: Copy {
     type Wide: Copy;
     type Splat: Copy;
 
@@ -783,6 +849,31 @@ mod tests {
 
     use diskann_utils::views::rowmajor::Matrix;
     use rand::{SeedableRng, rngs::StdRng};
+
+    #[test]
+    fn checked_params_preserve_blocking_and_reject_invalid_extents() {
+        let cache = Cache::new(
+            NonZeroUsize::new(64).unwrap(),
+            NonZeroUsize::new(128).unwrap(),
+        );
+        for (a, a_panels, b_cols) in [(16, 8, 12), (64, 2, 6), (256, 1, 6)] {
+            let params = Params::try_new(cache, Bytes::new(a), Bytes::new(4), 6).unwrap();
+            assert_eq!(params.a_panels_in_l2.get(), a_panels);
+            assert_eq!(params.b_cols_in_l1.get(), b_cols);
+        }
+        for (a, b, nr) in [
+            (0, 4, 6),
+            (16, 0, 6),
+            (16, 4, 0),
+            (usize::MAX, 4, 6),
+            (16, usize::MAX, 6),
+            (16, isize::MAX as usize, 2),
+        ] {
+            assert!(Params::try_new(cache, Bytes::new(a), Bytes::new(b), nr).is_none());
+        }
+        let cache = Cache::new(NonZeroUsize::MAX, NonZeroUsize::MIN);
+        assert!(Params::try_new(cache, Bytes::new(1), Bytes::new(1), 4).is_none());
+    }
 
     #[cfg(target_arch = "x86_64")]
     use diskann_wide::arch::x86_64::{V3, V4};

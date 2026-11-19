@@ -240,16 +240,9 @@ mod tests {
     }
 
     fn available_isas() -> impl Iterator<Item = MaxSimIsa> {
-        [
-            MaxSimIsa::Scalar,
-            MaxSimIsa::Auto,
-            MaxSimIsa::X86_64_V3,
-            MaxSimIsa::X86_64_V4,
-            MaxSimIsa::Neon,
-            MaxSimIsa::Reference,
-        ]
-        .into_iter()
-        .filter(|isa| isa.is_available())
+        MaxSimIsa::all()
+            .into_iter()
+            .filter(|isa| isa.is_available())
     }
 
     fn assert_matches_reference<const A_BITS: usize, const B_BITS: usize>()
@@ -361,13 +354,14 @@ mod tests {
     #[test]
     fn rejects_unavailable_isas() {
         let query = matrix::<8>(2, 5);
-        for isa in [MaxSimIsa::X86_64_V3, MaxSimIsa::X86_64_V4, MaxSimIsa::Neon] {
-            if !isa.is_available() {
-                assert!(matches!(
-                    build_minmax_max_sim::<8, 8>(isa, query.as_view().into()),
-                    Err(BuildMaxSimError::NotSupported(error)) if error.isa == isa
-                ));
-            }
+        for isa in MaxSimIsa::all()
+            .into_iter()
+            .filter(|isa| !isa.is_available())
+        {
+            assert!(matches!(
+                build_minmax_max_sim::<8, 8>(isa, query.as_view().into()),
+                Err(BuildMaxSimError::NotSupported(error)) if error.isa == isa
+            ));
         }
     }
 
