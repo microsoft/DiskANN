@@ -197,11 +197,7 @@ impl IVFIndex {
                     let lists = links.lists().iter().copied();
                     let mut region = accessor.fill(lists).await?;
 
-                    Linked::new(policies::NearestCentroid).reassign(
-                        &mut region,
-                        &links,
-                        parallelism,
-                    )?;
+                    Linked.reassign(&mut region, &links, parallelism)?;
 
                     region.finish().await?;
                 }

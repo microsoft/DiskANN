@@ -16,7 +16,7 @@ use rand::{
 use crate::{
     ANNResult,
     ivf::{
-        split::{Linked, Links, Reassign as _, policies::NearestCentroid},
+        split::{Linked, Links, Reassign as _},
         test::{
             harness::{PARALLELISMS, assert_abandoned, assert_fails, layout, line, stage},
             provider::{Metrics, Provider, Snapshot},
@@ -33,7 +33,7 @@ async fn reassign(
     parallelism: Parallelism,
 ) -> ANNResult<()> {
     stage(provider, filled, |region| {
-        Linked::new(NearestCentroid).reassign(region, links, parallelism)
+        Linked.reassign(region, links, parallelism)
     })
     .await
 }
@@ -143,7 +143,11 @@ async fn linked_rejects_unfilled_sources_and_neighbors_before_writing() {
 ///
 /// Rank linked candidates in edge order before the source; defer arrivals until all
 /// original memberships have been processed so incoming points cannot move twice.
-fn model(snapshot: &Snapshot, sources: &[u32], edges: &[(u32, u32)]) -> BTreeMap<u32, Vec<u32>> {
+pub(super) fn model(
+    snapshot: &Snapshot,
+    sources: &[u32],
+    edges: &[(u32, u32)],
+) -> BTreeMap<u32, Vec<u32>> {
     let mut expected: BTreeMap<_, _> = snapshot
         .lists()
         .iter()
