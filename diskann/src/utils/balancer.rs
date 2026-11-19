@@ -96,7 +96,7 @@ where
         //
         // The odds of that happening, however, are exceedingly rare.
         match items.get(i) {
-            Some(v) => Some(BatchPosition {
+            Some(_) => Some(BatchPosition {
                 batch: items,
                 position: i,
             }),

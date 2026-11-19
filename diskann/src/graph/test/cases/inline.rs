@@ -8,7 +8,7 @@
 //! These tests exercise end-to-end `index.search(InlineFilterSearch { .. })` execution.
 
 use diskann_vector::distance::Metric;
-use std::collections::HashSet;
+use std::{collections::HashSet, num::NonZeroUsize};
 
 use crate::{
     graph::{
@@ -19,6 +19,7 @@ use crate::{
         test::provider as test_provider,
         test::synthetic::Grid,
     },
+    neighbor::Neighbor,
     test::{
         TestRoot,
         cmp::{assert_eq_verbose, verbose_eq},
@@ -98,7 +99,16 @@ fn build_three_level_labeled_provider() -> test_provider::Provider {
         ));
     }
 
-    test_provider::Provider::new_from(config, start_neighbors, points).unwrap()
+    let index_config = graph::config::Builder::new(
+        max_degree,
+        graph::config::MaxDegree::same(),
+        32,
+        Metric::L2.into(),
+    )
+    .build()
+    .unwrap();
+
+    test_provider::Provider::new_from(config, start_neighbors, points, index_config).unwrap()
 }
 
 #[derive(Debug)]
@@ -241,18 +251,7 @@ impl Setup1D {
         let mut path = test_root.path();
         let name = path.push(test_name);
 
-        let provider = test_provider::Provider::grid(Grid::One, self.points).unwrap();
-
-        let index_config = graph::config::Builder::new(
-            provider.max_degree(),
-            graph::config::MaxDegree::same(),
-            100,
-            Metric::L2.into(),
-        )
-        .build()
-        .unwrap();
-
-        let index = graph::DiskANNIndex::new(index_config, provider, None);
+        let index = test_provider::Provider::grid(Grid::One, self.points).unwrap();
 
         let adaptive_l = match kind {
             TestKind::Fixed => None,
@@ -296,17 +295,8 @@ enum TestKind {
     Adaptive,
 }
 
-fn build_three_level_index() -> std::sync::Arc<graph::DiskANNIndex<test_provider::Provider>> {
-    let provider = build_three_level_labeled_provider();
-    let index_config = graph::config::Builder::new(
-        provider.max_degree(),
-        graph::config::MaxDegree::same(),
-        32,
-        Metric::L2.into(),
-    )
-    .build()
-    .unwrap();
-    std::sync::Arc::new(graph::DiskANNIndex::new(index_config, provider, None))
+fn build_three_level_index() -> std::sync::Arc<test_provider::Provider> {
+    std::sync::Arc::new(build_three_level_labeled_provider())
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -338,7 +328,7 @@ verbose_eq!(InlineFilterBaseline {
 
 #[expect(clippy::too_many_arguments)]
 fn run_inline_on_grid(
-    index: &graph::DiskANNIndex<test_provider::Provider>,
+    index: &test_provider::Provider,
     filter: &dyn labeled::QueryLabelProvider<u32>,
     grid_size: usize,
     matching_points: usize,
@@ -350,18 +340,8 @@ fn run_inline_on_grid(
     let rt = current_thread_runtime();
     let inline = InlineFilterSearch::new(Knn::new_default(l).unwrap(), adaptive_l);
 
-    let mut ids = vec![0u32; k];
-    let mut distances = vec![0.0f32; k];
-    let mut buffer = search_output_buffer::IdDistance::new(&mut ids, &mut distances);
-
-    let stats = rt
-        .block_on(index.search(
-            inline,
-            &labeled::Filtered::new(test_provider::Strategy::new(), filter),
-            &test_provider::Context::new(),
-            query,
-            &mut buffer,
-        ))
+    let (neighbors, stats) = rt
+        .block_on(index.filtered(inline, query, filter, NonZeroUsize::new(k)))
         .unwrap();
 
     let result_count = stats.result_count as usize;
@@ -372,8 +352,16 @@ fn run_inline_on_grid(
         k,
         l,
         result_count,
-        result_ids: ids[..result_count].to_vec(),
-        result_distances: distances[..result_count].to_vec(),
+        result_ids: neighbors
+            .iter()
+            .take(result_count)
+            .map(|n| *n.id())
+            .collect(),
+        result_distances: neighbors
+            .iter()
+            .take(result_count)
+            .map(|n| *n.distance())
+            .collect(),
         comparisons: stats.cmps as usize,
         hops: stats.hops as usize,
     }
@@ -393,18 +381,8 @@ fn inline_search_returns_only_final_level_matches() {
     let l = 32;
     let inline = InlineFilterSearch::new(Knn::new_default(l).unwrap(), None);
 
-    let mut ids = vec![0u32; k];
-    let mut distances = vec![0.0f32; k];
-    let mut buffer = search_output_buffer::IdDistance::new(&mut ids, &mut distances);
-
-    let stats = rt
-        .block_on(index.search(
-            inline,
-            &labeled::Filtered::new(test_provider::Strategy::new(), &filter),
-            &test_provider::Context::new(),
-            [2.0f32].as_slice(),
-            &mut buffer,
-        ))
+    let (neighbors, stats) = rt
+        .block_on(index.filtered(inline, [2.0f32].as_slice(), &filter, NonZeroUsize::new(k)))
         .unwrap();
 
     let result_count = stats.result_count as usize;
@@ -415,8 +393,16 @@ fn inline_search_returns_only_final_level_matches() {
         k,
         l,
         result_count,
-        result_ids: ids[..result_count].to_vec(),
-        result_distances: distances[..result_count].to_vec(),
+        result_ids: neighbors
+            .iter()
+            .take(result_count)
+            .map(|n| *n.id())
+            .collect(),
+        result_distances: neighbors
+            .iter()
+            .take(result_count)
+            .map(|n| *n.distance())
+            .collect(),
         comparisons: stats.cmps as usize,
         hops: stats.hops as usize,
     };
@@ -424,12 +410,10 @@ fn inline_search_returns_only_final_level_matches() {
     let expected = get_or_save_test_results(&name, &baseline);
     assert_eq_verbose!(expected, baseline);
 
-    let results = ids[..stats.result_count as usize].iter().copied();
-
     assert!(stats.result_count > 0, "should return final-level matches");
-    for id in results {
+    for id in baseline.result_ids.iter() {
         assert!(
-            (31..=70).contains(&id),
+            (31..=70).contains(id),
             "inline search should only return final-level nodes, got {}",
             id
         );
@@ -450,18 +434,8 @@ fn inline_search_three_level_no_adaptive_l_with_l2_finds_no_matches() {
     let l = 2;
     let inline = InlineFilterSearch::new(Knn::new_default(l).unwrap(), None);
 
-    let mut ids = vec![0u32; k];
-    let mut distances = vec![0.0f32; k];
-    let mut buffer = search_output_buffer::IdDistance::new(&mut ids, &mut distances);
-
-    let stats = rt
-        .block_on(index.search(
-            inline,
-            &labeled::Filtered::new(test_provider::Strategy::new(), &filter),
-            &test_provider::Context::new(),
-            [0.0f32].as_slice(),
-            &mut buffer,
-        ))
+    let (neighbors, stats) = rt
+        .block_on(index.filtered(inline, [0.0f32].as_slice(), &filter, NonZeroUsize::new(k)))
         .unwrap();
 
     let result_count = stats.result_count as usize;
@@ -472,8 +446,16 @@ fn inline_search_three_level_no_adaptive_l_with_l2_finds_no_matches() {
         k,
         l,
         result_count,
-        result_ids: ids[..result_count].to_vec(),
-        result_distances: distances[..result_count].to_vec(),
+        result_ids: neighbors
+            .iter()
+            .take(result_count)
+            .map(|n| *n.id())
+            .collect(),
+        result_distances: neighbors
+            .iter()
+            .take(result_count)
+            .map(|n| *n.distance())
+            .collect(),
         comparisons: stats.cmps as usize,
         hops: stats.hops as usize,
     };
@@ -501,19 +483,10 @@ fn inline_search_three_level_adaptive_l_with_l2_finds_matches() {
     let adaptive_l = AdaptiveL::new(10, 16.0).unwrap();
     let inline = InlineFilterSearch::new(Knn::new_default(l).unwrap(), Some(adaptive_l));
 
-    let k = 1;
-    let mut ids = vec![0u32; k];
-    let mut distances = vec![0.0f32; k];
-    let mut buffer = search_output_buffer::IdDistance::new(&mut ids, &mut distances);
+    let k = NonZeroUsize::new(1).unwrap();
 
-    let stats = rt
-        .block_on(index.search(
-            inline,
-            &labeled::Filtered::new(test_provider::Strategy::new(), &filter),
-            &test_provider::Context::new(),
-            [0.0f32].as_slice(),
-            &mut buffer,
-        ))
+    let (neighbors, stats) = rt
+        .block_on(index.filtered(inline, [0.0f32].as_slice(), &filter, Some(k)))
         .unwrap();
 
     let result_count = stats.result_count as usize;
@@ -521,11 +494,19 @@ fn inline_search_three_level_adaptive_l_with_l2_finds_matches() {
         grid_size: 0,
         matching_points: 0,
         query: vec![0.0f32],
-        k,
+        k: k.get(),
         l,
         result_count,
-        result_ids: ids[..result_count].to_vec(),
-        result_distances: distances[..result_count].to_vec(),
+        result_ids: neighbors
+            .iter()
+            .take(result_count)
+            .map(|n| *n.id())
+            .collect(),
+        result_distances: neighbors
+            .iter()
+            .take(result_count)
+            .map(|n| *n.distance())
+            .collect(),
         comparisons: stats.cmps as usize,
         hops: stats.hops as usize,
     };
@@ -538,10 +519,9 @@ fn inline_search_three_level_adaptive_l_with_l2_finds_matches() {
     let expected = get_or_save_test_results(&name, &baseline);
     assert_eq_verbose!(expected, baseline);
 
-    let results = ids[..stats.result_count as usize].iter().copied();
-    for id in results {
+    for id in baseline.result_ids.iter() {
         assert!(
-            (31..=70).contains(&id),
+            (31..=70).contains(id),
             "adaptive inline search should only return final-level nodes, got {}",
             id
         );
@@ -628,32 +608,19 @@ fn inline_search_reaches_matches_through_non_matching_nodes() {
     let search_params = Knn::new_default(l).unwrap();
     let inline = InlineFilterSearch::new(search_params, None);
 
-    let k = 5;
-    let mut ids = vec![0u32; k];
-    let mut distances = vec![0.0f32; k];
-    let mut buffer = search_output_buffer::IdDistance::new(&mut ids, &mut distances);
+    let k = NonZeroUsize::new(5).unwrap();
 
-    let stats = rt
-        .block_on(index.search(
-            inline,
-            &labeled::Filtered::new(test_provider::Strategy::new(), &filter),
-            &test_provider::Context::new(),
-            [2.0f32].as_slice(),
-            &mut buffer,
-        ))
+    let (neighbors, stats) = rt
+        .block_on(index.filtered(inline, [2.0f32].as_slice(), &filter, Some(k)))
         .unwrap();
 
     let result_count = stats.result_count as usize;
     let baseline = InlineBaseline {
-        k,
+        k: k.get(),
         query: vec![2.0f32],
         l,
         result_count,
-        results: ids[..result_count]
-            .iter()
-            .zip(distances[..result_count].iter())
-            .map(|(&id, &d)| (id, d))
-            .collect(),
+        results: neighbors.iter().map(|n| n.as_tuple()).collect(),
         comparisons: stats.cmps as usize,
         hops: stats.hops as usize,
     };
@@ -661,7 +628,11 @@ fn inline_search_reaches_matches_through_non_matching_nodes() {
     let expected = get_or_save_test_results(&name, &baseline);
     assert_eq_verbose!(expected, baseline);
 
-    let result_ids: Vec<u32> = ids[..stats.result_count as usize].to_vec();
+    let result_ids: Vec<u32> = neighbors
+        .into_iter()
+        .take(stats.result_count as usize)
+        .map(|n| *n.id())
+        .collect();
     assert!(result_ids.contains(&2), "node 2 should be discoverable");
     assert!(result_ids.contains(&4), "node 4 should be discoverable");
     for id in result_ids {

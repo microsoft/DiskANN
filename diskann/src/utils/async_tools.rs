@@ -3,16 +3,8 @@
  * Licensed under the MIT license.
  */
 
-use std::{
-    num::NonZeroUsize,
-    ops::Range,
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
-};
+use std::num::NonZeroUsize;
 
-use diskann_utils::future::SendFuture;
 use thiserror::Error;
 
 use crate::convert_error;
@@ -140,141 +132,6 @@ impl<'a, T> Iterator for Around<'a, T> {
 
 // Our implementation of `size_hint` is exact.
 impl<T> ExactSizeIterator for Around<'_, T> {}
-
-// ///////////////////////////
-// // Dynamic Load Balancer //
-// ///////////////////////////
-//
-// /// A utility for dynamically processing elements in a slice `T` across multiple threads.
-// ///
-// /// This works by using a local `AtomicUsize` to track which indices inside the slice have
-// /// been processed and is useful when the work to be performed on each `T` is not suitable
-// /// for static partitioning.
-// ///
-// /// This can occur when the work is highly variable.
-// #[derive(Debug)]
-// pub(crate) struct DynamicBalancer<T> {
-//     items: Arc<[T]>,
-//     current: AtomicUsize,
-// }
-//
-// impl<T> DynamicBalancer<T> {
-//     /// Construdct a new `DynamicBalancer` over `items`. The first invocation of `next` will
-//     /// return index `0` (assuming `items` is non-empty).
-//     pub(crate) fn new(items: Arc<[T]>) -> Self {
-//         Self {
-//             items,
-//             current: AtomicUsize::new(0),
-//         }
-//     }
-//
-//     /// Retrieve the next unclamied item and return a tuple `(item, index)` containing said
-//     /// item and its position in the underlying slice.
-//     ///
-//     /// If all items have been claimed, return `None`.
-//     ///
-//     /// This function yields all items in the underlying slice exactly once.
-//     pub(crate) fn next(&self) -> Option<(&T, usize)> {
-//         let i = self.current.fetch_add(1, Ordering::Relaxed);
-//
-//         // There is technically a race here where enough concurrent calls to `next` in
-//         // between the retrieval of `i` and "putting it back" that the counter wraps around.
-//         //
-//         // The odds of that happening, however, are exceedingly rare.
-//         match self.items.get(i) {
-//             Some(v) => Some((v, i)),
-//             None => {
-//                 // This branch will never be hit in a realistic program.
-//                 if i == usize::MAX {
-//                     std::process::abort();
-//                 }
-//
-//                 self.current.fetch_sub(1, Ordering::Relaxed);
-//                 None
-//             }
-//         }
-//     }
-//
-//     /// Return all work items as a slice.
-//     pub(crate) fn all(&self) -> &[T] {
-//         &self.items
-//     }
-//
-//     /// Return the number of work items.
-//     pub(crate) fn len(&self) -> usize {
-//         self.items.len()
-//     }
-// }
-
-// ////////////////
-// // arc_chunks //
-// ////////////////
-//
-// /// Return an iterator over `chunk_size` elements of the slice at a time, starting at the
-// /// beginning of the slice.
-// ///
-// /// The chunks are `ArcChunk<T>` slices that do not overlap. If `chunk_size` does not divide
-// /// the length of the slice, then the last chunk will not have length `chunk_size`.
-// ///
-// /// Unlike `std::slice::chunks`, the items yielded by this iterator are `'static` and thus
-// /// may be given to spawned tasks.
-// pub(crate) fn arc_chunks<T>(
-//     arc_slice: Arc<[T]>,
-//     chunk_size: NonZeroUsize,
-// ) -> impl Iterator<Item = ArcChunk<T>> {
-//     let slice_len = arc_slice.len();
-//     let num_chunks = slice_len.div_ceil(chunk_size.into());
-//     (0..num_chunks).map(move |chunk| {
-//         let chunk_size: usize = chunk_size.into();
-//         let start = chunk_size * chunk;
-//         let stop = (start + chunk_size).min(slice_len);
-//         ArcChunk::new(arc_slice.clone(), start..stop)
-//     })
-// }
-//
-// #[derive(Debug)]
-// pub(crate) struct ArcChunk<T> {
-//     /// The data we are iterating over.
-//     data: Arc<[T]>,
-//     /// The sub-chunk of `data` that this batch represents..
-//     chunk: Range<usize>,
-// }
-//
-// // Manually implement `Clone` so it works even if `T` is not constrained to be `Clone`.
-// impl<T> Clone for ArcChunk<T> {
-//     fn clone(&self) -> Self {
-//         Self {
-//             data: self.data.clone(),
-//             chunk: self.chunk.clone(),
-//         }
-//     }
-// }
-//
-// impl<T> ArcChunk<T> {
-//     pub(crate) fn new(data: Arc<[T]>, chunk: Range<usize>) -> Self {
-//         assert!(chunk.end <= data.len(), "range is invalid for data");
-//         Self { data, chunk }
-//     }
-//
-//     /// Return the length of this slice chunk.
-//     pub(crate) fn len(&self) -> usize {
-//         self.chunk.len()
-//     }
-//
-//     /// Gat the underlying slice chunk.
-//     pub(crate) fn get_chunk(&self) -> &[T] {
-//         &self.data[self.chunk.clone()]
-//     }
-//
-//     /// Get the `i`th entry in the slice chunk.
-//     ///
-//     /// # Panics
-//     ///
-//     /// Panics if `i >= self.len()`.
-//     pub(crate) fn get(&self, i: usize) -> &T {
-//         &self.get_chunk()[i]
-//     }
-// }
 
 //////////////
 // Parition //
@@ -614,16 +471,9 @@ mod tests {
         }
     }
 
-    // #[test]
-    // #[should_panic(expected = "range is invalid for data")]
-    // fn test_arc_chunk_new_panics() {
-    //     let x: Arc<[usize]> = Arc::new([]);
-    //     let _: ArcChunk<usize> = ArcChunk::new(x, 0..1);
-    // }
-
     fn test_partitioning<F>(get_ranges: F)
     where
-        F: Fn(usize, NonZeroUsize) -> Vec<Range<usize>>,
+        F: Fn(usize, NonZeroUsize) -> Vec<std::ops::Range<usize>>,
     {
         // One Task.
         for nitems in [0, 1, 10, 20, 100] {

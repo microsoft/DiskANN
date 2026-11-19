@@ -11,12 +11,10 @@
 
 use std::sync::Arc;
 
-use diskann_vector::distance::Metric;
-
 use crate::{
     graph::{
-        self, DiskANNIndex,
-        index::SearchStats,
+        self,
+        algorithms::SearchStats,
         search::Range,
         test::{provider as test_provider, synthetic::Grid},
     },
@@ -94,28 +92,14 @@ fn root() -> TestRoot {
     TestRoot::new("graph/test/cases/range_search")
 }
 
-pub(super) fn setup_grid_index(
-    grid_size: usize,
-    dims: Grid,
-) -> Arc<DiskANNIndex<test_provider::Provider>> {
-    let provider = test_provider::Provider::grid(dims, grid_size).unwrap();
-
-    let index_config = graph::config::Builder::new(
-        provider.max_degree(),
-        graph::config::MaxDegree::same(),
-        100,
-        Metric::L2.into(),
-    )
-    .build()
-    .unwrap();
-
-    Arc::new(DiskANNIndex::new(index_config, provider, None))
+pub(super) fn setup_grid_index(grid_size: usize, dims: Grid) -> Arc<test_provider::Provider> {
+    Arc::new(test_provider::Provider::grid(dims, grid_size).unwrap())
 }
 
 pub(super) fn setup_grid_index_and_default_query(
     grid_size: usize,
     dims: Grid,
-) -> (Arc<DiskANNIndex<test_provider::Provider>>, Vec<f32>) {
+) -> (Arc<test_provider::Provider>, Vec<f32>) {
     let index = setup_grid_index(grid_size, dims);
     let query = vec![grid_size as f32; dims.dim().into()];
     (index, query)
@@ -170,16 +154,8 @@ fn basic_range_search() {
     let starting_l = 32;
 
     let range_search = Range::new(starting_l, radius).unwrap();
-    let mut results: Vec<Neighbor<u32>> = Vec::new();
-
-    let stats = rt
-        .block_on(index.search(
-            range_search,
-            &test_provider::Strategy::new(),
-            &test_provider::Context::new(),
-            query.as_slice(),
-            &mut results,
-        ))
+    let (results, stats) = rt
+        .block_on(index.search(range_search, query.as_slice(), None))
         .unwrap();
 
     let baseline = RangeSearchBaseline {
@@ -224,16 +200,9 @@ fn inner_radius_filtering() {
         .inner_radius(Some(inner_radius))
         .build()
         .unwrap();
-    let mut results: Vec<Neighbor<u32>> = Vec::new();
 
-    let stats = rt
-        .block_on(index.search(
-            range_search,
-            &test_provider::Strategy::new(),
-            &test_provider::Context::new(),
-            query.as_slice(),
-            &mut results,
-        ))
+    let (results, stats) = rt
+        .block_on(index.search(range_search, query.as_slice(), None))
         .unwrap();
 
     let baseline = RangeSearchBaseline {
@@ -275,16 +244,9 @@ fn two_round_search() {
     let starting_l = 4; // small set to trigger multiple rounds
 
     let range_search = Range::new(starting_l, radius).unwrap();
-    let mut results: Vec<Neighbor<u32>> = Vec::new();
 
-    let stats = rt
-        .block_on(index.search(
-            range_search,
-            &test_provider::Strategy::new(),
-            &test_provider::Context::new(),
-            query.as_slice(),
-            &mut results,
-        ))
+    let (results, stats) = rt
+        .block_on(index.search(range_search, query.as_slice(), None))
         .unwrap();
 
     let baseline = RangeSearchBaseline {
@@ -323,16 +285,9 @@ fn empty_results() {
     let starting_l = 32;
 
     let range_search = Range::new(starting_l, radius).unwrap();
-    let mut results: Vec<Neighbor<u32>> = Vec::new();
 
-    let stats = rt
-        .block_on(index.search(
-            range_search,
-            &test_provider::Strategy::new(),
-            &test_provider::Context::new(),
-            query.as_slice(),
-            &mut results,
-        ))
+    let (results, stats) = rt
+        .block_on(index.search(range_search, query.as_slice(), None))
         .unwrap();
 
     assert!(
@@ -367,16 +322,8 @@ fn max_results_respected_and_second_round_triggered() {
         .build()
         .unwrap();
 
-    let mut results: Vec<Neighbor<u32>> = Vec::new();
-
-    let stats = rt
-        .block_on(index.search(
-            range_search,
-            &test_provider::Strategy::new(),
-            &test_provider::Context::new(),
-            query.as_slice(),
-            &mut results,
-        ))
+    let (results, stats) = rt
+        .block_on(index.search(range_search, query.as_slice(), None))
         .unwrap();
 
     let baseline = RangeSearchBaseline {
@@ -441,16 +388,9 @@ fn initial_slack_low_triggers_second_round() {
         .initial_slack(low_slack)
         .build()
         .unwrap();
-    let mut results: Vec<Neighbor<u32>> = Vec::new();
 
-    let stats = rt
-        .block_on(index.search(
-            range_search,
-            &test_provider::Strategy::new(),
-            &test_provider::Context::new(),
-            query.as_slice(),
-            &mut results,
-        ))
+    let (results, stats) = rt
+        .block_on(index.search(range_search, query.as_slice(), None))
         .unwrap();
 
     let baseline = RangeSearchBaseline {
@@ -502,16 +442,9 @@ fn initial_slack_high_avoids_second_round() {
         .initial_slack(high_slack)
         .build()
         .unwrap();
-    let mut results: Vec<Neighbor<u32>> = Vec::new();
 
-    let stats = rt
-        .block_on(index.search(
-            range_search,
-            &test_provider::Strategy::new(),
-            &test_provider::Context::new(),
-            query.as_slice(),
-            &mut results,
-        ))
+    let (results, stats) = rt
+        .block_on(index.search(range_search, query.as_slice(), None))
         .unwrap();
 
     let baseline = RangeSearchBaseline {
@@ -576,15 +509,8 @@ fn higher_range_slack_finds_more_results() {
             .range_slack(range_slack)
             .build()
             .unwrap();
-        let mut results: Vec<Neighbor<u32>> = Vec::new();
-        let stats = rt
-            .block_on(index.search(
-                range,
-                &test_provider::Strategy::new(),
-                &test_provider::Context::new(),
-                query.as_slice(),
-                &mut results,
-            ))
+        let (results, stats) = rt
+            .block_on(index.search(range, query.as_slice(), None))
             .unwrap();
 
         let baseline = RangeSearchBaseline {

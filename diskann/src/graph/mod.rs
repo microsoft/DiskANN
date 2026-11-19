@@ -3,6 +3,8 @@
  * Licensed under the MIT license.
  */
 
+pub mod algorithms;
+
 pub mod search_output_buffer;
 pub use search_output_buffer::{
     BufferState, IdDistance, IdDistanceAssociatedData, SearchOutputBuffer,
@@ -30,8 +32,6 @@ pub mod search;
 pub mod workingset;
 
 pub mod ext;
-
-mod algorithms;
 
 // Re-export the Search trait and error/output types only.
 // Search parameter types (Knn, Range, Diverse, etc.) should be accessed via `graph::search::`.

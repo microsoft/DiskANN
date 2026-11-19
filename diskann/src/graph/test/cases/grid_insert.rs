@@ -28,7 +28,6 @@ use crate::{
         search::Knn,
         test::{provider as test_provider, synthetic::Grid},
     },
-    neighbor::Neighbor,
     test::{
         TestPath, TestRoot,
         cmp::{assert_eq_verbose, verbose_eq},
@@ -385,10 +384,7 @@ fn _grid_build_and_search(params: TestParams, mut parent: TestPath<'_>) {
 
     // Build the index - enabling `working_set_reuse`.
     let _ = run_build(&reuse_index, grid_data.as_view(), batchsize, true, &rt);
-    assert_eq_verbose!(
-        index.dump_neighbors(true),
-        reuse_index.dump_neighbors(true),
-    );
+    assert_eq_verbose!(index.dump_neighbors(true), reuse_index.dump_neighbors(true),);
 
     assert!(
         reuse_index.metrics().get_vector <= index.metrics().get_vector,

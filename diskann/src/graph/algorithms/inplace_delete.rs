@@ -109,7 +109,7 @@ where
     where
         A: InplaceDelete<Id = I>,
     {
-        one_hop.discover(accessor, id, config, self).await?;
+        one_hop.discover(accessor, id, self).await?;
 
         add_edges_and_drop(
             accessor.prune_accessor().borrow_mut(),
@@ -133,7 +133,7 @@ where
     where
         A: InplaceDelete<Id = I>,
     {
-        two_hop.discover(accessor, id, config, self).await?;
+        two_hop.discover(accessor, id, self).await?;
 
         add_edges_and_drop(
             accessor.prune_accessor().borrow_mut(),
@@ -192,15 +192,12 @@ impl OneHop {
         &self,
         accessor: &mut A,
         id: A::Id,
-        config: &Config,
         scratch: &mut Scratch<A::Id>,
     ) -> ANNResult<()>
     where
         A: InplaceDelete,
     {
         let Self { replacements } = self.clone();
-
-        let max_degree = config.max_degree().get();
 
         accessor
             .prune_accessor()
@@ -216,7 +213,7 @@ impl OneHop {
             .in_neighbors
             .overwrite_trusted(&scratch.out_neighbors);
 
-        let mut temp = &mut scratch.replace;
+        let temp = &mut scratch.replace;
         keep_items_referencing(
             &mut scratch.in_neighbors,
             id,
@@ -249,7 +246,7 @@ fn assert_send_one_hop<A>(
 where
     A: InplaceDelete,
 {
-    async move { one_hop.discover(accessor, id, config, scratch).await }
+    async move { one_hop.discover(accessor, id, scratch).await }
 }
 
 //--------//
@@ -270,7 +267,6 @@ impl TwoHop {
         &self,
         accessor: &mut A,
         id: A::Id,
-        config: &Config,
         scratch: &mut Scratch<A::Id>,
     ) -> ANNResult<()>
     where

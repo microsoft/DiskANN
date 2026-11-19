@@ -5,15 +5,12 @@
 
 use std::{num::NonZeroUsize, sync::Arc};
 
-use diskann_vector::distance::Metric;
-
 use crate::{
     graph::{
         self,
         search::Knn,
         test::{provider as test_provider, synthetic::Grid},
     },
-    neighbor::Neighbor,
     test::{
         TestPath, TestRoot,
         cmp::{assert_eq_verbose, verbose_eq},
