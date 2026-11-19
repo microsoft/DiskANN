@@ -146,14 +146,18 @@ where
         };
 
         let mut moved = Buckets::new(links.len());
+
         for (&list, moves) in links.lists().iter().zip(moves) {
             moved.extend(moves.into_iter());
             region.remove_members(list, moved.seal())?;
         }
+
         let incoming = moved.group();
-        for (source, &id) in links.lists().iter().enumerate() {
-            region.append_members(id, incoming.get(source))?;
+
+        for (i, &list) in links.lists().iter().enumerate() {
+            region.append_members(list, incoming.get(i))?;
         }
+
         Ok(())
     }
 }
