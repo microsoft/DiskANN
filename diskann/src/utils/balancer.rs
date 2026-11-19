@@ -3,7 +3,10 @@
  * Licensed under the MIT license.
  */
 
-use std::{marker::PhantomData, sync::atomic::{AtomicUsize, Ordering}};
+use std::{
+    marker::PhantomData,
+    sync::atomic::{AtomicUsize, Ordering},
+};
 
 use crate::utils::async_tools;
 

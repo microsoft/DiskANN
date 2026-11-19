@@ -5,7 +5,7 @@
 
 // mod consolidate;
 // mod filtered_range_search;
-// mod grid_insert;
+mod grid_insert;
 mod grid_search;
 mod helpers;
 // mod index;

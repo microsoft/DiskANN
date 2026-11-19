@@ -23,7 +23,7 @@ use diskann_vector::distance::Metric;
 
 use crate::{
     graph::{
-        self, DiskANNIndex,
+        self,
         config::IntraBatchCandidates,
         search::Knn,
         test::{provider as test_provider, synthetic::Grid},
@@ -52,7 +52,12 @@ fn root() -> TestRoot {
 ///
 /// The start point is placed at `grid.start_point(size)` (all coordinates = `size`),
 /// matching the convention used by [`Grid::setup`]. The start point ID is `u32::MAX`.
-fn empty_provider(grid: Grid, size: usize) -> test_provider::Provider {
+fn build_index(
+    grid: Grid,
+    size: usize,
+    intra_batch_candidates: IntraBatchCandidates,
+    max_minibatch_par: usize,
+) -> Arc<test_provider::Provider> {
     let max_degree: usize = (grid.dim() as usize) * 2;
     let start_vector = grid.start_point(size);
 
@@ -63,31 +68,20 @@ fn empty_provider(grid: Grid, size: usize) -> test_provider::Provider {
     )
     .unwrap();
 
-    test_provider::Provider::new(config)
-}
-
-/// Build a [`DiskANNIndex`] around the given provider.
-fn build_index(
-    provider: test_provider::Provider,
-    intra_batch_candidates: IntraBatchCandidates,
-    max_minibatch_par: usize,
-) -> Arc<DiskANNIndex<test_provider::Provider>> {
-    let provider_degree = provider.max_degree();
-
     // We need to be a little careful with our `target_degree` handling. When the grid
     // dimension is 1, we set the `max_degree` equal to 2. Setting the `target_degree`
     // any lower results in a degenerate graph.
     //
     // For these tests, we set the absolute minimum 2 (or potentially 1 is
     // `provider_degree` is 1).
-    let target_degree = match provider_degree.checked_sub(2) {
-        Some(degree) => degree.max(2).min(provider_degree),
-        None => provider_degree,
+    let target_degree = match max_degree.checked_sub(2) {
+        Some(degree) => degree.max(2).min(max_degree),
+        None => max_degree,
     };
 
     let index_config = graph::config::Builder::new_with(
         target_degree,
-        graph::config::MaxDegree::new(provider_degree),
+        graph::config::MaxDegree::new(max_degree),
         100,
         (Metric::L2).into(),
         |b| {
@@ -98,7 +92,7 @@ fn build_index(
     .build()
     .unwrap();
 
-    Arc::new(DiskANNIndex::new(index_config, provider, None))
+    Arc::new(test_provider::Provider::new(config, index_config))
 }
 
 /// Run a round of index building on `data`.
@@ -119,7 +113,7 @@ fn build_index(
 /// To that end, baseline tests should set this to `false` while ensuring that setting this
 /// to `true` (A) builds the same graph and (B) results in fewer `get_vector` calls.
 fn run_build(
-    index: &Arc<DiskANNIndex<test_provider::Provider>>,
+    index: &Arc<test_provider::Provider>,
     data: rowmajor::Ref<'_, f32>,
     batchsize: Option<NonZeroUsize>,
     working_set_reuse: bool,
@@ -132,7 +126,7 @@ fn run_build(
         None => {
             for (id, vector) in data.rows().enumerate() {
                 runtime
-                    .block_on(index.insert(&strategy, &context, &(id as u32), vector))
+                    .block_on(index.insert(vector, id as u32, &strategy))
                     .unwrap();
             }
         }
@@ -142,11 +136,11 @@ fn run_build(
                 let stop = (start + batchsize.get()).min(data.nrows());
                 let batch = Arc::new(data.subview(start..stop).unwrap().to_rowmajor_owned());
                 runtime
-                    .block_on(index.multi_insert::<test_provider::Strategy, _>(
-                        strategy.clone(),
-                        &context,
+                    .block_on(index.batch_insert(
                         batch,
                         (start..stop).map(|i| i as u32).collect(),
+                        &strategy,
+                        runtime.handle(),
                     ))
                     .unwrap();
 
@@ -159,13 +153,12 @@ fn run_build(
 }
 
 /// Capture the graph state as sorted adjacency lists, if [`DUMP_GRAPH_STATE`] is enabled.
-fn maybe_dump_graph(index: &DiskANNIndex<test_provider::Provider>) -> Option<Vec<(u32, Vec<u32>)>> {
+fn maybe_dump_graph(index: &test_provider::Provider) -> Option<Vec<(u32, Vec<u32>)>> {
     if !DUMP_GRAPH_STATE {
         None
     } else {
         Some(
             index
-                .provider()
                 .dump_neighbors(true)
                 .into_iter()
                 .map(|(id, list)| (id, list.into()))
@@ -176,7 +169,7 @@ fn maybe_dump_graph(index: &DiskANNIndex<test_provider::Provider>) -> Option<Vec
 
 /// Search the index with standard query vectors and return results.
 fn run_searches(
-    index: &DiskANNIndex<test_provider::Provider>,
+    index: &test_provider::Provider,
     grid: Grid,
     size: usize,
     description_prefix: &str,
@@ -205,28 +198,23 @@ fn run_searches(
         let params = Knn::new(10, None).unwrap();
         let search_ctx = test_provider::Context::new();
 
-        let mut neighbors = vec![Neighbor::<u32>::default(); k_value];
-        let graph::index::SearchStats {
+        let (neighbors, stats) = runtime
+            .block_on(index.search(params, &*query, NonZeroUsize::new(k_value)))
+            .unwrap();
+
+        let graph::algorithms::SearchStats {
             cmps,
             hops,
             result_count,
             range_search_second_round,
-        } = runtime
-            .block_on(index.search(
-                params,
-                &test_provider::Strategy::new(),
-                &search_ctx,
-                &*query,
-                &mut crate::neighbor::BackInserter::new(neighbors.as_mut_slice()),
-            ))
-            .unwrap();
+        } = stats;
 
         assert!(
             !range_search_second_round,
             "range search should not activate for k-nearest-neighbors",
         );
 
-        let metrics = index.provider().metrics();
+        let metrics = index.metrics();
 
         results.push(GridSearch {
             query: query.clone(),
@@ -347,17 +335,13 @@ fn _grid_build_and_search(params: TestParams, mut parent: TestPath<'_>) {
 
     let num_points = grid.num_points(size);
     let grid_data = grid.data(size);
-    let index = build_index(
-        empty_provider(grid, size),
-        intra_batch_candidates,
-        max_minibatch_par,
-    );
+    let index = build_index(grid, size, intra_batch_candidates, max_minibatch_par);
 
     // Build the index.
     let insert_context = run_build(&index, grid_data.as_view(), batchsize, false, &rt);
 
-    let insert_metrics = index.provider().metrics();
-    index.provider().is_consistent().unwrap();
+    let insert_metrics = index.metrics();
+    index.is_consistent().unwrap();
 
     let graph_state = maybe_dump_graph(&index);
 
@@ -397,24 +381,20 @@ fn _grid_build_and_search(params: TestParams, mut parent: TestPath<'_>) {
     // Now that we have checked the baseline - ensure that if we rebuild with
     // `working_set_reuse` enabled that the graph remains the same and the number of
     // `get_vector` calls decreases.
-    let reuse_index = build_index(
-        empty_provider(grid, size),
-        intra_batch_candidates,
-        max_minibatch_par,
-    );
+    let reuse_index = build_index(grid, size, intra_batch_candidates, max_minibatch_par);
 
     // Build the index - enabling `working_set_reuse`.
     let _ = run_build(&reuse_index, grid_data.as_view(), batchsize, true, &rt);
     assert_eq_verbose!(
-        index.provider().dump_neighbors(true),
-        reuse_index.provider().dump_neighbors(true),
+        index.dump_neighbors(true),
+        reuse_index.dump_neighbors(true),
     );
 
     assert!(
-        reuse_index.provider().metrics().get_vector <= index.provider().metrics().get_vector,
+        reuse_index.metrics().get_vector <= index.metrics().get_vector,
         "with reuse: {}, without reuse: {}",
-        reuse_index.provider().metrics().get_vector,
-        index.provider().metrics().get_vector,
+        reuse_index.metrics().get_vector,
+        index.metrics().get_vector,
     );
 }
 
@@ -433,11 +413,7 @@ fn _assert_thread_invariant(
     let rt_st = current_thread_runtime();
     let grid_data = grid.data(size);
 
-    let index_st = build_index(
-        empty_provider(grid, size),
-        intra_batch_candidates,
-        max_minibatch_par,
-    );
+    let index_st = build_index(grid, size, intra_batch_candidates, max_minibatch_par);
     run_build(
         &index_st,
         grid_data.as_view(),
@@ -445,7 +421,7 @@ fn _assert_thread_invariant(
         false,
         &rt_st,
     );
-    let metrics_st = index_st.provider().metrics();
+    let metrics_st = index_st.metrics();
 
     // Build with multi-threaded runtime (2 worker threads).
     let rt_mt = tokio::runtime::Builder::new_multi_thread()
@@ -453,11 +429,7 @@ fn _assert_thread_invariant(
         .build()
         .expect("multi-thread runtime should build");
 
-    let index_mt = build_index(
-        empty_provider(grid, size),
-        intra_batch_candidates,
-        max_minibatch_par,
-    );
+    let index_mt = build_index(grid, size, intra_batch_candidates, max_minibatch_par);
     run_build(
         &index_mt,
         grid_data.as_view(),
@@ -465,7 +437,7 @@ fn _assert_thread_invariant(
         false,
         &rt_mt,
     );
-    let metrics_mt = index_mt.provider().metrics();
+    let metrics_mt = index_mt.metrics();
 
     // Metrics must match exactly.
     assert_eq_verbose!(metrics_st, metrics_mt);

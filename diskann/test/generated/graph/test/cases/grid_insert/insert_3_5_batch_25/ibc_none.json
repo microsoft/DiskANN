@@ -3,8 +3,8 @@
   "test": "graph/test/cases/grid_insert/insert_3_5_batch_25/ibc_none",
   "payload": {
     "context_metrics": {
-      "clones": 35,
-      "spawns": 30
+      "clones": 0,
+      "spawns": 0
     },
     "description": "After inserting 125 points (batch (chunks of 25), ibc=none) into a 3D grid of size 5.",
     "grid_dims": 3,
@@ -12,7 +12,7 @@
     "insert_metrics": {
       "append_neighbors": 131,
       "get_neighbors": 6605,
-      "get_vector": 16318,
+      "get_vector": 13193,
       "set_neighbors": 133,
       "set_vector": 125
     },
@@ -28,7 +28,7 @@
         "metrics": {
           "append_neighbors": 131,
           "get_neighbors": 6625,
-          "get_vector": 16372,
+          "get_vector": 13247,
           "set_neighbors": 133,
           "set_vector": 125
         },
@@ -91,7 +91,7 @@
         "metrics": {
           "append_neighbors": 131,
           "get_neighbors": 6636,
-          "get_vector": 16393,
+          "get_vector": 13268,
           "set_neighbors": 133,
           "set_vector": 125
         },

@@ -4,23 +4,32 @@
  */
 
 use std::{
+    borrow::BorrowMut,
     fmt::Debug,
     marker::PhantomData,
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 
-use diskann_utils::future::SendFuture;
+use diskann_utils::future::{AsyncFriendly, SendFuture};
 use hashbrown::HashMap;
+use tokio::sync::{mpsc, oneshot};
 
 use crate::{
-    ANNResult,
+    ANNError, ANNResult,
     error::ErrorExt,
     graph::{
         AdjacencyList, Config, algorithms,
         glue::PruneAccessor,
         internal::{BackedgeBuffer, prune},
     },
-    utils::{VectorId, async_tools, balancer::{Balancer, BatchPosition}},
+    provider::HasId,
+    utils::{
+        VectorId, async_tools,
+        balancer::{Balancer, BatchPosition},
+    },
 };
 
 //--------------//
@@ -34,9 +43,7 @@ pub struct ForwardEdges<I> {
 
 impl<I> ForwardEdges<I> {
     pub fn new() -> Self {
-        Self {
-            edges: Vec::new()
-        }
+        Self { edges: Vec::new() }
     }
 
     pub fn merge(&mut self, other: ForwardEdges<I>) {
@@ -49,6 +56,10 @@ impl<I> ForwardEdges<I> {
 
     fn len(&self) -> usize {
         self.edges.len()
+    }
+
+    fn into_inner(self) -> Vec<ForwardEdge<I>> {
+        self.edges
     }
 }
 
@@ -109,7 +120,9 @@ pub struct BackEdges<I> {
 
 impl<I> BackEdges<I> {
     pub fn new() -> Self {
-        Self { edges: HashMap::new() }
+        Self {
+            edges: HashMap::new(),
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -232,7 +245,7 @@ where
     pub fn new() -> Self {
         Self {
             find: algorithms::FindInsertCandidates::new(),
-            buf: AdjacencyList::new()
+            buf: AdjacencyList::new(),
         }
     }
 
@@ -381,3 +394,350 @@ impl<I> Candidates<I> {
     }
 }
 
+//----------//
+// Provided //
+//----------//
+
+pub trait Standard: std::fmt::Debug + HasId + Send + Sync + 'static {
+    type InsertAccessor<'a>: algorithms::Insert<Id = Self::Id>
+    where
+        Self: 'a;
+
+    type PruneAccessor<'a>: PruneAccessor<Id = Self::Id>
+    where
+        Self: 'a;
+
+    fn insert_accessor(
+        &mut self,
+        id: Self::Id,
+    ) -> ANNResult<impl std::borrow::BorrowMut<Self::InsertAccessor<'_>> + Send>;
+
+    fn prune_accessor(&mut self) -> impl std::borrow::BorrowMut<Self::PruneAccessor<'_>> + Send;
+}
+
+pub async fn standard<S, F>(
+    handle: &tokio::runtime::Handle,
+    batch: Arc<[S::Id]>,
+    config: &Config,
+    make: F,
+) -> ANNResult<()>
+where
+    F: FnMut() -> S,
+    S: Standard,
+{
+    let ntasks = config.max_minibatch_par();
+
+    // Spawn all worker tasks.
+    let mut tasks = Vec::<tokio::task::JoinHandle<()>>::with_capacity(ntasks.get());
+    let mut commands = Vec::<mpsc::Sender<Command<S::Id>>>::with_capacity(ntasks.get());
+    let mut forward_responses = Vec::with_capacity(ntasks.get());
+
+    let balancer = Arc::new(Balancer::new(batch));
+    std::iter::repeat_with(make)
+        .take(ntasks.get())
+        .for_each(|standard| {
+            let config_clone = config.clone();
+            let balancer_clone = balancer.clone();
+
+            let (forward_sender, forward_receiver) = oneshot::channel();
+            let (command_sender, command_receiver) = mpsc::channel(1);
+
+            let h = handle.spawn(worker(
+                standard,
+                config_clone,
+                command_receiver,
+                balancer_clone,
+                forward_sender,
+            ));
+
+            tasks.push(h);
+            forward_responses.push(forward_receiver);
+            commands.push(command_sender);
+        });
+
+    run_batch_insert(tasks, commands, forward_responses, config).await
+}
+
+/// This is the actual orchestration implementation. It is only generic over the ID type `I`
+/// to only monomorphize once regardless of the type of the [`Standard`] or the construction
+/// closure.
+///
+/// This is split into an inner happy path and outer error builder. Decomposing the
+/// implementation this way allows the happy path to use standard "?" for error propagation.
+async fn run_batch_insert<I>(
+    tasks: Vec<tokio::task::JoinHandle<()>>,
+    commands: Vec<mpsc::Sender<Command<I>>>,
+    forward_responses: Vec<oneshot::Receiver<ANNResult<ForwardEdges<I>>>>,
+    config: &Config,
+) -> ANNResult<()>
+where
+    I: VectorId,
+{
+    // FIXME: Handle errors by scanning over tasks and finding panicked workers.
+    run_batch_happy(commands, forward_responses, config).await
+}
+
+async fn run_batch_happy<I>(
+    commands: Vec<mpsc::Sender<Command<I>>>,
+    forward_responses: Vec<oneshot::Receiver<ANNResult<ForwardEdges<I>>>>,
+    config: &Config,
+) -> ANNResult<()>
+where
+    I: VectorId,
+{
+    use futures_util::{StreamExt, stream::FuturesUnordered};
+
+    // Aggregate all forward and back edges.
+    //
+    // A `FuturesUnordered` is used too process results potentially out of order. The
+    // control task eagerly merges edges to try to get a bit more concurrency.
+    let mut forward = ForwardEdges::new();
+    let mut backward = BackEdges::new();
+
+    {
+        let mut pending: FuturesUnordered<_> = forward_responses.into_iter().collect();
+        while let Some(response) = pending.next().await {
+            let edges = response.map_err(ANNError::new)??;
+            backward.accumulate(&edges);
+            forward.merge(edges);
+        }
+    }
+
+    // Perform bootstrap if needed.
+    let (forward, backward) = match Candidates::check(config, forward, backward) {
+        Candidates::Ready { forward, backward } => (forward, backward),
+        Candidates::BootstrapNeeded { forward } => {
+            let mut recomputed_forward = ForwardEdges::new();
+            let mut recomputed_backward = BackEdges::new();
+
+            let balancer = Arc::new(Balancer::new(forward.into_inner()));
+            let mut pending: FuturesUnordered<_> = commands
+                .iter()
+                .map(|command| Command::bootstrap(command, &balancer))
+                .collect();
+
+            while let Some(response) = pending.next().await {
+                let edges = response?;
+                recomputed_backward.accumulate(&edges);
+                recomputed_forward.merge(edges);
+            }
+
+            (recomputed_forward, recomputed_backward.skip_bootstrap())
+        }
+    };
+
+    // Apply forward edges.
+    {
+        let balancer = Arc::new(Balancer::new(forward.into_inner()));
+        let mut pending: FuturesUnordered<_> = commands
+            .iter()
+            .map(|command| Command::apply_forward(command, &balancer))
+            .collect();
+
+        while let Some(response) = pending.next().await {
+            response?;
+        }
+    }
+
+    // Apply back edges.
+    {
+        let balancer = Arc::new(Balancer::new(backward.collect::<Vec<_>>()));
+        let mut pending: FuturesUnordered<_> = commands
+            .iter()
+            .map(|command| Command::apply_backward(command, &balancer))
+            .collect();
+
+        while let Some(response) = pending.next().await {
+            response?;
+        }
+    }
+
+    Ok(())
+}
+
+#[derive(Debug)]
+enum Command<I> {
+    Bootstrap {
+        balancer: Arc<Balancer<ForwardEdge<I>, Vec<ForwardEdge<I>>>>,
+        response: oneshot::Sender<ANNResult<ForwardEdges<I>>>,
+    },
+    ApplyForward {
+        balancer: Arc<Balancer<ForwardEdge<I>, Vec<ForwardEdge<I>>>>,
+        response: oneshot::Sender<ANNResult<()>>,
+    },
+    ApplyBackward {
+        balancer: Arc<Balancer<BackEdge<I>, Vec<BackEdge<I>>>>,
+        response: oneshot::Sender<ANNResult<()>>,
+    },
+}
+
+impl<I> Command<I>
+where
+    I: AsyncFriendly,
+{
+    async fn bootstrap(
+        command: &mpsc::Sender<Self>,
+        balancer: &Arc<Balancer<ForwardEdge<I>, Vec<ForwardEdge<I>>>>,
+    ) -> ANNResult<ForwardEdges<I>> {
+        let (response, receiver) = oneshot::channel();
+        let balancer = balancer.clone();
+        command
+            .send(Self::Bootstrap { balancer, response })
+            .await
+            .map_err(ANNError::new)?;
+        receiver.await.map_err(ANNError::new)?
+    }
+
+    async fn apply_forward(
+        command: &mpsc::Sender<Self>,
+        balancer: &Arc<Balancer<ForwardEdge<I>, Vec<ForwardEdge<I>>>>,
+    ) -> ANNResult<()> {
+        let (response, receiver) = oneshot::channel();
+        let balancer = balancer.clone();
+        command
+            .send(Self::ApplyForward { balancer, response })
+            .await
+            .map_err(ANNError::new)?;
+        receiver.await.map_err(ANNError::new)?
+    }
+
+    async fn apply_backward(
+        command: &mpsc::Sender<Self>,
+        balancer: &Arc<Balancer<BackEdge<I>, Vec<BackEdge<I>>>>,
+    ) -> ANNResult<()> {
+        let (response, receiver) = oneshot::channel();
+        let balancer = balancer.clone();
+        command
+            .send(Self::ApplyBackward { balancer, response })
+            .await
+            .map_err(ANNError::new)?;
+        receiver.await.map_err(ANNError::new)?
+    }
+}
+
+async fn worker<S>(
+    mut worker: S,
+    config: Config,
+    mut command: mpsc::Receiver<Command<S::Id>>,
+    forward_balancer: Arc<Balancer<S::Id, Arc<[S::Id]>>>,
+    forward_response: oneshot::Sender<ANNResult<ForwardEdges<S::Id>>>,
+) where
+    S: Standard,
+{
+    let mut batch_insert = BatchInsert::new();
+
+    // Immediately on start up, begin computing forward edges.
+    let result = compute_forward(&mut worker, &mut batch_insert, &forward_balancer, &config).await;
+
+    if forward_response.send(result).is_err() {
+        // Gracefully exit.
+        return;
+    }
+
+    // Enter command loop.
+    while let Some(command) = command.recv().await {
+        match command {
+            Command::Bootstrap { balancer, response } => {
+                let result = bootstrap(&mut worker, &mut batch_insert, &balancer, &config).await;
+                if response.send(result).is_err() {
+                    // Gracefully exit.
+                    return;
+                }
+            }
+            Command::ApplyForward { balancer, response } => {
+                let result = apply_forward(&mut worker, &balancer).await;
+
+                if response.send(result).is_err() {
+                    // Gracefully exit.
+                    return;
+                }
+            }
+            Command::ApplyBackward { balancer, response } => {
+                let result =
+                    apply_backward(&mut worker, &mut batch_insert, &balancer, &config).await;
+
+                if response.send(result).is_err() {
+                    // Gracefully exit.
+                    return;
+                }
+            }
+        }
+    }
+}
+
+async fn compute_forward<S>(
+    standard: &mut S,
+    batch_insert: &mut BatchInsert<S::Id>,
+    balancer: &Balancer<S::Id, Arc<[S::Id]>>,
+    config: &Config,
+) -> ANNResult<ForwardEdges<S::Id>>
+where
+    S: Standard,
+{
+    let mut edges = ForwardEdges::new();
+    while let Some(batch) = balancer.next() {
+        let mut accessor = standard.insert_accessor(*batch.current())?;
+        batch_insert
+            .find_forward_edges(&mut edges, accessor.borrow_mut(), batch, config)
+            .await?;
+    }
+    Ok(edges)
+}
+
+async fn bootstrap<S>(
+    standard: &mut S,
+    batch_insert: &mut BatchInsert<S::Id>,
+    balancer: &Balancer<ForwardEdge<S::Id>, Vec<ForwardEdge<S::Id>>>,
+    config: &Config,
+) -> ANNResult<ForwardEdges<S::Id>>
+where
+    S: Standard,
+{
+    let mut edges = ForwardEdges::new();
+    let mut accessor = standard.prune_accessor();
+    while let Some(batch) = balancer.next() {
+        batch_insert
+            .bootstrap(&mut edges, accessor.borrow_mut(), batch, config)
+            .await?;
+    }
+    Ok(edges)
+}
+
+async fn apply_forward<S>(
+    standard: &mut S,
+    balancer: &Balancer<ForwardEdge<S::Id>, Vec<ForwardEdge<S::Id>>>,
+) -> ANNResult<()>
+where
+    S: Standard,
+{
+    use crate::provider::NeighborAccessorMut;
+
+    let mut accessor = standard.prune_accessor();
+    while let Some(edge) = balancer.next() {
+        let edge = edge.current();
+        accessor
+            .borrow_mut()
+            .neighbors()
+            .set_neighbors(*edge.source(), edge.destinations())
+            .await?;
+    }
+    Ok(())
+}
+
+async fn apply_backward<S>(
+    standard: &mut S,
+    batch_insert: &mut BatchInsert<S::Id>,
+    balancer: &Balancer<BackEdge<S::Id>, Vec<BackEdge<S::Id>>>,
+    config: &Config,
+) -> ANNResult<()>
+where
+    S: Standard,
+{
+    let mut accessor = standard.prune_accessor();
+    while let Some(edge) = balancer.next() {
+        batch_insert
+            .apply_back_edge(accessor.borrow_mut(), edge.current(), config)
+            .await?;
+    }
+    Ok(())
+}
