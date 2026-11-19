@@ -15,7 +15,7 @@ targets = ["x86_64-unknown-linux-gnu", "aarch64-pc-windows-msvc", "x86_64-pc-win
 anyhow.workspace = true
 bytemuck = { workspace = true, features = ["must_cast"]}
 diskann-utils = { workspace = true, default-features = false }
-futures-util = { workspace = true, default-features = false }
+futures-util = { workspace = true, default-features = false, features = ["alloc"] }
 half = { workspace = true, features = ["bytemuck", "num-traits"] }
 # Note: hashbrown not using workspace because diskann needs default-features = false
 # while other crates use default-features = true. Keeping version 0.16.0 consistent.
@@ -24,7 +24,7 @@ num-traits.workspace = true
 rand.workspace = true
 rayon = { workspace = true, optional = true }
 thiserror.workspace = true
-tokio = { workspace = true, features = ["rt", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "sync"] }
 tracing = { workspace = true, optional = true }
 diskann-vector = { workspace = true }
 diskann-wide = { workspace = true }

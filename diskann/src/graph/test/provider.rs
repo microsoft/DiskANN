@@ -27,7 +27,7 @@ use crate::{
     internal::counter::{Counter, LocalCounter},
     neighbor::Neighbor,
     provider,
-    utils::{VectorRepr, balancer, async_tools},
+    utils::{VectorRepr, async_tools, balancer},
 };
 
 #[cfg(any(test, feature = "testing"))]
@@ -508,7 +508,7 @@ impl Provider {
     fn prune_accessor<'a>(
         &'a self,
         options: &'a Strategy,
-        overlay: Option<&workingset::map::Builder<u32, workingset::map::Ref<[f32]>>>,
+        overlay: Option<&workingset::map::Overlay<u32, workingset::map::Ref<[f32]>>>,
     ) -> PruneAccessor<'a> {
         let cap = if options.working_set_reuse {
             workingset::map::Capacity::Default
@@ -516,8 +516,14 @@ impl Provider {
             workingset::map::Capacity::None
         };
 
-        let set = workingset::map::Builder::new(cap).build(self.graph.max_occlusion_size().get());
+        let builder = workingset::map::Builder::new(cap);
+        let builder = if let Some(overlay) = overlay {
+            builder.with_overlay(overlay.clone())
+        } else {
+            builder
+        };
 
+        let set = builder.build(self.graph.max_occlusion_size().get());
         match &options.transient_ids {
             Some(ids) => PruneAccessor::new(self, Some(Cow::Borrowed(ids)), set),
             None => PruneAccessor::new(self, None, set),
@@ -613,7 +619,7 @@ impl Provider {
         &'a self,
         vector: &'a [f32],
         options: &'a Strategy,
-        overlay: Option<&workingset::map::Builder<u32, workingset::map::Ref<[f32]>>>,
+        overlay: Option<&workingset::map::Overlay<u32, workingset::map::Ref<[f32]>>>,
     ) -> Result<Insert<'a>, DimMismatch> {
         Ok(Insert {
             search: self.search_accessor(vector)?,
@@ -626,101 +632,48 @@ impl Provider {
         self.set(vector, id)?;
 
         // Step 2 - run the insertion algorithm.
-        algorithms::insert(&mut self.insert_accessor(vector, options, None)?, id, &self.graph).await?;
+        algorithms::insert(
+            &mut self.insert_accessor(vector, options, None)?,
+            id,
+            &self.graph,
+        )
+        .await?;
 
         Ok(())
     }
 
     pub async fn batch_insert(
-        self: Arc<Self>,
+        self: &Arc<Self>,
         data: Arc<rowmajor::Owned<f32>>,
         ids: Arc<[u32]>,
-        options: Strategy,
+        options: &Strategy,
         handle: &tokio::runtime::Handle,
-    ) -> ANNResult<usize> {
-        use workingset::map::{Builder, Capacity, Overlay};
-        use algorithms::batch::insert::{BatchInsert, ForwardEdges, BackEdges, Candidates};
-
+    ) -> ANNResult<()> {
         // Did the provide us with sensible number of values.
         if data.nrows() != ids.len() {
-            return Err(ANNError::message("number of data rows does not match the number of ids"));
+            return Err(ANNError::message(
+                "number of data rows does not match the number of ids",
+            ));
         }
 
-        // The strategy we use is to defer actually inserting the vectors until we're ready
-        // with all the edges.
-        //
-        // FIXME: make the reference implementation more correct.
-        let overlay: Builder<u32, workingset::map::Ref<[f32]>> = {
-            let capacity = if options.working_set_reuse {
-                Capacity::Default
-            } else {
-                Capacity::None
-            };
+        // Insert all IDs.
+        for (vector, id) in std::iter::zip(data.rows(), ids.iter()) {
+            self.set(vector, *id)?;
+        }
 
-            Builder::new(capacity).with_overlay(Overlay::from_batch(data.clone(), ids.iter().cloned()))
-        };
-
-        let options = Arc::new(options);
-
-        let mut candidates = {
-            let work = Arc::new(balancer::Balancer::new(ids.clone()));
-
-            let mut forward_edges = ForwardEdges::new();
-            let mut back_edges = BackEdges::new();
-
-            // We're ready to generate the forward edges.
-            async_tools::fork_and_join(
-                handle,
-                |tid| {
-                    let self_clone = self.clone();
-                    let data_clone = data.clone();
-                    let work_clone = work.clone();
-                    let overlay_clone = overlay.clone();
-                    let options_clone = options.clone();
-                    async move {
-                        let mut forward = ForwardEdges::new();
-                        let mut multi = BatchInsert::new();
-
-                        let Some(mut work) = work_clone.next() else { return ANNResult::Ok(forward); };
-
-                        let mut accessor = self_clone.insert_accessor(
-                            data_clone.row(work.position()),
-                            &options_clone,
-                            Some(&overlay_clone),
-                        )?;
-
-                        loop {
-                            multi.find_forward_edges(
-                                &mut forward,
-                                &mut accessor,
-                                work,
-                                &self_clone.graph,
-                            ).await?;
-
-                            if let Some(next) = work_clone.next() {
-                                work = next;
-                                accessor.search.rebind(data_clone.row(work.position()))?;
-                            } else {
-                                return Ok(forward)
-                            }
-                        }
-                    }
-                },
-                self.graph.max_minibatch_par(),
-                |result| -> ANNResult<()> {
-                    let forward = result?;
-                    back_edges.accumulate(&forward);
-                    forward_edges.merge(forward);
-                    Ok(())
-                },
-            ).await?;
-
-            Candidates::check(&self.graph, forward_edges, back_edges)
-        };
-
-        Ok(0)
+        let overlay = workingset::map::Overlay::from_batch(data.clone(), ids.iter().cloned());
+        algorithms::batch::insert::standard(handle, ids, &self.graph, || BatchInsert {
+            provider: self.clone(),
+            overlay: overlay.clone(),
+            options: options.clone(),
+        })
+        .await
     }
 }
+
+//--------//
+// Insert //
+//--------//
 
 #[derive(Debug)]
 struct Insert<'a> {
@@ -748,6 +701,52 @@ impl<'a> algorithms::Insert for Insert<'a> {
     }
     fn prune_accessor(&mut self) -> impl BorrowMut<PruneAccessor<'a>> + Send {
         &mut self.prune
+    }
+}
+
+//-------------//
+// BatchInsert //
+//-------------//
+
+#[derive(Debug)]
+struct BatchInsert {
+    provider: Arc<Provider>,
+    overlay: workingset::map::Overlay<u32, workingset::map::Ref<[f32]>>,
+    options: Strategy,
+}
+
+impl provider::HasId for BatchInsert {
+    type Id = u32;
+}
+
+impl algorithms::batch::insert::Standard for BatchInsert {
+    type InsertAccessor<'a>
+        = Insert<'a>
+    where
+        Self: 'a;
+    type PruneAccessor<'a>
+        = PruneAccessor<'a>
+    where
+        Self: 'a;
+
+    fn insert_accessor(
+        &mut self,
+        id: u32,
+    ) -> ANNResult<impl std::borrow::BorrowMut<Self::InsertAccessor<'_>> + Send> {
+        let Some(vector) = self.overlay.get(&id) else {
+            return Err(ANNError::message(format!(
+                "id {id} is not part of the batch"
+            )));
+        };
+
+        Ok(self
+            .provider
+            .insert_accessor(vector, &self.options, Some(&self.overlay))?)
+    }
+
+    fn prune_accessor(&mut self) -> impl std::borrow::BorrowMut<Self::PruneAccessor<'_>> + Send {
+        self.provider
+            .prune_accessor(&self.options, Some(&self.overlay))
     }
 }
 
@@ -1064,45 +1063,6 @@ impl provider::Delete for Provider {
         self.status_by_internal_id(context, *gid)
     }
 }
-
-// impl provider::SetElement<&[f32]> for Provider {
-//     type SetError = ANNError;
-//
-//     async fn set_element(
-//         &self,
-//         _context: &Context,
-//         id: &Self::ExternalId,
-//         element: &[f32],
-//     ) -> Result<Self::Guard, Self::SetError> {
-//         #[derive(Debug, Clone, Copy, Error)]
-//         enum SetError {
-//             #[error("vector id {0} is already assigned")]
-//             AlreadyAssigned(u32),
-//             #[error("wrong dim - got {0}, expected {1}")]
-//             WrongDim(usize, usize),
-//         }
-//
-//         crate::always_escalate!(SetError);
-//         convert_error!(SetError);
-//
-//         // Ensure that the assigned vector has the correct length.
-//         if element.len() != self.dim() {
-//             return Err(SetError::WrongDim(element.len(), self.dim()).into());
-//         }
-//
-//         match self.terms.entry(*id) {
-//             Entry::Occupied(_) => Err(SetError::AlreadyAssigned(*id).into()),
-//             Entry::Vacant(term) => {
-//                 term.insert(Term {
-//                     neighbors: AdjacencyList::new(),
-//                     data: Vector::Valid(element.into()),
-//                 });
-//                 self.set_vector.increment();
-//                 Ok(provider::NoopGuard::new(*id))
-//             }
-//         }
-//     }
-// }
 
 //////////////////////
 // NeighborAccessor //
@@ -2052,8 +2012,10 @@ mod tests {
             4,
             graph::config::MaxDegree::same(),
             100,
-            (Metric::L2).into()
-        ).build().unwrap();
+            (Metric::L2).into(),
+        )
+        .build()
+        .unwrap();
 
         let start_points = [
             (0, AdjacencyList::from_iter_untrusted([1, 2, 3])),
@@ -2103,11 +2065,10 @@ mod tests {
     }
 
     #[test]
-    fn test_set_element() {
+    fn test_set() {
         use provider::{Guard, SetElement};
 
         let provider = create_test_provider();
-        let rt = current_thread_runtime();
 
         let context = Context::new();
         let query = vec![0.0; provider.dim()];
@@ -2119,9 +2080,7 @@ mod tests {
         // Setting with the wrong dimension is an error.
         {
             let v = vec![1.0f32; provider.dim() + 1];
-            let err = rt
-                .block_on(provider.set_element(&context, &id, &v))
-                .unwrap_err();
+            let err = provider.set(&v, id).unwrap_err();
             let msg = err.to_string();
             assert_contains!(msg, "wrong dim");
             assert!(accessor.get_distance(id).is_err());
@@ -2130,10 +2089,7 @@ mod tests {
         // Setting with the correct dimension is successful.
         {
             let v = vec![1.0f32; provider.dim()];
-            let guard = rt
-                .block_on(provider.set_element(&context, &id, &v))
-                .unwrap();
-            rt.block_on(guard.complete());
+            let guard = provider.set(&v, id).unwrap();
 
             let distance = accessor.get_distance(id).unwrap();
             assert_eq!(distance, provider.dim() as f32);
@@ -2142,9 +2098,7 @@ mod tests {
         // Setting again is an error.
         {
             let v = vec![1.0f32; provider.dim()];
-            let err = rt
-                .block_on(provider.set_element(&context, &id, &v))
-                .unwrap_err();
+            let err = provider.set(&v, id).unwrap_err();
             let msg = err.to_string();
             assert_contains!(msg, "vector id 5 is already assigned");
         }

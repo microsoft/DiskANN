@@ -3,8 +3,8 @@
   "test": "graph/test/cases/grid_insert/insert_3_5_batch_125/ibc_all",
   "payload": {
     "context_metrics": {
-      "clones": 5,
-      "spawns": 5
+      "clones": 0,
+      "spawns": 0
     },
     "description": "After inserting 125 points (batch (all-at-once), ibc=all) into a 3D grid of size 5.",
     "grid_dims": 3,
