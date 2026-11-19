@@ -23,10 +23,7 @@ pub const GRAPH_SLACK_FACTOR: f64 = 1.3_f64;
 ///
 /// Members `labels` and `beta` are used by the async index for beta-filtered search.
 #[derive(Debug)]
-pub struct SearchScratch<I, Q = NeighborPriorityQueue<I>>
-where
-    I: VectorId,
-{
+pub struct SearchScratch<I, Q = NeighborPriorityQueue<I>> {
     /// A priority queue of the best candidates seen during search. This data structure is
     /// also responsible for determining the best unvisited candidate.
     ///

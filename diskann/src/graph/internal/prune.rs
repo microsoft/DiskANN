@@ -30,19 +30,13 @@ pub(crate) struct Options {
 /// The actual object passed to the pruning algorithms is [`Context`], which allows
 /// sub-fields to be over-written as needed with local state if that is available instead.
 #[derive(Debug)]
-pub(crate) struct Scratch<I>
-where
-    I: VectorId,
-{
+pub(crate) struct Scratch<I> {
     pub(in crate::graph) pool: Vec<Neighbor<I>>,
     pub(in crate::graph) states: Vec<State>,
     pub(in crate::graph) neighbors: AdjacencyList<I>,
 }
 
-impl<I> Scratch<I>
-where
-    I: VectorId,
-{
+impl<I> Scratch<I> {
     /// Create a new empty scratch space.
     ///
     /// This function should not allocate.
@@ -67,10 +61,7 @@ where
 
 /// Arguments passed to the lowest-level pruning algorithm.
 #[derive(Debug)]
-pub(crate) struct Context<'ctx, I>
-where
-    I: VectorId,
-{
+pub(crate) struct Context<'ctx, I> {
     /// Input: The list of candidates to prune.
     pub(in crate::graph) pool: SortedNeighbors<'ctx, I>,
     /// Scratch: State tracking for prune.

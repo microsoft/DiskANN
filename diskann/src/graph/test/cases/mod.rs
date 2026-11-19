@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-// mod consolidate;
+mod consolidate;
 mod filtered_range_search;
 mod grid_insert;
 mod grid_search;
@@ -12,7 +12,7 @@ mod helpers;
 mod inline;
 // mod inplace_delete;
 mod multihop;
-// mod paged_search;
+mod paged_search;
 mod range_search;
 
 /// Set to `true` and recompile to include full adjacency list state in participating

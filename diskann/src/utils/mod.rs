@@ -6,6 +6,9 @@
 pub mod async_tools;
 pub mod balancer;
 
+mod boolean;
+pub use boolean::Bool;
+
 #[expect(clippy::module_inception)]
 pub mod utils;
 pub use utils::*;

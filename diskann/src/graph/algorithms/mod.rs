@@ -37,6 +37,8 @@ use crate::{
 // Sub-modules //
 //-------------//
 
+pub mod consolidate;
+
 pub mod inplace_delete;
 
 pub mod batch;

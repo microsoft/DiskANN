@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-//! Tests for `consolidate_vector` covering all four code paths:
+//! Tests for `consolidate` covering all four code paths:
 //!
 //! 1. Consolidating a deleted vertex → `ConsolidateKind::Deleted`
 //! 2. Consolidating a vertex with nothing to repair → `ConsolidateKind::Complete` (no-op)
@@ -16,8 +16,9 @@ use diskann_vector::distance::Metric;
 
 use crate::{
     graph::{
-        self, AdjacencyList, ConsolidateKind, DiskANNIndex,
+        self, AdjacencyList,
         test::provider::{self as test_provider, Provider, Strategy},
+        algorithms::consolidate::ConsolidateKind,
     },
     provider::Delete,
     provider::NeighborAccessor,
@@ -29,17 +30,17 @@ use super::helpers::{assert_neighbors, generate_2d_square_adjacency_list, setup_
 /// Build a small index with explicit vectors and adjacency lists for consolidation testing.
 ///
 /// The provider's `max_degree` is set higher than the index's `pruned_degree` so that
-/// adjacency lists can exceed the index limit, forcing `consolidate_vector` to prune.
+/// adjacency lists can exceed the index limit, forcing `consolidate` to prune.
 fn setup_consolidation_index(
     vectors: Vec<Vec<f32>>,
     adjacency_lists: Vec<AdjacencyList<u32>>,
-) -> Arc<DiskANNIndex<Provider>> {
+) -> Arc<Provider> {
     let num_points = vectors.len();
     let dim = vectors[0].len();
     let start_id = num_points as u32;
 
     // The provider accepts up to 5 neighbors per node, but the index only targets 4.
-    // This mismatch lets us populate adjacency lists that consolidate_vector must prune.
+    // This mismatch lets us populate adjacency lists that consolidate must prune.
     let provider_max_degree = 5;
     let pruned_degree = 4;
 
@@ -59,13 +60,6 @@ fn setup_consolidation_index(
         .enumerate()
         .map(|(id, (vec, adj))| (id as u32, vec, adj));
 
-    let provider = Provider::new_from(
-        provider_config,
-        iter::once((start_id, start_neighbors)),
-        points,
-    )
-    .unwrap();
-
     let index_config = graph::config::Builder::new(
         pruned_degree,
         graph::config::MaxDegree::same(),
@@ -75,10 +69,18 @@ fn setup_consolidation_index(
     .build()
     .unwrap();
 
-    Arc::new(DiskANNIndex::new(index_config, provider, None))
+    let provider = Provider::new_from(
+        provider_config,
+        iter::once((start_id, start_neighbors)),
+        points,
+        index_config,
+    )
+    .unwrap();
+
+    Arc::new(provider)
 }
 
-/// When `consolidate_vector` encounters a transient error during `fill` (vector retrieval),
+/// When `consolidate` encounters a transient error during `fill` (vector retrieval),
 /// it should gracefully return `ConsolidateKind::FailedVectorRetrieval` rather than
 /// propagating the error.
 #[test]
@@ -86,7 +88,7 @@ fn flaky_consolidate_returns_failed_retrieval() {
     let rt = current_thread_runtime();
 
     // Build a graph where node 0 has 5 neighbors (exceeds max_degree=4),
-    // forcing consolidate_vector to attempt pruning.
+    // forcing consolidate to attempt pruning.
     let vectors = vec![
         vec![0.0, 0.0], // point 0
         vec![0.0, 1.0], // point 1
@@ -118,7 +120,7 @@ fn flaky_consolidate_returns_failed_retrieval() {
     );
 
     let result = rt
-        .block_on(index.consolidate_vector(&flaky_strategy, &ctx, 0))
+        .block_on(index.consolidate(0, &flaky_strategy))
         .unwrap();
 
     assert_eq!(
@@ -140,10 +142,10 @@ fn consolidate_deleted_vertex_returns_deleted() {
     let strategy = Strategy::new();
 
     // Delete vertex 3, then try to consolidate it.
-    rt.block_on(index.data_provider.delete(&ctx, &3)).unwrap();
+    index.soft_delete(3).unwrap();
 
     let result = rt
-        .block_on(index.consolidate_vector(&strategy, &ctx, 3))
+        .block_on(index.consolidate(3, &strategy))
         .unwrap();
 
     assert_eq!(result, ConsolidateKind::Deleted);
@@ -162,7 +164,7 @@ fn consolidate_nothing_to_do_returns_complete() {
 
     // No deletions, all degrees within limit → nothing to do.
     let result = rt
-        .block_on(index.consolidate_vector(&strategy, &ctx, 0))
+        .block_on(index.consolidate(0, &strategy))
         .unwrap();
 
     assert_eq!(result, ConsolidateKind::Complete);
@@ -187,12 +189,12 @@ fn consolidate_repairs_after_deletion() {
     let strategy = Strategy::new();
 
     // Delete vertex 3.
-    rt.block_on(index.data_provider.delete(&ctx, &3)).unwrap();
+    index.soft_delete(3).unwrap();
 
     // Consolidate all vertices.
     for id in 0..5u32 {
         let result = rt
-            .block_on(index.consolidate_vector(&strategy, &ctx, id))
+            .block_on(index.consolidate(id, &strategy))
             .unwrap();
 
         if id == 3 {
@@ -207,10 +209,10 @@ fn consolidate_repairs_after_deletion() {
     // - vertex 1: edge to 3 replaced with edge to 2 → [0, 2, 4]
     // - vertex 2: edge to 3 replaced with edge to 1 → [0, 1, 4]
     // - vertex 4 (start): edge to 3 removed → [0, 1, 2]
-    assert_neighbors(&rt, &index, 0, &[1, 2, 4]);
-    assert_neighbors(&rt, &index, 1, &[0, 2, 4]);
-    assert_neighbors(&rt, &index, 2, &[0, 1, 4]);
-    assert_neighbors(&rt, &index, 4, &[0, 1, 2]);
+    assert_neighbors(&index, 0, &[1, 2, 4]);
+    assert_neighbors(&index, 1, &[0, 2, 4]);
+    assert_neighbors(&index, 2, &[0, 1, 4]);
+    assert_neighbors(&index, 4, &[0, 1, 2]);
 }
 
 /// Consolidating a vertex whose degree exceeds `pruned_degree` but has no deleted neighbors
@@ -226,16 +228,16 @@ fn consolidate_prune_only_no_deleted_neighbors() {
     let strategy = Strategy::new();
 
     // Verify start node exceeds pruned_degree before consolidation.
-    assert_neighbors(&rt, &index, 4, &[0, 1, 2, 3]);
+    assert_neighbors(&index, 4, &[0, 1, 2, 3]);
 
     let result = rt
-        .block_on(index.consolidate_vector(&strategy, &ctx, 4))
+        .block_on(index.consolidate(4, &strategy))
         .unwrap();
     assert_eq!(result, ConsolidateKind::Complete);
 
     // After consolidation, start node should have degree <= 2.
     let mut list = AdjacencyList::new();
-    rt.block_on(index.provider().neighbors().get_neighbors(4, &mut list))
+    rt.block_on(index.neighbors().get_neighbors(4, &mut list))
         .unwrap();
     assert!(
         list.len() <= 2,
