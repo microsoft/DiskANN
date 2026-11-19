@@ -3,15 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use std::{
-    borrow::BorrowMut,
-    fmt::Debug,
-    marker::PhantomData,
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
-};
+use std::{borrow::BorrowMut, fmt::Debug, sync::Arc};
 
 use diskann_utils::future::{AsyncFriendly, SendFuture};
 use hashbrown::HashMap;
@@ -27,7 +19,7 @@ use crate::{
     },
     provider::HasId,
     utils::{
-        VectorId, async_tools,
+        VectorId,
         balancer::{Balancer, BatchPosition},
     },
 };

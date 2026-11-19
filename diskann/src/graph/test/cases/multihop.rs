@@ -11,16 +11,15 @@
 //! - **Integration tests** go through `index.search(MultihopFilterSearch{...})` end-to-end
 //!   with baselines for regression protection.
 
-use std::sync::Arc;
+use std::{num::NonZeroUsize, sync::Arc};
 
 use diskann_vector::distance::Metric;
 
 use crate::{
     graph::{
-        self, AdjacencyList, DiskANNIndex,
+        self, AdjacencyList,
         ext::labeled,
         search::{Knn, MultihopFilterSearch},
-        search_output_buffer,
         test::provider as test_provider,
     },
     neighbor::Neighbor,
@@ -83,18 +82,11 @@ pub(super) fn build_1d_index(
     start_neighbors: AdjacencyList<u32>,
     points: Vec<(u32, Vec<f32>, AdjacencyList<u32>)>,
     max_degree: usize,
-) -> DiskANNIndex<test_provider::Provider> {
+) -> test_provider::Provider {
     let config = test_provider::Config::new(
         Metric::L2,
         max_degree,
         test_provider::StartPoint::new(start_id, vec![start_pos]),
-    )
-    .unwrap();
-
-    let provider = test_provider::Provider::new_from(
-        config,
-        std::iter::once((start_id, start_neighbors)),
-        points,
     )
     .unwrap();
 
@@ -107,31 +99,39 @@ pub(super) fn build_1d_index(
     .build()
     .unwrap();
 
-    DiskANNIndex::new(index_config, provider, None)
+    test_provider::Provider::new_from(
+        config,
+        std::iter::once((start_id, start_neighbors)),
+        points,
+        index_config,
+    )
+    .unwrap()
 }
 
 fn run(
-    index: &DiskANNIndex<test_provider::Provider>,
+    index: &test_provider::Provider,
     query: &[f32],
     l: usize,
     filter: &dyn labeled::QueryLabelProvider<u32>,
-) -> (graph::index::SearchStats, Vec<Neighbor<u32>>) {
+) -> (graph::algorithms::SearchStats, Vec<Neighbor<u32>>) {
     let rt = current_thread_runtime();
     rt.block_on(async {
         let multihop = MultihopFilterSearch::new(Knn::new_default(l).unwrap());
         let mut neighbors = Vec::<Neighbor<u32>>::new();
 
-        let stats = index
-            .search_with(
-                multihop,
-                &labeled::Filtered::new(test_provider::Strategy::new(), filter),
-                graph::glue::CopyIds,
-                &test_provider::Context::new(),
-                query,
-                &mut neighbors,
-            )
-            .await
-            .unwrap();
+        let (neighbors, stats) = index.filtered(multihop, query, filter, None).await.unwrap();
+
+        // let stats = index
+        //     .search_with(
+        //         multihop,
+        //         &labeled::Filtered::new(test_provider::Strategy::new(), filter),
+        //         graph::glue::CopyIds,
+        //         &test_provider::Context::new(),
+        //         query,
+        //         &mut neighbors,
+        //     )
+        //     .await
+        //     .unwrap();
 
         (stats, neighbors)
     })
@@ -287,22 +287,10 @@ verbose_eq!(MultihopFilterBaseline {
 });
 
 /// Set up a 3D grid index using the test provider.
-pub(super) fn setup_grid_index(grid_size: usize) -> Arc<DiskANNIndex<test_provider::Provider>> {
+pub(super) fn setup_grid_index(grid_size: usize) -> Arc<test_provider::Provider> {
     use crate::graph::test::synthetic::Grid;
 
-    let grid = Grid::Three;
-    let provider = test_provider::Provider::grid(grid, grid_size).unwrap();
-
-    let index_config = graph::config::Builder::new(
-        provider.max_degree(),
-        graph::config::MaxDegree::same(),
-        100,
-        Metric::L2.into(),
-    )
-    .build()
-    .unwrap();
-
-    Arc::new(DiskANNIndex::new(index_config, provider, None))
+    Arc::new(test_provider::Provider::grid(Grid::Three, grid_size).unwrap())
 }
 
 /// Two-hop reachability through non-matching nodes, end-to-end with baseline.
@@ -351,18 +339,8 @@ fn two_hop_reaches_through_non_matching() {
     let search_params = Knn::new_default(l).unwrap();
     let multihop = MultihopFilterSearch::new(search_params);
 
-    let mut ids = vec![0u32; k];
-    let mut distances = vec![0.0f32; k];
-    let mut buffer = search_output_buffer::IdDistance::new(&mut ids, &mut distances);
-
-    let stats = rt
-        .block_on(index.search(
-            multihop,
-            &labeled::Filtered::new(test_provider::Strategy::new(), &filter),
-            &test_provider::Context::new(),
-            query.as_slice(),
-            &mut buffer,
-        ))
+    let (neighbors, stats) = rt
+        .block_on(index.filtered(multihop, query.as_slice(), &filter, NonZeroUsize::new(k)))
         .unwrap();
 
     let result_count = stats.result_count as usize;
@@ -371,11 +349,7 @@ fn two_hop_reaches_through_non_matching() {
         query: query.clone(),
         k,
         l,
-        results: ids[..result_count]
-            .iter()
-            .zip(distances[..result_count].iter())
-            .map(|(&id, &d)| (id, d))
-            .collect(),
+        results: neighbors.into_iter().map(Neighbor::as_tuple).collect(),
         comparisons: stats.cmps as usize,
         hops: stats.hops as usize,
     };
@@ -420,18 +394,8 @@ fn even_filtering_grid() {
     let search_params = Knn::new_default(l).unwrap();
     let multihop = MultihopFilterSearch::new(search_params);
 
-    let mut ids = vec![0u32; k];
-    let mut distances = vec![0.0f32; k];
-    let mut buffer = search_output_buffer::IdDistance::new(&mut ids, &mut distances);
-
-    let stats = rt
-        .block_on(index.search(
-            multihop,
-            &labeled::Filtered::new(test_provider::Strategy::new(), &filter),
-            &test_provider::Context::new(),
-            query.as_slice(),
-            &mut buffer,
-        ))
+    let (neighbors, stats) = rt
+        .block_on(index.filtered(multihop, query.as_slice(), &filter, NonZeroUsize::new(k)))
         .unwrap();
 
     let result_count = stats.result_count as usize;
@@ -440,11 +404,7 @@ fn even_filtering_grid() {
         query: query.clone(),
         k,
         l,
-        results: ids[..result_count]
-            .iter()
-            .zip(distances[..result_count].iter())
-            .map(|(&id, &d)| (id, d))
-            .collect(),
+        results: neighbors.into_iter().map(Neighbor::as_tuple).collect(),
         comparisons: stats.cmps as usize,
         hops: stats.hops as usize,
     };

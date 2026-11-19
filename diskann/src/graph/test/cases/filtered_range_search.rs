@@ -16,7 +16,7 @@ use super::range_search::{
 };
 use crate::{
     graph::{
-        self, DiskANNIndex,
+        self,
         ext::labeled,
         search::FilteredRange,
         test::{provider as test_provider, synthetic::Grid},
@@ -41,21 +41,19 @@ impl labeled::QueryLabelProvider<u32> for AlwaysTrueFilter {
 }
 
 fn run_filtered_range_search(
-    index: &Arc<DiskANNIndex<test_provider::Provider>>,
+    index: &test_provider::Provider,
     query: &[f32],
     filtered_range: FilteredRange,
     filter: &impl labeled::QueryLabelProvider<u32>,
-) -> (graph::index::SearchStats, Vec<Neighbor<u32>>) {
+) -> (graph::algorithms::SearchStats, Vec<Neighbor<u32>>) {
     let rt = current_thread_runtime();
-    let mut results: Vec<Neighbor<u32>> = Vec::new();
 
-    let stats = rt
-        .block_on(index.search(
+    let (results, stats) = rt
+        .block_on(index.filtered(
             filtered_range,
-            &labeled::Filtered::new(test_provider::Strategy::new(), filter),
-            &test_provider::Context::new(),
             query,
-            &mut results,
+            filter,
+            None,
         ))
         .unwrap();
 
@@ -226,13 +224,12 @@ fn empty_results() {
     let filtered_range = FilteredRange::new(starting_l, radius).unwrap();
     let mut filtered_results: Vec<Neighbor<u32>> = Vec::new();
 
-    let filtered_stats = rt
-        .block_on(index.search(
+    let (filtered_results, filtered_stats) = rt
+        .block_on(index.filtered(
             filtered_range,
-            &labeled::Filtered::new(test_provider::Strategy::new(), &filter),
-            &test_provider::Context::new(),
             query.as_slice(),
-            &mut filtered_results,
+            &filter,
+            None,
         ))
         .unwrap();
 

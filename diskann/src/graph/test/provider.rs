@@ -20,14 +20,15 @@ use thiserror::Error;
 use crate::{
     ANNResult, convert_error, default_post_processor,
     error::ranked::ErrorExt,
-    error::{Infallible, RankedError, StandardError, ToRanked, TransientError, message},
+    error::{RankedError, ToRanked, TransientError, message},
     graph::{
-        self, AdjacencyList, SearchOutputBuffer, algorithms, glue, test::synthetic, workingset,
+        self, AdjacencyList, SearchOutputBuffer, algorithms, ext::labeled, glue, test::synthetic,
+        workingset,
     },
     internal::counter::{Counter, LocalCounter},
     neighbor::Neighbor,
     provider,
-    utils::{VectorRepr, async_tools, balancer},
+    utils::VectorRepr,
 };
 
 #[cfg(any(test, feature = "testing"))]
@@ -570,9 +571,9 @@ impl Provider {
         }
     }
 
-    //------------//
-    // Algorithms //
-    //------------//
+    //--------//
+    // Search //
+    //--------//
 
     pub async fn search<'a, P>(
         &'a self,
@@ -592,24 +593,25 @@ impl Provider {
         Ok((buf.into_inner(), output))
     }
 
-    // pub(crate) async fn search_with<'a, P, PP>(
-    //     &'a self,
-    //     search: P,
-    //     vector: &'a [f32],
-    //     knn: Option<NonZeroUsize>,
-    //     post_processor: PP,
-    // ) -> ANNResult<(Vec<Neighbor<u32>>, P::Output)>
-    // where
-    //     P: graph::Search<Accessor<'a>>,
-    //     PP: glue::SearchPostProcess<Accessor<'a>> + Send + Sync,
-    // {
-    //     let mut accessor = self.search_accessor(vector)?;
-    //     let mut buf = MaybeCapped::new(knn);
-    //     let output = search
-    //         .search(&mut accessor, post_processor, &mut buf)
-    //         .await?;
-    //     Ok((buf.into_inner(), output))
-    // }
+    pub async fn filtered<'a, P>(
+        &'a self,
+        search: P,
+        vector: &'a [f32],
+        predicate: &'a dyn labeled::QueryLabelProvider<u32>,
+        knn: Option<NonZeroUsize>,
+    ) -> ANNResult<(Vec<Neighbor<u32>>, P::Output)>
+    where
+        P: graph::Search<labeled::FilteredAccessor<'a, Accessor<'a>>>,
+    {
+        let mut accessor = labeled::FilteredAccessor::new(self.search_accessor(vector)?, predicate);
+
+        let mut buf = MaybeCapped::new(knn);
+        let post_processor = glue::DefaultPostProcessor::default_post_processor(&accessor);
+        let output = search
+            .search(&mut accessor, post_processor, &mut buf)
+            .await?;
+        Ok((buf.into_inner(), output))
+    }
 
     //--------//
     // Insert //
@@ -1443,18 +1445,6 @@ impl<'a> Accessor<'a> {
             Err(invalid) => Err(AccessError::InvalidId(invalid)),
         }
     }
-
-    fn rebind(&mut self, query: &[f32]) -> Result<(), DimMismatch> {
-        if query.len() != self.provider.dim() {
-            Err(DimMismatch {
-                got: query.len(),
-                expected: self.provider.dim(),
-            })
-        } else {
-            self.distance = f32::query_distance(query, self.provider.distance_metric());
-            Ok(())
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, Error)]
@@ -1565,114 +1555,9 @@ impl Default for Strategy {
     }
 }
 
-// impl<'a> glue::SearchStrategy<'a, Provider, &'a [f32]> for Strategy {
-//     type SearchAccessorError = DimMismatch;
-//     type SearchAccessor = Accessor<'a>;
-//
-//     fn search_accessor(
-//         &'a self,
-//         provider: &'a Provider,
-//         _context: &'a Context,
-//         query: &'a [f32],
-//     ) -> Result<Accessor<'a>, DimMismatch> {
-//         Accessor::new(provider, query)
-//     }
-// }
-
 impl glue::DefaultPostProcessor<u32> for Accessor<'_> {
     default_post_processor!(glue::Pipeline<glue::FilterStartPoints, glue::CopyIds>);
 }
-
-// impl glue::PruneStrategy<Provider> for Strategy {
-//     type PruneAccessor<'a> = PruneAccessor<'a>;
-//     type PruneAccessorError = Infallible;
-//
-//     fn prune_accessor<'a>(
-//         &'a self,
-//         provider: &'a Provider,
-//         _context: &'a Context,
-//         capacity: usize,
-//     ) -> Result<Self::PruneAccessor<'a>, Self::PruneAccessorError> {
-//         let cap = if self.working_set_reuse {
-//             workingset::map::Capacity::Default
-//         } else {
-//             workingset::map::Capacity::None
-//         };
-//
-//         let set = workingset::map::Builder::new(cap).build(capacity);
-//
-//         match &self.transient_ids {
-//             Some(ids) => Ok(PruneAccessor::new(provider, Some(Cow::Borrowed(ids)), set)),
-//             None => Ok(PruneAccessor::new(provider, None, set)),
-//         }
-//     }
-// }
-
-// impl<'a> glue::InsertStrategy<'a, Provider, &'a [f32]> for Strategy {
-//     type SearchAccessor = Accessor<'a>;
-//     type SearchAccessorError = DimMismatch;
-//     type PruneStrategy = Self;
-//
-//     fn insert_search_accessor(
-//         &'a self,
-//         provider: &'a Provider,
-//         _context: &'a Context,
-//         vector: &'a [f32],
-//     ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
-//         Accessor::new(provider, vector)
-//     }
-//
-//     fn prune_strategy(&self) -> Self::PruneStrategy {
-//         self.clone()
-//     }
-// }
-
-// impl glue::MultiInsertStrategy<Provider, rowmajor::Owned<f32>> for Strategy {
-//     type Seed = workingset::map::Builder<u32, workingset::map::Ref<[f32]>>;
-//     type FinishError = Infallible;
-//     type PruneStrategy = Self;
-//     type InsertStrategy = Self;
-//
-//     fn insert_strategy(&self) -> Self::InsertStrategy {
-//         self.clone()
-//     }
-//
-//     fn finish<Itr>(
-//         &self,
-//         _provider: &Provider,
-//         _ctx: &Context,
-//         batch: &Arc<rowmajor::Owned<f32>>,
-//         ids: Itr,
-//     ) -> impl std::future::Future<Output = Result<Self::Seed, Self::FinishError>> + Send
-//     where
-//         Itr: ExactSizeIterator<Item = u32> + Send,
-//     {
-//         use workingset::map::{Builder, Capacity, Overlay};
-//
-//         let capacity = if self.working_set_reuse {
-//             Capacity::Default
-//         } else {
-//             Capacity::None
-//         };
-//
-//         std::future::ready(Ok(
-//             Builder::new(capacity).with_overlay(Overlay::from_batch(batch.clone(), ids))
-//         ))
-//     }
-//
-//     fn seeded_prune_accessor<'a>(
-//         &'a self,
-//         provider: &'a Provider,
-//         _context: &'a Context,
-//         builder: &'a Self::Seed,
-//         capacity: usize,
-//     ) -> ANNResult<PruneAccessor<'a>> {
-//         let set = builder.clone().build(capacity);
-//         let transient_ids = self.transient_ids.as_deref().map(Cow::Borrowed);
-//
-//         Ok(PruneAccessor::new(provider, transient_ids, set))
-//     }
-// }
 
 // /// A [`glue::SearchPostProcessStep`] that removes deleted IDs from the candidate stream.
 // #[derive(Debug, Clone, Copy, Default)]
@@ -2066,8 +1951,6 @@ mod tests {
 
     #[test]
     fn test_set() {
-        use provider::{Guard, SetElement};
-
         let provider = create_test_provider();
 
         let context = Context::new();
