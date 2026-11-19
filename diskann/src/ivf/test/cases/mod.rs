@@ -3,6 +3,7 @@
  * Licensed under the MIT license.
  */
 
+mod gemm;
 mod grid_insert;
 mod insert;
 mod reassign;
