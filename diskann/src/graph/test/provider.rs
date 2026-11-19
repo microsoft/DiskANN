@@ -13,7 +13,7 @@ use std::{
 };
 
 use dashmap::{DashMap, mapref::entry::Entry};
-use diskann_utils::views::rowmajor;
+use diskann_utils::views::rowmajor::{self, Matrix};
 use diskann_vector::{PreprocessedDistanceFunction, distance::Metric};
 use thiserror::Error;
 
@@ -27,7 +27,7 @@ use crate::{
     internal::counter::{Counter, LocalCounter},
     neighbor::Neighbor,
     provider,
-    utils::VectorRepr,
+    utils::{VectorRepr, balancer, async_tools},
 };
 
 #[cfg(any(test, feature = "testing"))]
@@ -505,14 +505,18 @@ impl Provider {
     }
 
     /// Return a prune accessor.
-    fn prune_accessor<'a>(&'a self, options: &'a Strategy, capacity: usize) -> PruneAccessor<'a> {
+    fn prune_accessor<'a>(
+        &'a self,
+        options: &'a Strategy,
+        overlay: Option<&workingset::map::Builder<u32, workingset::map::Ref<[f32]>>>,
+    ) -> PruneAccessor<'a> {
         let cap = if options.working_set_reuse {
             workingset::map::Capacity::Default
         } else {
             workingset::map::Capacity::None
         };
 
-        let set = workingset::map::Builder::new(cap).build(capacity);
+        let set = workingset::map::Builder::new(cap).build(self.graph.max_occlusion_size().get());
 
         match &options.transient_ids {
             Some(ids) => PruneAccessor::new(self, Some(Cow::Borrowed(ids)), set),
@@ -564,27 +568,6 @@ impl Provider {
     // Algorithms //
     //------------//
 
-    fn insert_accessor<'a>(
-        &'a self,
-        vector: &'a [f32],
-        options: &'a Strategy,
-    ) -> Result<Insert<'a>, DimMismatch> {
-        Ok(Insert {
-            search: self.search_accessor(vector)?,
-            prune: self.prune_accessor(options, self.graph.max_occlusion_size().get()),
-        })
-    }
-
-    pub async fn insert(&self, vector: &[f32], id: u32, options: &Strategy) -> ANNResult<()> {
-        // Step 1 - try to insert the vector.
-        self.set(vector, id)?;
-
-        // Step 2 - run the insertion algorithm.
-        algorithms::insert(&mut self.insert_accessor(vector, options)?, id, &self.graph).await?;
-
-        Ok(())
-    }
-
     pub async fn search<'a, P>(
         &'a self,
         search: P,
@@ -621,6 +604,122 @@ impl Provider {
     //         .await?;
     //     Ok((buf.into_inner(), output))
     // }
+
+    //--------//
+    // Insert //
+    //--------//
+
+    fn insert_accessor<'a>(
+        &'a self,
+        vector: &'a [f32],
+        options: &'a Strategy,
+        overlay: Option<&workingset::map::Builder<u32, workingset::map::Ref<[f32]>>>,
+    ) -> Result<Insert<'a>, DimMismatch> {
+        Ok(Insert {
+            search: self.search_accessor(vector)?,
+            prune: self.prune_accessor(options, overlay),
+        })
+    }
+
+    pub async fn insert(&self, vector: &[f32], id: u32, options: &Strategy) -> ANNResult<()> {
+        // Step 1 - try to insert the vector.
+        self.set(vector, id)?;
+
+        // Step 2 - run the insertion algorithm.
+        algorithms::insert(&mut self.insert_accessor(vector, options, None)?, id, &self.graph).await?;
+
+        Ok(())
+    }
+
+    pub async fn batch_insert(
+        self: Arc<Self>,
+        data: Arc<rowmajor::Owned<f32>>,
+        ids: Arc<[u32]>,
+        options: Strategy,
+        handle: &tokio::runtime::Handle,
+    ) -> ANNResult<usize> {
+        use workingset::map::{Builder, Capacity, Overlay};
+        use algorithms::batch::insert::{BatchInsert, ForwardEdges, BackEdges, Candidates};
+
+        // Did the provide us with sensible number of values.
+        if data.nrows() != ids.len() {
+            return Err(ANNError::message("number of data rows does not match the number of ids"));
+        }
+
+        // The strategy we use is to defer actually inserting the vectors until we're ready
+        // with all the edges.
+        //
+        // FIXME: make the reference implementation more correct.
+        let overlay: Builder<u32, workingset::map::Ref<[f32]>> = {
+            let capacity = if options.working_set_reuse {
+                Capacity::Default
+            } else {
+                Capacity::None
+            };
+
+            Builder::new(capacity).with_overlay(Overlay::from_batch(data.clone(), ids.iter().cloned()))
+        };
+
+        let options = Arc::new(options);
+
+        let mut candidates = {
+            let work = Arc::new(balancer::Balancer::new(ids.clone()));
+
+            let mut forward_edges = ForwardEdges::new();
+            let mut back_edges = BackEdges::new();
+
+            // We're ready to generate the forward edges.
+            async_tools::fork_and_join(
+                handle,
+                |tid| {
+                    let self_clone = self.clone();
+                    let data_clone = data.clone();
+                    let work_clone = work.clone();
+                    let overlay_clone = overlay.clone();
+                    let options_clone = options.clone();
+                    async move {
+                        let mut forward = ForwardEdges::new();
+                        let mut multi = BatchInsert::new();
+
+                        let Some(mut work) = work_clone.next() else { return ANNResult::Ok(forward); };
+
+                        let mut accessor = self_clone.insert_accessor(
+                            data_clone.row(work.position()),
+                            &options_clone,
+                            Some(&overlay_clone),
+                        )?;
+
+                        loop {
+                            multi.find_forward_edges(
+                                &mut forward,
+                                &mut accessor,
+                                work,
+                                &self_clone.graph,
+                            ).await?;
+
+                            if let Some(next) = work_clone.next() {
+                                work = next;
+                                accessor.search.rebind(data_clone.row(work.position()))?;
+                            } else {
+                                return Ok(forward)
+                            }
+                        }
+                    }
+                },
+                self.graph.max_minibatch_par(),
+                |result| -> ANNResult<()> {
+                    let forward = result?;
+                    back_edges.accumulate(&forward);
+                    forward_edges.merge(forward);
+                    Ok(())
+                },
+            ).await?;
+
+            Candidates::check(&self.graph, forward_edges, back_edges)
+        };
+
+        Ok(0)
+    }
 }
 
 #[derive(Debug)]
@@ -966,44 +1065,44 @@ impl provider::Delete for Provider {
     }
 }
 
-impl provider::SetElement<&[f32]> for Provider {
-    type SetError = ANNError;
-
-    async fn set_element(
-        &self,
-        _context: &Context,
-        id: &Self::ExternalId,
-        element: &[f32],
-    ) -> Result<Self::Guard, Self::SetError> {
-        #[derive(Debug, Clone, Copy, Error)]
-        enum SetError {
-            #[error("vector id {0} is already assigned")]
-            AlreadyAssigned(u32),
-            #[error("wrong dim - got {0}, expected {1}")]
-            WrongDim(usize, usize),
-        }
-
-        crate::always_escalate!(SetError);
-        convert_error!(SetError);
-
-        // Ensure that the assigned vector has the correct length.
-        if element.len() != self.dim() {
-            return Err(SetError::WrongDim(element.len(), self.dim()).into());
-        }
-
-        match self.terms.entry(*id) {
-            Entry::Occupied(_) => Err(SetError::AlreadyAssigned(*id).into()),
-            Entry::Vacant(term) => {
-                term.insert(Term {
-                    neighbors: AdjacencyList::new(),
-                    data: Vector::Valid(element.into()),
-                });
-                self.set_vector.increment();
-                Ok(provider::NoopGuard::new(*id))
-            }
-        }
-    }
-}
+// impl provider::SetElement<&[f32]> for Provider {
+//     type SetError = ANNError;
+//
+//     async fn set_element(
+//         &self,
+//         _context: &Context,
+//         id: &Self::ExternalId,
+//         element: &[f32],
+//     ) -> Result<Self::Guard, Self::SetError> {
+//         #[derive(Debug, Clone, Copy, Error)]
+//         enum SetError {
+//             #[error("vector id {0} is already assigned")]
+//             AlreadyAssigned(u32),
+//             #[error("wrong dim - got {0}, expected {1}")]
+//             WrongDim(usize, usize),
+//         }
+//
+//         crate::always_escalate!(SetError);
+//         convert_error!(SetError);
+//
+//         // Ensure that the assigned vector has the correct length.
+//         if element.len() != self.dim() {
+//             return Err(SetError::WrongDim(element.len(), self.dim()).into());
+//         }
+//
+//         match self.terms.entry(*id) {
+//             Entry::Occupied(_) => Err(SetError::AlreadyAssigned(*id).into()),
+//             Entry::Vacant(term) => {
+//                 term.insert(Term {
+//                     neighbors: AdjacencyList::new(),
+//                     data: Vector::Valid(element.into()),
+//                 });
+//                 self.set_vector.increment();
+//                 Ok(provider::NoopGuard::new(*id))
+//             }
+//         }
+//     }
+// }
 
 //////////////////////
 // NeighborAccessor //
@@ -1382,6 +1481,18 @@ impl<'a> Accessor<'a> {
             Ok(Ok(dist)) => Ok(dist),
             Ok(Err(transient)) => Err(AccessError::Transient(transient)),
             Err(invalid) => Err(AccessError::InvalidId(invalid)),
+        }
+    }
+
+    fn rebind(&mut self, query: &[f32]) -> Result<(), DimMismatch> {
+        if query.len() != self.provider.dim() {
+            Err(DimMismatch {
+                got: query.len(),
+                expected: self.provider.dim(),
+            })
+        } else {
+            self.distance = f32::query_distance(query, self.provider.distance_metric());
+            Ok(())
         }
     }
 }
