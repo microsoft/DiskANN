@@ -11,8 +11,11 @@ use crate::{
     ANNError, ANNResult,
     graph::{
         algorithms,
-        glue::SearchAccessor,
-        search::{record::NoopSearchRecord, scratch::SearchScratch},
+        glue::{self, SearchAccessor},
+        search::{
+            record::NoopSearchRecord,
+            scratch::{PriorityQueueConfiguration, SearchScratch},
+        },
     },
     neighbor::{Neighbor, NeighborPriorityQueue},
     utils::VectorId,
@@ -52,6 +55,40 @@ impl<A> PagedSearch<A>
 where
     A: SearchAccessor,
 {
+    pub async fn new(mut accessor: A, l_value: NonZeroUsize) -> ANNResult<Self> {
+        let start_ids = accessor.starting_points().await?;
+        let num_start_points = start_ids.len();
+
+        let mut scratch = SearchScratch::new(
+            PriorityQueueConfiguration::Resizable(l_value.get() + num_start_points),
+            None,
+        );
+
+        let mut neighbors =
+            Vec::with_capacity(algorithms::max_degree_from_hint(accessor.max_degree_hint()).get());
+        scratch.visited.extend(start_ids.iter().copied());
+        accessor
+            .expand_beam(
+                start_ids.into_iter(),
+                glue::NotInMut::new(&mut scratch.visited),
+                |id, distance| neighbors.push(Neighbor::new(id, distance)),
+            )
+            .await?;
+
+        // The predicate `NotInMut` ensures that the contents of `neighbors` are unique.
+        neighbors
+            .iter()
+            .for_each(|neighbor| scratch.best.insert(*neighbor));
+
+        Ok(Self {
+            scratch,
+            computed_result: vec![Neighbor::default(); l_value.get()],
+            next_result_index: l_value.get(),
+            search_param_l: l_value.get(),
+            accessor,
+        })
+    }
+
     /// Returns the next page of at most `k` nearest-neighbor results.
     ///
     /// Results across pages are non-overlapping but not guaranteed to be monotonic with

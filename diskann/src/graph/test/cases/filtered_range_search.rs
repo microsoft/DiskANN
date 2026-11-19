@@ -49,12 +49,7 @@ fn run_filtered_range_search(
     let rt = current_thread_runtime();
 
     let (results, stats) = rt
-        .block_on(index.filtered(
-            filtered_range,
-            query,
-            filter,
-            None,
-        ))
+        .block_on(index.filtered(filtered_range, query, filter, None))
         .unwrap();
 
     (stats, results)
@@ -225,12 +220,7 @@ fn empty_results() {
     let mut filtered_results: Vec<Neighbor<u32>> = Vec::new();
 
     let (filtered_results, filtered_stats) = rt
-        .block_on(index.filtered(
-            filtered_range,
-            query.as_slice(),
-            &filter,
-            None,
-        ))
+        .block_on(index.filtered(filtered_range, query.as_slice(), &filter, None))
         .unwrap();
 
     assert!(

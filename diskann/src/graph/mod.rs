@@ -19,13 +19,11 @@ pub use adjacencylist::AdjacencyList;
 pub mod config;
 pub use config::Config;
 
-// pub mod index;
-
 mod start_point;
 pub use start_point::{SampleableForStart, StartPointStrategy};
 
 mod misc;
-pub use misc::{ConsolidateKind, InplaceDeleteMethod};
+pub use misc::InplaceDeleteMethod;
 
 pub mod glue;
 pub mod search;

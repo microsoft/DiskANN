@@ -9,13 +9,13 @@
 //! [`PagedSearch`](crate::graph::search::PagedSearch) handle. Tests cover basic pagination,
 //! single-page retrieval, and small page sizes that stress the iteration machinery.
 
-use std::sync::Arc;
+use std::{num::NonZeroUsize, sync::Arc};
 
 use diskann_vector::distance::Metric;
 
 use crate::{
     graph::{
-        self, DiskANNIndex,
+        self,
         test::{provider as test_provider, synthetic::Grid},
     },
     neighbor::Neighbor,
@@ -31,23 +31,14 @@ fn root() -> TestRoot {
     TestRoot::new("graph/test/cases/paged_search")
 }
 
-fn setup_grid_index(grid_size: usize, dims: Grid) -> Arc<DiskANNIndex<test_provider::Provider>> {
-    let provider = test_provider::Provider::grid(dims, grid_size).unwrap();
-    let index_config = graph::config::Builder::new(
-        provider.max_degree(),
-        graph::config::MaxDegree::same(),
-        100,
-        Metric::L2.into(),
-    )
-    .build()
-    .unwrap();
-    Arc::new(DiskANNIndex::new(index_config, provider, None))
+fn setup_grid_index(grid_size: usize, dims: Grid) -> Arc<test_provider::Provider> {
+    Arc::new(test_provider::Provider::grid(dims, grid_size).unwrap())
 }
 
 fn setup_grid_index_and_basic_query(
     grid_size: usize,
     dims: Grid,
-) -> (Arc<DiskANNIndex<test_provider::Provider>>, Vec<f32>) {
+) -> (Arc<test_provider::Provider>, Vec<f32>) {
     let index = setup_grid_index(grid_size, dims);
     let query = vec![grid_size as f32; dims.dim().into()];
     (index, query)
@@ -151,13 +142,13 @@ fn basic_paged_search() {
     let grid_size = 5;
     let dims = Grid::Three;
     let (index, query) = setup_grid_index_and_basic_query(grid_size, dims);
-    let search_l = 32;
+    let search_l = NonZeroUsize::new(32).unwrap();
     let page_size = 4;
     let ctx = test_provider::Context::new();
     let strategy = test_provider::Strategy::new();
 
     let mut search = rt
-        .block_on(index.paged_search(&strategy, &ctx, query.as_slice(), search_l))
+        .block_on(index.paged(query.as_slice(), search_l))
         .unwrap();
 
     let mut pages: Vec<Vec<Neighbor<u32>>> = Vec::new();
@@ -170,7 +161,7 @@ fn basic_paged_search() {
         pages.push(page);
     }
 
-    let baseline = build_baseline(grid_size, &dims, &query, search_l, page_size, &pages);
+    let baseline = build_baseline(grid_size, &dims, &query, search_l.get(), page_size, &pages);
 
     let expected = get_or_save_test_results(&test_name, &baseline);
     assert_eq_verbose!(expected, baseline);
@@ -190,19 +181,19 @@ fn single_page() {
     let grid_size = 5;
     let dims = Grid::Three;
     let (index, query) = setup_grid_index_and_basic_query(grid_size, dims);
-    let search_l = 200;
+    let search_l = NonZeroUsize::new(200).unwrap();
     let page_size = 200; // larger than total points (125)
     let ctx = test_provider::Context::new();
     let strategy = test_provider::Strategy::new();
 
     let mut search = rt
-        .block_on(index.paged_search(&strategy, &ctx, query.as_slice(), search_l))
+        .block_on(index.paged(query.as_slice(), search_l))
         .unwrap();
 
     let results = rt.block_on(search.next_page(page_size)).unwrap();
     let pages = vec![results];
 
-    let baseline = build_baseline(grid_size, &dims, &query, search_l, page_size, &pages);
+    let baseline = build_baseline(grid_size, &dims, &query, search_l.get(), page_size, &pages);
 
     let expected = get_or_save_test_results(&test_name, &baseline);
     assert_eq_verbose!(expected, baseline);
@@ -229,13 +220,13 @@ fn small_page_size() {
     let grid_size = 5;
     let dims = Grid::Three;
     let (index, query) = setup_grid_index_and_basic_query(grid_size, dims);
-    let search_l = 32;
+    let search_l = NonZeroUsize::new(32).unwrap();
     let page_size = 1; // one result per page, maximum iterations
     let ctx = test_provider::Context::new();
     let strategy = test_provider::Strategy::new();
 
     let mut search = rt
-        .block_on(index.paged_search(&strategy, &ctx, query.as_slice(), search_l))
+        .block_on(index.paged(query.as_slice(), search_l))
         .unwrap();
 
     let mut pages: Vec<Vec<Neighbor<u32>>> = Vec::new();
@@ -248,7 +239,7 @@ fn small_page_size() {
         pages.push(page);
     }
 
-    let baseline = build_baseline(grid_size, &dims, &query, search_l, page_size, &pages);
+    let baseline = build_baseline(grid_size, &dims, &query, search_l.get(), page_size, &pages);
 
     let expected = get_or_save_test_results(&test_name, &baseline);
     assert_eq_verbose!(expected, baseline);

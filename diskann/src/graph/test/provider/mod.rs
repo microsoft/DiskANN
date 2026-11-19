@@ -22,13 +22,13 @@ use crate::{
     error::ranked::ErrorExt,
     error::{RankedError, ToRanked, TransientError, message},
     graph::{
-        self, AdjacencyList, SearchOutputBuffer, algorithms, ext::labeled, glue, test::synthetic,
-        workingset,
+        self, AdjacencyList, SearchOutputBuffer, algorithms, ext::labeled, glue,
+        search::PagedSearch, test::synthetic, workingset,
     },
     internal::counter::{Counter, LocalCounter},
     neighbor::Neighbor,
     provider,
-    utils::VectorRepr,
+    utils::{Bool, VectorRepr},
 };
 
 #[cfg(any(test, feature = "testing"))]
@@ -467,18 +467,21 @@ impl Provider {
         neighbors
     }
 
+    /// Get the neighbors for `id`.
+    ///
+    /// Return `true` if the `id` is undeleted - otherwise return false.
     pub(crate) fn get_neighbors(
         &self,
         id: u32,
         neighbors: &mut AdjacencyList<u32>,
-    ) -> ANNResult<()> {
+    ) -> Result<bool, AccessedInvalidId> {
         match self.terms.get(&id) {
             Some(v) => {
                 self.get_neighbors.increment();
                 neighbors.overwrite_trusted(&v.neighbors);
-                Ok(())
+                Ok(!v.data.is_deleted())
             }
-            None => Err(ANNError::new(AccessedInvalidId(id))),
+            None => Err(AccessedInvalidId(id)),
         }
     }
 
@@ -571,6 +574,38 @@ impl Provider {
         }
     }
 
+    pub(super) fn soft_delete(
+        &self,
+        id: u32,
+    ) -> Result<(), InvalidId> {
+        if self.is_start_point(id) {
+            return Err(InvalidId::IsStartPoint(id));
+        }
+
+        match self.terms.entry(id) {
+            Entry::Occupied(mut occupied) => {
+                occupied.get_mut().mark_deleted();
+                Ok(())
+            }
+            Entry::Vacant(_) => Err(InvalidId::External(id)),
+        }
+    }
+
+    pub(super) fn hard_delete(
+        &self,
+        id: u32,
+    ) -> Result<(), InvalidId> {
+        if self.is_start_point(id) {
+            return Err(InvalidId::IsStartPoint(id));
+        }
+
+        if self.terms.remove(&id).is_none() {
+            Err(InvalidId::Internal(id))
+        } else {
+            Ok(())
+        }
+    }
+
     //--------//
     // Search //
     //--------//
@@ -591,6 +626,15 @@ impl Provider {
             .search(&mut accessor, post_processor, &mut buf)
             .await?;
         Ok((buf.into_inner(), output))
+    }
+
+    pub async fn paged<'a>(
+        &'a self,
+        vector: &'a [f32],
+        l_value: NonZeroUsize,
+    ) -> ANNResult<PagedSearch<Accessor<'a>>> {
+        let accessor = self.search_accessor(vector)?;
+        PagedSearch::new(accessor, l_value).await
     }
 
     pub async fn filtered<'a, P>(
@@ -671,6 +715,25 @@ impl Provider {
         })
         .await
     }
+
+    //-------------//
+    // Consolidate //
+    //-------------//
+
+    pub async fn consolidate(
+        &self,
+        id: u32,
+        options: &Strategy,
+    ) -> ANNResult<algorithms::consolidate::ConsolidateKind> {
+        let mut consolidate = Consolidate {
+            parent: self,
+            prune: self.prune_accessor(options, None),
+        };
+
+        algorithms::consolidate::Workspace::new()
+            .run(&mut consolidate, id, &self.graph)
+            .await
+    }
 }
 
 //--------//
@@ -749,6 +812,59 @@ impl algorithms::batch::insert::Standard for BatchInsert {
     fn prune_accessor(&mut self) -> impl std::borrow::BorrowMut<Self::PruneAccessor<'_>> + Send {
         self.provider
             .prune_accessor(&self.options, Some(&self.overlay))
+    }
+}
+
+//-------------//
+// Consolidate //
+//-------------//
+
+#[derive(Debug)]
+struct Consolidate<'a> {
+    parent: &'a Provider,
+    prune: PruneAccessor<'a>,
+}
+
+impl provider::HasId for Consolidate<'_> {
+    type Id = u32;
+}
+
+impl<'a> algorithms::consolidate::Access for Consolidate<'a> {
+    type PruneAccessor<'b>
+        = PruneAccessor<'a>
+    where
+        Self: 'b;
+
+    fn prune_accessor(&mut self) -> impl BorrowMut<Self::PruneAccessor<'_>> + Send {
+        &mut self.prune
+    }
+
+    async fn neighbors(&mut self, id: u32, neighbors: &mut AdjacencyList<u32>) -> Bool {
+        neighbors.clear();
+        match self.parent.get_neighbors(id, neighbors) {
+            Ok(is_valid) => is_valid.into(),
+            Err(AccessedInvalidId(_)) => false.into(),
+        }
+    }
+
+    fn partition_live(
+        &mut self,
+        ids: &mut AdjacencyList<u32>,
+        mut deleted: Option<&mut AdjacencyList<u32>>,
+    ) {
+        ids.retain(|i| {
+            let retain = match self.parent.is_deleted(*i) {
+                Ok(true) => false,
+                Ok(false) => true,
+                Err(_) => false,
+            };
+
+            if !retain && let Some(deleted) = deleted.as_mut() {
+                deleted.push(*i);
+            }
+
+            retain
+        });
     }
 }
 
@@ -992,79 +1108,79 @@ pub enum InvalidId {
 crate::always_escalate!(InvalidId);
 convert_error!(InvalidId);
 
-impl provider::DataProvider for Provider {
-    type Context = Context;
-    type InternalId = u32;
-    type ExternalId = u32;
+// impl provider::DataProvider for Provider {
+//     type Context = Context;
+//     type InternalId = u32;
+//     type ExternalId = u32;
+//
+//     type Error = InvalidId;
+//     type Guard = provider::NoopGuard<u32>;
+//
+//     fn to_internal_id(&self, _context: &Context, gid: &u32) -> Result<u32, InvalidId> {
+//         let valid = self.terms.contains_key(gid);
+//         if valid {
+//             Ok(*gid)
+//         } else {
+//             Err(InvalidId::External(*gid))
+//         }
+//     }
+// }
 
-    type Error = InvalidId;
-    type Guard = provider::NoopGuard<u32>;
-
-    fn to_internal_id(&self, _context: &Context, gid: &u32) -> Result<u32, InvalidId> {
-        let valid = self.terms.contains_key(gid);
-        if valid {
-            Ok(*gid)
-        } else {
-            Err(InvalidId::External(*gid))
-        }
-    }
-}
-
-impl provider::Delete for Provider {
-    async fn delete(
-        &self,
-        _context: &Self::Context,
-        gid: &Self::ExternalId,
-    ) -> Result<(), Self::Error> {
-        if self.is_start_point(*gid) {
-            return Err(InvalidId::IsStartPoint(*gid));
-        }
-
-        match self.terms.entry(*gid) {
-            Entry::Occupied(mut occupied) => {
-                occupied.get_mut().mark_deleted();
-                Ok(())
-            }
-            Entry::Vacant(_) => Err(InvalidId::External(*gid)),
-        }
-    }
-
-    async fn release(
-        &self,
-        _context: &Self::Context,
-        id: Self::InternalId,
-    ) -> Result<(), Self::Error> {
-        if self.is_start_point(id) {
-            return Err(InvalidId::IsStartPoint(id));
-        }
-
-        if self.terms.remove(&id).is_none() {
-            Err(InvalidId::Internal(id))
-        } else {
-            Ok(())
-        }
-    }
-
-    async fn status_by_internal_id(
-        &self,
-        _context: &Context,
-        id: u32,
-    ) -> Result<provider::ElementStatus, Self::Error> {
-        if self.is_deleted(id)? {
-            Ok(provider::ElementStatus::Deleted)
-        } else {
-            Ok(provider::ElementStatus::Valid)
-        }
-    }
-
-    fn status_by_external_id(
-        &self,
-        context: &Context,
-        gid: &u32,
-    ) -> impl Future<Output = Result<provider::ElementStatus, Self::Error>> + Send {
-        self.status_by_internal_id(context, *gid)
-    }
-}
+// impl provider::Delete for Provider {
+//     async fn delete(
+//         &self,
+//         _context: &Self::Context,
+//         gid: &Self::ExternalId,
+//     ) -> Result<(), Self::Error> {
+//         if self.is_start_point(*gid) {
+//             return Err(InvalidId::IsStartPoint(*gid));
+//         }
+//
+//         match self.terms.entry(*gid) {
+//             Entry::Occupied(mut occupied) => {
+//                 occupied.get_mut().mark_deleted();
+//                 Ok(())
+//             }
+//             Entry::Vacant(_) => Err(InvalidId::External(*gid)),
+//         }
+//     }
+//
+//     async fn release(
+//         &self,
+//         _context: &Self::Context,
+//         id: Self::InternalId,
+//     ) -> Result<(), Self::Error> {
+//         if self.is_start_point(id) {
+//             return Err(InvalidId::IsStartPoint(id));
+//         }
+//
+//         if self.terms.remove(&id).is_none() {
+//             Err(InvalidId::Internal(id))
+//         } else {
+//             Ok(())
+//         }
+//     }
+//
+//     async fn status_by_internal_id(
+//         &self,
+//         _context: &Context,
+//         id: u32,
+//     ) -> Result<provider::ElementStatus, Self::Error> {
+//         if self.is_deleted(id)? {
+//             Ok(provider::ElementStatus::Deleted)
+//         } else {
+//             Ok(provider::ElementStatus::Valid)
+//         }
+//     }
+//
+//     fn status_by_external_id(
+//         &self,
+//         context: &Context,
+//         gid: &u32,
+//     ) -> impl Future<Output = Result<provider::ElementStatus, Self::Error>> + Send {
+//         self.status_by_internal_id(context, *gid)
+//     }
+// }
 
 //////////////////////
 // NeighborAccessor //
@@ -1170,14 +1286,6 @@ impl ToRanked for AccessError {
     }
 }
 
-impl provider::DefaultAccessor for Provider {
-    type Accessor<'a> = NeighborAccessor<'a>;
-
-    fn default_accessor(&self) -> Self::Accessor<'_> {
-        NeighborAccessor::new(self)
-    }
-}
-
 #[derive(Debug, Clone, Copy)]
 pub struct NeighborAccessor<'a> {
     provider: &'a Provider,
@@ -1199,7 +1307,8 @@ impl provider::NeighborAccessor for NeighborAccessor<'_> {
         id: Self::Id,
         neighbors: &mut AdjacencyList<Self::Id>,
     ) -> ANNResult<()> {
-        self.provider.get_neighbors(id, neighbors)
+        self.provider.get_neighbors(id, neighbors)?;
+        Ok(())
     }
 }
 
@@ -1327,14 +1436,17 @@ impl provider::HasId for PruneAccessor<'_> {
 
 impl glue::PruneAccessor for PruneAccessor<'_> {
     type ElementRef<'a> = &'a [f32];
+
     type View<'a>
         = View<'a>
     where
         Self: 'a;
+
     type Distance<'a>
         = <f32 as VectorRepr>::Distance
     where
         Self: 'a;
+
     type Neighbors<'a>
         = NeighborAccessor<'a>
     where
@@ -1460,10 +1572,6 @@ impl provider::HasId for Accessor<'_> {
     type Id = u32;
 }
 
-//------//
-// glue //
-//------//
-
 impl glue::SearchAccessor for Accessor<'_> {
     fn starting_points(&self) -> impl Future<Output = ANNResult<Vec<u32>>> + Send {
         futures_util::future::ok(self.provider.start_point_ids().collect())
@@ -1559,41 +1667,6 @@ impl glue::DefaultPostProcessor<u32> for Accessor<'_> {
     default_post_processor!(glue::Pipeline<glue::FilterStartPoints, glue::CopyIds>);
 }
 
-// /// A [`glue::SearchPostProcessStep`] that removes deleted IDs from the candidate stream.
-// #[derive(Debug, Clone, Copy, Default)]
-// pub struct FilterDeleted;
-//
-// impl<'a, 'b, O> glue::SearchPostProcessStep<Accessor<'a>, &'b [f32], O> for FilterDeleted {
-//     type Error<NextError>
-//         = NextError
-//     where
-//         NextError: StandardError;
-//
-//     type NextAccessor = Accessor<'a>;
-//
-//     fn post_process_step<I, B, Next>(
-//         &self,
-//         next: &Next,
-//         accessor: &mut Accessor<'a>,
-//         query: &'b [f32],
-//         candidates: I,
-//         output: &mut B,
-//     ) -> impl std::future::Future<Output = Result<usize, Self::Error<Next::Error>>> + Send
-//     where
-//         I: Iterator<Item = Neighbor<u32>> + Send,
-//         B: SearchOutputBuffer<O> + Send + ?Sized,
-//         Next: glue::SearchPostProcess<Self::NextAccessor, &'b [f32], O> + Sync,
-//     {
-//         let provider = accessor.provider;
-//         next.post_process(
-//             accessor,
-//             query,
-//             candidates.filter(|n| !provider.is_deleted(*n.id()).unwrap_or(true)),
-//             output,
-//         )
-//     }
-// }
-//
 // impl glue::InplaceDeleteStrategy<Provider> for Strategy {
 //     type DeleteElement<'a> = &'a [f32];
 //     type DeleteElementGuard = Box<[f32]>;
@@ -1929,27 +2002,6 @@ mod tests {
     }
 
     #[test]
-    fn id_conversion() {
-        use provider::DataProvider;
-
-        let provider = create_test_provider();
-
-        let context = Context::default();
-        for i in 0u32..3u32 {
-            let internal = provider.to_internal_id(&context, &i).unwrap();
-            assert_eq!(internal, i);
-        }
-
-        let err = provider.to_internal_id(&context, &5).unwrap_err();
-        let message = err.to_string();
-        assert_eq!(
-            message, "external id 5 is not initialized",
-            "got {}",
-            message
-        );
-    }
-
-    #[test]
     fn test_set() {
         let provider = create_test_provider();
 
@@ -1989,10 +2041,10 @@ mod tests {
 
     #[test]
     fn test_neighbor_accessor() {
-        use provider::{DefaultAccessor, NeighborAccessor};
+        use provider::{NeighborAccessor};
 
         let provider = create_test_provider();
-        let mut accessor = provider.default_accessor();
+        let mut accessor = provider.neighbors();
         let mut v = AdjacencyList::new();
 
         let rt = current_thread_runtime();
@@ -2021,7 +2073,7 @@ mod tests {
         use provider::{DefaultAccessor, NeighborAccessor, NeighborAccessorMut};
 
         let provider = create_test_provider();
-        let mut accessor = provider.default_accessor();
+        let mut accessor = provider.neighbors();
         let mut v = AdjacencyList::new();
 
         let rt = current_thread_runtime();
@@ -2099,7 +2151,7 @@ mod tests {
         use provider::{DefaultAccessor, NeighborAccessor, NeighborAccessorMut};
 
         let provider = create_test_provider();
-        let mut accessor = provider.default_accessor();
+        let mut accessor = provider.neighbors();
         let mut v = AdjacencyList::new();
 
         let rt = current_thread_runtime();
@@ -2205,67 +2257,27 @@ mod tests {
         for i in ids {
             let is_deleted = provider.is_deleted(i).unwrap();
             assert!(!is_deleted);
-
-            let status = rt
-                .block_on(provider.status_by_internal_id(&context, i))
-                .unwrap();
-            assert_eq!(status, provider::ElementStatus::Valid);
-
-            let status = rt
-                .block_on(provider.status_by_external_id(&context, &i))
-                .unwrap();
-            assert_eq!(status, provider::ElementStatus::Valid);
         }
 
         // Accessing an invalid ID in all APIs returns an error.
         {
             let err = provider.is_deleted(invalid_id).unwrap_err();
             assert_contains!(err.to_string(), "not initialized");
-
-            let err = rt
-                .block_on(provider.status_by_internal_id(&context, invalid_id))
-                .unwrap_err();
-            assert_contains!(err.to_string(), "not initialized");
-
-            let err = rt
-                .block_on(provider.status_by_external_id(&context, &invalid_id))
-                .unwrap_err();
-            assert_contains!(err.to_string(), "not initialized");
         }
 
         // Deleting works.
         {
             let id = 3;
-            rt.block_on(provider.delete(&context, &id)).unwrap();
+            provider.soft_delete(id).unwrap();
             let is_deleted = provider.is_deleted(id).unwrap();
             assert!(is_deleted);
-
-            let status = rt
-                .block_on(provider.status_by_internal_id(&context, id))
-                .unwrap();
-            assert_eq!(status, provider::ElementStatus::Deleted);
-
-            let status = rt
-                .block_on(provider.status_by_external_id(&context, &id))
-                .unwrap();
-            assert_eq!(status, provider::ElementStatus::Deleted);
         }
 
         // Releasing works and completely remove the id.
         {
             let id = 3;
-            rt.block_on(provider.release(&context, id)).unwrap();
+            provider.hard_delete(id).unwrap();
             let err = provider.is_deleted(id).unwrap_err();
-            assert_contains!(err.to_string(), "not initialized");
-
-            let err = rt
-                .block_on(provider.status_by_internal_id(&context, id))
-                .unwrap_err();
-            assert_contains!(err.to_string(), "not initialized");
-
-            let err = rt
-                .block_on(provider.status_by_external_id(&context, &id))
-                .unwrap_err();
             assert_contains!(err.to_string(), "not initialized");
         }
     }
@@ -2281,12 +2293,12 @@ mod tests {
         assert!(provider.is_start_point(1));
 
         let context = Context::new();
-        let err = rt.block_on(provider.delete(&context, &0)).unwrap_err();
+        let err = provider.soft_delete(0).unwrap_err();
         let msg = err.to_string();
         assert_contains!(msg, "cannot delete start point");
         assert!(!provider.is_deleted(0).unwrap());
 
-        let err = rt.block_on(provider.release(&context, 0)).unwrap_err();
+        let err = provider.hard_delete(0).unwrap_err();
         let msg = err.to_string();
         assert_contains!(msg, "cannot delete start point");
         assert!(!provider.is_deleted(0).unwrap());

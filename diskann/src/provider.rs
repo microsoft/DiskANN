@@ -406,61 +406,6 @@ pub trait NeighborAccessorMut: NeighborAccessor {
     }
 }
 
-/// A small adaptor providing [`NeighborAccessor`] and [`NeighborAccessorMut`] for `&mut T`.
-pub struct Neighbors<'a, T>(pub &'a mut T);
-
-impl<T> HasId for Neighbors<'_, T>
-where
-    T: HasId,
-{
-    type Id = T::Id;
-}
-
-impl<T> NeighborAccessor for Neighbors<'_, T>
-where
-    T: NeighborAccessor,
-{
-    fn get_neighbors(
-        &mut self,
-        id: Self::Id,
-        neighbors: &mut AdjacencyList<Self::Id>,
-    ) -> impl std::future::Future<Output = ANNResult<()>> + Send {
-        self.0.get_neighbors(id, neighbors)
-    }
-}
-
-impl<T> NeighborAccessorMut for Neighbors<'_, T>
-where
-    T: NeighborAccessorMut,
-{
-    fn set_neighbors(
-        &mut self,
-        id: Self::Id,
-        neighbors: &[Self::Id],
-    ) -> impl std::future::Future<Output = ANNResult<()>> + Send {
-        self.0.set_neighbors(id, neighbors)
-    }
-
-    fn append_vector(
-        &mut self,
-        id: Self::Id,
-        neighbors: &[Self::Id],
-    ) -> impl std::future::Future<Output = ANNResult<()>> + Send {
-        self.0.append_vector(id, neighbors)
-    }
-
-    fn set_neighbors_bulk<I, U>(
-        &mut self,
-        iter: I,
-    ) -> impl std::future::Future<Output = ANNResult<()>> + Send
-    where
-        I: Iterator<Item = (Self::Id, U)> + Send,
-        U: Deref<Target = [Self::Id]> + Send,
-    {
-        self.0.set_neighbors_bulk(iter)
-    }
-}
-
 /// Get a default accessor from a provider.
 ///
 /// Some providers are able to produce accessors directly from the provides, and will implement
