@@ -242,6 +242,154 @@ mod tests {
         }
     }
 
+    struct BatchVisitor<'a> {
+        distances: &'a [f32],
+        fail: bool,
+        batches: usize,
+        stage: bool,
+        scalar_scans: usize,
+    }
+
+    impl crate::provider::HasId for BatchVisitor<'_> {
+        type Id = u32;
+    }
+
+    impl crate::flat::DistancesUnordered for BatchVisitor<'_> {
+        type Error = crate::ANNError;
+
+        async fn distances_unordered<F>(&mut self, mut f: F) -> Result<(), Self::Error>
+        where
+            F: Send + FnMut(u32, f32),
+        {
+            self.scalar_scans += 1;
+            for (i, &distance) in self.distances.iter().enumerate() {
+                f(i as u32, distance);
+                if self.fail && i == 16 {
+                    return Err(crate::ANNError::new(std::io::Error::other(
+                        "batch scan failed",
+                    )));
+                }
+            }
+            Ok(())
+        }
+
+        async fn distances_unordered_with<H>(&mut self, handler: &mut H) -> Result<(), Self::Error>
+        where
+            H: crate::flat::DistanceHandler<u32>,
+        {
+            if self.stage && !handler.prefers_buffered_batches() {
+                return self
+                    .distances_unordered(|id, distance| handler.add(id, distance))
+                    .await;
+            }
+            handler.add_batch(&[], &[]);
+            for (block, distances) in self.distances.chunks(17).enumerate() {
+                let ids: Vec<_> = (0..distances.len())
+                    .map(|i| (17 * block + i) as u32)
+                    .collect();
+                // Mix scalar submissions, SIMD groups and tails in one scan.
+                handler.add(ids[0], distances[0]);
+                handler.add_batch(&ids[1..], &distances[1..]);
+                self.batches += 1;
+                if self.fail {
+                    return Err(crate::ANNError::new(std::io::Error::other(
+                        "batch scan failed",
+                    )));
+                }
+            }
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn mixed_batches_preserve_post_processing_and_scan_errors() {
+        use crate::flat::test::harness::EvenIdsOnly;
+        use crate::{
+            flat::SearchStats,
+            neighbor::{Neighbor, NeighborPriorityQueue},
+        };
+
+        let distances: Vec<_> = (0..301)
+            .map(|i| match i % 6 {
+                0 => f32::NAN,
+                1 => f32::INFINITY,
+                2 => -0.0,
+                3 => 0.0,
+                _ => (i % 11) as f32 - 5.0,
+            })
+            .collect();
+        for k in [1, 2, 99, 100, 101, 400] {
+            let mut reference = NeighborPriorityQueue::new(k);
+            for (i, &d) in distances.iter().enumerate() {
+                reference.insert(Neighbor::new(i as u32, d));
+            }
+            let expected: Vec<_> = reference
+                .iter()
+                .filter(|n| *n.id() % 2 == 0)
+                .map(|n| (*n.id(), n.distance().to_bits()))
+                .collect();
+            for reservoir_min_k in [0, 100, usize::MAX] {
+                for stage in [false, true] {
+                    let mut visitor = BatchVisitor {
+                        distances: &distances,
+                        fail: false,
+                        batches: 0,
+                        stage,
+                        scalar_scans: 0,
+                    };
+                    let mut output = Vec::new();
+                    let stats = knn_search_with_options(
+                        &mut visitor,
+                        NonZeroUsize::new(k).unwrap(),
+                        SearchOptions { reservoir_min_k },
+                        EvenIdsOnly,
+                        (),
+                        &mut output,
+                    )
+                    .await
+                    .unwrap();
+                    if stage && k == 1 {
+                        assert_eq!(visitor.scalar_scans, 1);
+                        assert_eq!(visitor.batches, 0);
+                    } else {
+                        // Native blocks must remain batched even for Top1. Other
+                        // collectors also retain batching for staged scores.
+                        assert_eq!(visitor.scalar_scans, 0);
+                        assert!(visitor.batches > 0);
+                    }
+                    assert_eq!(
+                        stats,
+                        SearchStats {
+                            cmps: distances.len() as u32,
+                            result_count: expected.len() as u32
+                        }
+                    );
+                    assert_eq!(
+                        output
+                            .iter()
+                            .map(|n| (*n.id(), n.distance().to_bits()))
+                            .collect::<Vec<_>>(),
+                        expected
+                    );
+                    visitor.fail = true;
+                    output.clear();
+                    let err = knn_search_with_options(
+                        &mut visitor,
+                        NonZeroUsize::new(k).unwrap(),
+                        SearchOptions { reservoir_min_k },
+                        EvenIdsOnly,
+                        (),
+                        &mut output,
+                    )
+                    .await
+                    .unwrap_err();
+                    assert!(format!("{err}").contains("batch scan failed"));
+                    assert!(output.is_empty());
+                }
+            }
+        }
+    }
+
     /// `knn_search` returns a `Send` future, and a shared provider can serve
     /// many concurrent searches on a multi-threaded runtime, each producing the
     /// correct output independently.

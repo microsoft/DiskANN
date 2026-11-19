@@ -7,7 +7,9 @@
 
 use std::{cmp::Ordering, collections::BinaryHeap, num::NonZeroUsize};
 
-use super::DistancesUnordered;
+use diskann_wide::{SIMDMask, SIMDPartialOrd, SIMDVector};
+
+use super::{DistanceHandler, DistancesUnordered};
 use crate::{ANNResult, error::ErrorExt, neighbor::Neighbor};
 
 #[inline]
@@ -27,32 +29,106 @@ pub(super) async fn collect<V: DistancesUnordered>(
 }
 
 #[inline]
-async fn scan<V, C>(visitor: &mut V, mut collector: C) -> ANNResult<(Vec<Neighbor<V::Id>>, u32)>
+async fn scan<V, C>(visitor: &mut V, collector: C) -> ANNResult<(Vec<Neighbor<V::Id>>, u32)>
 where
     V: DistancesUnordered,
     C: Collector<V::Id> + Send,
 {
-    let mut cmps = 0;
+    let mut handler = CountingHandler { collector, cmps: 0 };
     visitor
-        .distances_unordered(|id, distance| {
-            cmps += 1;
-            collector.insert(Neighbor::new(id, distance));
-        })
+        .distances_unordered_with(&mut handler)
         .await
         .escalate("flat scan must complete to produce correct k-NN results")?;
-    Ok((collector.finish(), cmps))
+    Ok((handler.collector.finish(), handler.cmps))
 }
 
-trait Collector<I> {
+struct CountingHandler<C> {
+    collector: C,
+    cmps: u32,
+}
+
+impl<I: Copy, C: Collector<I> + Send> DistanceHandler<I> for CountingHandler<C> {
+    #[inline]
+    fn prefers_buffered_batches(&self) -> bool {
+        C::PREFER_BUFFERED_BATCHES
+    }
+
+    #[inline]
+    fn add(&mut self, id: I, distance: f32) {
+        self.cmps += 1;
+        self.collector.insert(Neighbor::new(id, distance));
+    }
+
+    #[inline]
+    #[track_caller]
+    fn add_batch(&mut self, ids: &[I], distances: &[f32]) {
+        assert_eq!(ids.len(), distances.len(), "ID and distance lengths differ");
+        self.cmps += distances.len() as u32;
+        self.collector.insert_batch(ids, distances);
+    }
+}
+
+trait Collector<I: Copy> {
+    const PREFER_BUFFERED_BATCHES: bool = true;
+
+    fn threshold(&self) -> f32;
     fn insert(&mut self, neighbor: Neighbor<I>);
     fn finish(self) -> Vec<Neighbor<I>>;
+
+    #[inline]
+    fn insert_batch(&mut self, ids: &[I], distances: &[f32]) {
+        let (groups, tail) = distances.as_chunks::<8>();
+        for (group, distances) in groups.iter().enumerate() {
+            let mut eligible = eligible_lanes(distances, self.threshold());
+            if eligible == u8::MAX {
+                // Dense groups (for example, improving distances) do not benefit
+                // from walking a bitmask. Keep the scalar loop easy to unroll.
+                for (&id, &distance) in ids[group * 8..group * 8 + 8].iter().zip(distances) {
+                    self.insert(Neighbor::new(id, distance));
+                }
+                continue;
+            }
+            while eligible != 0 {
+                let lane = eligible.trailing_zeros() as usize;
+                eligible &= eligible - 1;
+                // Earlier insertions can lower the threshold. insert rechecks it
+                // and preserves later-arrival preference by consuming lanes in order.
+                self.insert(Neighbor::new(ids[group * 8 + lane], distances[lane]));
+            }
+        }
+        for (&id, &distance) in ids[groups.len() * 8..].iter().zip(tail) {
+            self.insert(Neighbor::new(id, distance));
+        }
+    }
+}
+
+#[inline]
+fn eligible_lanes(distances: &[f32; 8], threshold: f32) -> u8 {
+    diskann_wide::alias!(f32s = f32x8);
+    // SAFETY: f32x8 reads exactly the eight initialized values in distances.
+    // ARCH only enables instructions supported by the compilation target.
+    let values = unsafe { f32s::load_simd(diskann_wide::ARCH, distances.as_ptr()) };
+    // Ordered <= excludes NaNs, admits infinities, and treats signed zeros as ties.
+    values
+        .le_simd(f32s::splat(diskann_wide::ARCH, threshold))
+        .bitmask()
+        .to_underlying()
 }
 
 struct Top1<I> {
     best: Option<Neighbor<I>>,
 }
 
-impl<I> Collector<I> for Top1<I> {
+impl<I: Copy> Collector<I> for Top1<I> {
+    // Updating one best candidate is cheap. Avoid creating distance buffers for
+    // it, while retaining SIMD screening when a producer already has a block.
+    const PREFER_BUFFERED_BATCHES: bool = false;
+
+    #[inline]
+    fn threshold(&self) -> f32 {
+        self.best.as_ref().map_or(f32::INFINITY, |n| *n.distance())
+    }
+
     #[inline]
     fn insert(&mut self, neighbor: Neighbor<I>) {
         let distance = *neighbor.distance();
@@ -118,7 +194,18 @@ impl<I> Heap<I> {
     }
 }
 
-impl<I> Collector<I> for Heap<I> {
+impl<I: Copy> Collector<I> for Heap<I> {
+    #[inline]
+    fn threshold(&self) -> f32 {
+        if self.entries.len() < self.k {
+            f32::INFINITY
+        } else {
+            self.entries
+                .peek()
+                .map_or(f32::INFINITY, |e| *e.neighbor.distance())
+        }
+    }
+
     #[inline]
     fn insert(&mut self, neighbor: Neighbor<I>) {
         let distance = *neighbor.distance();
@@ -181,7 +268,12 @@ impl<I> Reservoir<I> {
     }
 }
 
-impl<I> Collector<I> for Reservoir<I> {
+impl<I: Copy> Collector<I> for Reservoir<I> {
+    #[inline]
+    fn threshold(&self) -> f32 {
+        self.threshold
+    }
+
     #[inline]
     fn insert(&mut self, neighbor: Neighbor<I>) {
         let distance = *neighbor.distance();
@@ -241,6 +333,54 @@ mod tests {
             reservoir.finish().into_iter().map(bits).collect::<Vec<_>>(),
             expected
         );
+        let ids: Vec<_> = (0..distances.len() as u128).collect();
+        for batch_size in [1, 7, 8, 9, 31, 32, 33, 255] {
+            let mut heap = CountingHandler {
+                collector: Heap::new(k),
+                cmps: 0,
+            };
+            let mut reservoir = CountingHandler {
+                collector: Reservoir::new(k),
+                cmps: 0,
+            };
+            let mut top1 = CountingHandler {
+                collector: Top1 { best: None },
+                cmps: 0,
+            };
+            for (ids, distances) in ids.chunks(batch_size).zip(distances.chunks(batch_size)) {
+                heap.add_batch(ids, distances);
+                reservoir.add_batch(ids, distances);
+                top1.add_batch(ids, distances);
+            }
+            assert_eq!(heap.cmps as usize, distances.len());
+            assert_eq!(reservoir.cmps, heap.cmps);
+            assert_eq!(top1.cmps, heap.cmps);
+            assert_eq!(
+                heap.collector
+                    .finish()
+                    .into_iter()
+                    .map(bits)
+                    .collect::<Vec<_>>(),
+                expected
+            );
+            assert_eq!(
+                reservoir
+                    .collector
+                    .finish()
+                    .into_iter()
+                    .map(bits)
+                    .collect::<Vec<_>>(),
+                expected
+            );
+            assert_eq!(
+                top1.collector
+                    .finish()
+                    .into_iter()
+                    .map(bits)
+                    .collect::<Vec<_>>(),
+                expected.iter().take(1).copied().collect::<Vec<_>>()
+            );
+        }
     }
 
     #[test]

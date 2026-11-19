@@ -17,7 +17,10 @@ use crate::data_model::GraphDataType;
 use diskann::{
     ANNError, ANNResult,
     error::IntoANNResult,
-    flat::{DistancesUnordered, SearchStats as FlatSearchStats, knn_search as flat_knn_search},
+    flat::{
+        DistanceHandler, DistancesUnordered, SearchStats as FlatSearchStats,
+        knn_search as flat_knn_search,
+    },
     graph::{
         self, DiskANNIndex,
         ext::labeled::{self, QueryLabelProvider},
@@ -777,12 +780,7 @@ where
     Data: GraphDataType<VectorIdType = u32>,
     VP: VertexProvider<Data>,
 {
-    // Compute the PQ distance between each ID in `ids` and the distance table stored in
-    // `self`, invoking the callback with the results of each computation in order.
-    fn pq_distances<F>(&mut self, ids: &[u32], mut f: F) -> ANNResult<()>
-    where
-        F: FnMut(f32, u32),
-    {
+    fn compute_pq_distances(&mut self, ids: &[u32]) -> ANNResult<()> {
         let pq_scratch = &mut self.scratch.pq_scratch;
         compute_pq_distance(
             ids,
@@ -792,6 +790,16 @@ where
             &mut pq_scratch.aligned_pq_coord_scratch,
             &mut pq_scratch.aligned_dist_scratch,
         )?;
+        Ok(())
+    }
+
+    // Graph traversal still consumes distances one at a time. Flat search can
+    // submit the same scratch buffer directly to a batch-aware handler.
+    fn pq_distances<F>(&mut self, ids: &[u32], mut f: F) -> ANNResult<()>
+    where
+        F: FnMut(f32, u32),
+    {
+        self.compute_pq_distances(ids)?;
 
         for (i, id) in ids.iter().enumerate() {
             let distance = self.scratch.pq_scratch.aligned_dist_scratch[i];
@@ -821,6 +829,16 @@ where
     where
         F: Send + FnMut(Self::Id, f32),
     {
+        async move { self.distances_unordered_with(&mut f).await }
+    }
+
+    fn distances_unordered_with<H>(
+        &mut self,
+        handler: &mut H,
+    ) -> impl SendFuture<Result<(), Self::Error>>
+    where
+        H: DistanceHandler<Self::Id>,
+    {
         async move {
             let batch_size = self.scratch.pq_scratch.max_vectors();
             if batch_size == 0 {
@@ -842,7 +860,13 @@ where
                     break;
                 }
 
-                self.pq_distances(&ids, |distance, id| f(id, distance))?;
+                self.compute_pq_distances(&ids)?;
+                // PQ already produces a distance block. Keep batch submission
+                // even for handlers that advise against staging scalar scores.
+                handler.add_batch(
+                    &ids,
+                    &self.scratch.pq_scratch.aligned_dist_scratch[..ids.len()],
+                );
             }
 
             Ok(())

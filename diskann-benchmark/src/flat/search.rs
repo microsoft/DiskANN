@@ -11,7 +11,7 @@
 use std::{io::Write, num::NonZeroUsize, sync::Arc};
 
 use diskann::{
-    flat::{knn_search, DistancesUnordered},
+    flat::{knn_search, DistanceHandler, DistancesUnordered},
     graph::{glue::CopyIds, SearchOutputBuffer},
     provider::HasId,
     utils::VectorRepr,
@@ -215,6 +215,35 @@ impl<T: VectorRepr> DistancesUnordered for Visitor<'_, T> {
             for (i, vector) in self.data.rows().enumerate() {
                 let dist = self.computer.evaluate_similarity(vector);
                 f(i as u32, dist);
+            }
+            Ok(())
+        }
+    }
+
+    fn distances_unordered_with<H>(
+        &mut self,
+        handler: &mut H,
+    ) -> impl SendFuture<Result<(), Self::Error>>
+    where
+        H: DistanceHandler<Self::Id>,
+    {
+        async move {
+            if !handler.prefers_buffered_batches() {
+                return self
+                    .distances_unordered(|id, distance| handler.add(id, distance))
+                    .await;
+            }
+            const BATCH: usize = 32;
+            let mut ids = [0u32; BATCH];
+            let mut distances = [0.0f32; BATCH];
+            let dim = self.data.ncols();
+            for (block, vectors) in self.data.as_slice().chunks(BATCH * dim).enumerate() {
+                let len = vectors.len() / dim;
+                for (lane, vector) in vectors.chunks_exact(dim).enumerate() {
+                    ids[lane] = (block * BATCH + lane) as u32;
+                    distances[lane] = self.computer.evaluate_similarity(vector);
+                }
+                handler.add_batch(&ids[..len], &distances[..len]);
             }
             Ok(())
         }
@@ -440,6 +469,59 @@ mod tests {
     use super::*;
     use crate::inputs::Example;
     use diskann_benchmark_runner::utils::MicroSeconds;
+
+    #[test]
+    fn visitor_honors_staging_hint_before_building_batches() {
+        struct Recorder {
+            stage: bool,
+            singles: usize,
+            batches: usize,
+            values: Vec<(u32, u32)>,
+        }
+        impl DistanceHandler<u32> for Recorder {
+            fn prefers_buffered_batches(&self) -> bool {
+                self.stage
+            }
+            fn add(&mut self, id: u32, distance: f32) {
+                self.singles += 1;
+                self.values.push((id, distance.to_bits()));
+            }
+            fn add_batch(&mut self, ids: &[u32], distances: &[f32]) {
+                assert_eq!(ids.len(), distances.len());
+                self.batches += 1;
+                self.values
+                    .extend(ids.iter().zip(distances).map(|(&id, d)| (id, d.to_bits())));
+            }
+        }
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let provider = InMemProvider {
+                    data: Arc::new(rowmajor::Owned::from_element(65, 1, 1.0f32)),
+                };
+                let mut expected = Vec::new();
+                Visitor::new(&provider, &[2.0], Metric::L2)
+                    .distances_unordered(|id, d| expected.push((id, d.to_bits())))
+                    .await
+                    .unwrap();
+                for stage in [false, true] {
+                    let mut recorder = Recorder {
+                        stage,
+                        singles: 0,
+                        batches: 0,
+                        values: Vec::new(),
+                    };
+                    Visitor::new(&provider, &[2.0], Metric::L2)
+                        .distances_unordered_with(&mut recorder)
+                        .await
+                        .unwrap();
+                    assert_eq!(recorder.values, expected);
+                    assert_eq!(recorder.singles, if stage { 0 } else { 65 });
+                    assert_eq!(recorder.batches, if stage { 3 } else { 0 });
+                }
+            });
+    }
 
     fn make_dummy_results(num_results: usize) -> FlatResult {
         let results = (0..num_results)

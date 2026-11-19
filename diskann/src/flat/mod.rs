@@ -25,7 +25,7 @@ pub mod strategy;
 mod topk;
 
 pub use index::{SearchOptions, SearchStats, knn_search, knn_search_with_options};
-pub use strategy::DistancesUnordered;
+pub use strategy::{DistanceHandler, DistancesUnordered};
 
 #[cfg(test)]
 mod test;
