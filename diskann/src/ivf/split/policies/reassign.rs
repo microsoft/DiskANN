@@ -23,8 +23,8 @@ use crate::{
     },
 };
 
-// Small candidate sets cannot amortize matrix preparation. Keep the measured
-// crossover with the 128-row scorer; this is not a dimension-independent optimum.
+// Avoid matrix preparation for narrow candidate sets. The crossover with the
+// 128-row scorer depends on dimension and point count.
 const MIN_GEMM_CANDIDATES: usize = 12;
 
 struct Job<'a> {
@@ -58,7 +58,7 @@ impl Job<'_> {
     }
 }
 
-/// Reassigns points among linked lists using paired L2 or tiled GEMM.
+/// Reassigns points among linked lists using direct L2 or tiled GEMM.
 pub(crate) struct Linked;
 
 impl<I, L, R> Reassign<I, L, R> for Linked
@@ -163,27 +163,14 @@ where
 }
 
 #[inline(always)]
-fn nearest_rows<'a>(point: &[f32], mut centers: impl Iterator<Item = &'a [f32]>) -> usize {
+fn nearest_rows<'a>(point: &[f32], centers: impl Iterator<Item = &'a [f32]>) -> usize {
     let mut best = 0;
     let mut minimum = f32::INFINITY;
-    let mut position = 0;
-    while let Some(left) = centers.next() {
-        if let Some(right) = centers.next() {
-            for (offset, distance) in SquaredL2::evaluate_pair(point, [left, right])
-                .into_iter()
-                .enumerate()
-            {
-                if position + offset == 0 || distance < minimum {
-                    minimum = distance;
-                    best = position + offset;
-                }
-            }
-            position += 2;
-        } else {
-            let distance: f32 = SquaredL2::evaluate(point, left);
-            if position == 0 || distance < minimum {
-                best = position;
-            }
+    for (position, center) in centers.enumerate() {
+        let distance: f32 = SquaredL2::evaluate(point, center);
+        if position == 0 || distance < minimum {
+            minimum = distance;
+            best = position;
         }
     }
     best
