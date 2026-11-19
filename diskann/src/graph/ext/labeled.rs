@@ -49,6 +49,12 @@ where
     /// When used with [`Filtered`], callers may assume that `i` was yielded from a
     /// callback from [`glue::SearchAccessor::expand_beam`].
     fn is_match(&self, i: I) -> bool;
+
+    /// Exact number of matching vector IDs, when known before search.
+    /// Providers without an exact count should return `None`.
+    fn match_count(&self) -> Option<usize> {
+        None
+    }
 }
 
 // Move this external to the `QueryLabelProvider` call so the indirect call has a slightly
@@ -159,10 +165,34 @@ where
     type Id = A::Id;
 }
 
+impl<A: glue::SearchAccessor> glue::FilterClassifier for FilteredAccessor<'_, A> {
+    fn classify(&self, id: Self::Id) -> Decision<Self::Id> {
+        decide(self.labels, id)
+    }
+
+    fn expand_beam_preclassified<Itr, P, F>(
+        &mut self,
+        ids: Itr,
+        pred: P,
+        on_neighbors: F,
+    ) -> impl std::future::Future<Output = ANNResult<()>> + Send
+    where
+        Itr: Iterator<Item = Self::Id> + Send,
+        P: glue::HybridPredicate<Self::Id> + Send + Sync,
+        F: FnMut(Self::Id, f32) + Send,
+    {
+        self.inner.expand_beam(ids, pred, on_neighbors)
+    }
+}
+
 impl<'a, A> glue::FilteredAccessor for FilteredAccessor<'a, A>
 where
     A: glue::SearchAccessor,
 {
+    fn match_count(&self) -> Option<usize> {
+        self.labels.match_count()
+    }
+
     async fn start_point_distances<F>(&mut self, mut f: F) -> ANNResult<()>
     where
         F: FnMut(Decision<Self::Id>, f32) + Send,

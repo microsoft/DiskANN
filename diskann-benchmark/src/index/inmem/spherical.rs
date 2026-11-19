@@ -107,7 +107,7 @@ mod imp {
         },
         utils::{
             self, datafiles,
-            filters::{generate_bitmaps, setup_filter_strategies},
+            filters::{get_filter_bitmaps, setup_filter_strategies},
         },
     };
 
@@ -472,9 +472,11 @@ mod imp {
                 &filtered_range.runs,
             );
 
-            let bit_maps = generate_bitmaps(
+            let bit_maps = get_filter_bitmaps(
                 &filtered_range.query_predicates,
                 &filtered_range.data_labels,
+                &filtered_range.filter_bitmaps,
+                queries.nrows(),
             )?;
 
             let labels: Arc<[_]> = bit_maps
@@ -530,7 +532,12 @@ mod imp {
                 GroundTruthMode::Flexible,
             );
 
-            let bit_maps = generate_bitmaps(&betafilter.query_predicates, &betafilter.data_labels)?;
+            let bit_maps = get_filter_bitmaps(
+                &betafilter.query_predicates,
+                &betafilter.data_labels,
+                &betafilter.filter_bitmaps,
+                queries.nrows(),
+            )?;
 
             let label_providers: Vec<_> = bit_maps
                 .into_iter()
@@ -585,7 +592,12 @@ mod imp {
                 GroundTruthMode::Flexible,
             );
 
-            let bit_maps = generate_bitmaps(&multihop.query_predicates, &multihop.data_labels)?;
+            let bit_maps = get_filter_bitmaps(
+                &multihop.query_predicates,
+                &multihop.data_labels,
+                &multihop.filter_bitmaps,
+                queries.nrows(),
+            )?;
 
             let bit_map_filters: Arc<[_]> = bit_maps
                 .into_iter()
@@ -639,7 +651,12 @@ mod imp {
                 GroundTruthMode::Flexible,
             );
 
-            let bit_maps = generate_bitmaps(&inline.query_predicates, &inline.data_labels)?;
+            let bit_maps = get_filter_bitmaps(
+                &inline.query_predicates,
+                &inline.data_labels,
+                &inline.filter_bitmaps,
+                queries.nrows(),
+            )?;
 
             let bit_map_filters: Arc<[_]> = bit_maps
                 .into_iter()
