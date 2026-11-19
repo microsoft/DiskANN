@@ -7,8 +7,9 @@ This crate provides disk-based indexing capabilities for DiskANN.
 The DEBUG span `diskann.disk.search.diagnostics`, on target
 `diskann::disk::search::diagnostics`, records one aggregate per search. It is a child
 of the caller's current span when the search is polled. Both search entry points
-and all four search modes use the same counters. Fields are recorded before the
-span closes, including partial totals if a search fails or is cancelled.
+and all four search modes use the same counters. Fields are recorded after search
+execution succeeds, before the span closes. There is no drop-time reporting for
+errors or cancellation.
 
 | Field | Cumulative elapsed nanoseconds |
 | --- | --- |
@@ -50,6 +51,8 @@ requires a restart. Each search keeps its initial span/filter decision; no
 enabled state is cached across searches. With the target disabled, the added hot
 path performs span-disabled checks, but no diagnostic clock reads, counter
 updates, allocations, or locks. Subscriber/filter checks at span creation remain.
+Successful completion reads the three counters; recording on a disabled span is
+a no-op.
 Collectors must retain fields from `on_record`, not just span creation. Span
 lifetime includes unmeasured work; the three fields, not that lifetime, give the
 breakdown. An event-only collector will not receive these fields.

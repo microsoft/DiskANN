@@ -243,13 +243,15 @@ where
     scratch_pool: &'a Arc<ObjectPool<DiskSearchScratch<Data, ProviderFactory::VertexProviderType>>>,
 }
 
-// Struct to track IO. This is used by single thread, but needs to be Atomic as the Strategy has "Send" trait bound.
-// There should be minimal to no overhead compared to using a raw reference.
+// Accessors share this tracker through references and must be Send + Sync.
 struct IOTracker {
     io_time_us: AtomicU64,
     preprocess_time_us: AtomicU64,
     io_count: AtomicUsize,
-    diagnostics: SearchDiagnostics,
+    diagnostics: tracing::Span,
+    vector_ns: AtomicU64,
+    pq_distance_ns: AtomicU64,
+    adjacency_ns: AtomicU64,
 }
 
 impl Default for IOTracker {
@@ -258,23 +260,7 @@ impl Default for IOTracker {
             io_time_us: AtomicU64::new(0),
             preprocess_time_us: AtomicU64::new(0),
             io_count: AtomicUsize::new(0),
-            diagnostics: SearchDiagnostics::new(),
-        }
-    }
-}
-
-// One span per search, with disjoint cumulative wall times, not synthetic child spans.
-struct SearchDiagnostics {
-    span: tracing::Span,
-    vector_ns: AtomicU64,
-    pq_distance_ns: AtomicU64,
-    adjacency_ns: AtomicU64,
-}
-
-impl SearchDiagnostics {
-    fn new() -> Self {
-        Self {
-            span: tracing::debug_span!(
+            diagnostics: tracing::debug_span!(
                 target: "diskann::disk::search::diagnostics",
                 "diskann.disk.search.diagnostics",
                 vector_ns = tracing::field::Empty,
@@ -286,40 +272,19 @@ impl SearchDiagnostics {
             adjacency_ns: AtomicU64::new(0),
         }
     }
-
-    fn measure<'a>(&self, counter: &'a AtomicU64) -> Option<DiagnosticTimer<'a>> {
-        // The span captures the subscriber's decision for this search, including
-        // contextual filters. Disabled spans never read a clock or update a counter.
-        (!self.span.is_disabled()).then(|| DiagnosticTimer {
-            start: Instant::now(),
-            counter,
-        })
-    }
-}
-
-impl Drop for SearchDiagnostics {
-    fn drop(&mut self) {
-        if !self.span.is_disabled() {
-            self.span
-                .record("vector_ns", IOTracker::time(&self.vector_ns))
-                .record("pq_distance_ns", IOTracker::time(&self.pq_distance_ns))
-                .record("adjacency_ns", IOTracker::time(&self.adjacency_ns));
-        }
-    }
-}
-
-struct DiagnosticTimer<'a> {
-    start: Instant,
-    counter: &'a AtomicU64,
-}
-
-impl Drop for DiagnosticTimer<'_> {
-    fn drop(&mut self) {
-        IOTracker::add_time(self.counter, self.start.elapsed().as_nanos() as u64);
-    }
 }
 
 impl IOTracker {
+    fn diagnostic_start(&self) -> Option<Instant> {
+        (!self.diagnostics.is_disabled()).then(Instant::now)
+    }
+
+    fn add_diagnostic_time(category: &AtomicU64, start: Option<Instant>) {
+        if let Some(start) = start {
+            Self::add_time(category, start.elapsed().as_nanos() as u64);
+        }
+    }
+
     fn add_time(category: &AtomicU64, time: u64) {
         category.fetch_add(time, std::sync::atomic::Ordering::Relaxed);
     }
@@ -467,8 +432,7 @@ where
         })));
     }
 
-    let diagnostics = &accessor.io_tracker.diagnostics;
-    let _timer = diagnostics.measure(&diagnostics.vector_ns);
+    let timer = accessor.io_tracker.diagnostic_start();
     let mut count = 0;
     for candidate in reranked {
         if output.size_hint() == Some(0) {
@@ -492,6 +456,7 @@ where
             break;
         }
     }
+    IOTracker::add_diagnostic_time(&accessor.io_tracker.vector_ns, timer);
     Ok(count)
 }
 
@@ -546,14 +511,14 @@ where
         };
         if !uncached_ids.is_empty() {
             ensure_vertex_loaded(&mut accessor.scratch.vertex_provider, &uncached_ids)?;
-            let diagnostics = &accessor.io_tracker.diagnostics;
-            let _timer = diagnostics.measure(&diagnostics.vector_ns);
+            let timer = accessor.io_tracker.diagnostic_start();
             for n in &uncached_ids {
                 let v = accessor.scratch.vertex_provider.get_vector(n)?;
                 let d = provider.distance_comparer.evaluate_similarity(query, v);
                 let a = accessor.scratch.vertex_provider.get_associated_data(n)?;
                 reranked.push(Neighbor::new((*n, *a), d));
             }
+            IOTracker::add_diagnostic_time(&accessor.io_tracker.vector_ns, timer);
         }
 
         // Sort the full precision distances.
@@ -611,24 +576,22 @@ where
         let mut candidate_distances = Vec::with_capacity(candidate_ids.len());
         let mut associated_data = Vec::with_capacity(candidate_ids.len());
 
-        {
-            let diagnostics = &accessor.io_tracker.diagnostics;
-            let _timer = diagnostics.measure(&diagnostics.vector_ns);
-            for (row_idx, id) in candidate_ids.iter().enumerate() {
-                let vector = accessor.scratch.vertex_provider.get_vector(id)?;
-                let distance = provider
-                    .distance_comparer
-                    .evaluate_similarity(query, vector);
-                let vector_f32 = Data::VectorDataType::as_f32(vector).map_err(Into::into)?;
-                let data = accessor.scratch.vertex_provider.get_associated_data(id)?;
+        let timer = accessor.io_tracker.diagnostic_start();
+        for (row_idx, id) in candidate_ids.iter().enumerate() {
+            let vector = accessor.scratch.vertex_provider.get_vector(id)?;
+            let distance = provider
+                .distance_comparer
+                .evaluate_similarity(query, vector);
+            let vector_f32 = Data::VectorDataType::as_f32(vector).map_err(Into::into)?;
+            let data = accessor.scratch.vertex_provider.get_associated_data(id)?;
 
-                candidate_vectors
-                    .row_mut(row_idx)
-                    .copy_from_slice(&vector_f32);
-                candidate_distances.push(distance);
-                associated_data.push(*data);
-            }
+            candidate_vectors
+                .row_mut(row_idx)
+                .copy_from_slice(&vector_f32);
+            candidate_distances.push(distance);
+            associated_data.push(*data);
         }
+        IOTracker::add_diagnostic_time(&accessor.io_tracker.vector_ns, timer);
 
         let reranked = determinant_diversity(
             candidate_vectors.as_view_mut(),
@@ -850,8 +813,7 @@ where
         F: FnMut(f32, u32),
     {
         let pq_scratch = &mut self.scratch.pq_scratch;
-        let diagnostics = &self.io_tracker.diagnostics;
-        let timer = diagnostics.measure(&diagnostics.pq_distance_ns);
+        let timer = self.io_tracker.diagnostic_start();
         compute_pq_distance(
             ids,
             self.provider.pq_data.get_num_chunks(),
@@ -860,7 +822,7 @@ where
             &mut pq_scratch.aligned_pq_coord_scratch,
             &mut pq_scratch.aligned_dist_scratch,
         )?;
-        drop(timer);
+        IOTracker::add_diagnostic_time(&self.io_tracker.pq_distance_ns, timer);
 
         for (i, id) in ids.iter().enumerate() {
             let distance = self.scratch.pq_scratch.aligned_dist_scratch[i];
@@ -955,8 +917,7 @@ where
             self.ensure_loaded(&load_ids)?;
             let mut ids = Vec::new();
             for i in load_ids {
-                let diagnostics = &self.io_tracker.diagnostics;
-                let timer = diagnostics.measure(&diagnostics.adjacency_ns);
+                let timer = self.io_tracker.diagnostic_start();
                 ids.clear();
                 ids.extend(
                     self.scratch
@@ -966,7 +927,7 @@ where
                         .copied()
                         .filter(|id| pred.eval_mut(id)),
                 );
-                drop(timer);
+                IOTracker::add_diagnostic_time(&self.io_tracker.adjacency_ns, timer);
 
                 self.pq_distances(&ids, &mut |dist, id| f(id, dist))?;
             }
@@ -1039,8 +1000,7 @@ where
             timer.elapsed().as_micros() as u64,
         );
         self.io_tracker.add_io_count(ids.len());
-        let diagnostics = &self.io_tracker.diagnostics;
-        let _timer = diagnostics.measure(&diagnostics.vector_ns);
+        let timer = self.io_tracker.diagnostic_start();
         for id in ids {
             let vector = scratch.vertex_provider.get_vector(id)?;
             let distance = self
@@ -1053,6 +1013,7 @@ where
                 .distance_cache
                 .insert(*id, (distance, associated_data, indexed_vector));
         }
+        IOTracker::add_diagnostic_time(&self.io_tracker.vector_ns, timer);
         Ok(())
     }
 }
@@ -1550,6 +1511,14 @@ where
         query_stats.cpu_time_us = query_stats.total_execution_time_us
             - query_stats.io_time_us
             - query_stats.query_pq_preprocess_time_us;
+        io_tracker
+            .diagnostics
+            .record("vector_ns", IOTracker::time(&io_tracker.vector_ns))
+            .record(
+                "pq_distance_ns",
+                IOTracker::time(&io_tracker.pq_distance_ns),
+            )
+            .record("adjacency_ns", IOTracker::time(&io_tracker.adjacency_ns));
         Ok(SearchResultStats {
             cmps: query_stats.total_comparisons,
             result_count: stats.result_count,
@@ -1733,8 +1702,7 @@ mod disk_provider_tests {
             for enabled in [false, true, false] {
                 reload.reload(targets(enabled)).unwrap();
                 if !enabled {
-                    let diagnostics = SearchDiagnostics::new();
-                    assert!(diagnostics.measure(&diagnostics.vector_ns).is_none());
+                    assert!(IOTracker::default().diagnostic_start().is_none());
                 }
                 let searcher = Arc::clone(&searcher);
                 let query = queries.row(0).to_vec();
@@ -1834,15 +1802,47 @@ mod disk_provider_tests {
             accessor
                 .pq_distances(&[0, 1], |_, _| {
                     // The measurement must already be complete before invoking user code.
-                    measured_ns = IOTracker::time(&tracker.diagnostics.pq_distance_ns);
+                    measured_ns = IOTracker::time(&tracker.pq_distance_ns);
                     assert!(measured_ns > 0);
                 })
                 .unwrap();
-            assert_eq!(
-                measured_ns,
-                IOTracker::time(&tracker.diagnostics.pq_distance_ns)
-            );
+            assert_eq!(measured_ns, IOTracker::time(&tracker.pq_distance_ns));
         });
+    }
+
+    #[test]
+    fn failed_search_does_not_publish_diagnostic_totals() {
+        let storage = Arc::new(VirtualStorageProvider::new_overlay(test_data_root()));
+        let searcher = create_disk_index_searcher::<GraphDataF32VectorUnitData>(
+            CreateDiskIndexSearcherParams {
+                pq_pivot_file_path: TEST_PQ_PIVOT_128DIM,
+                pq_compressed_file_path: TEST_PQ_COMPRESSED_128DIM,
+                index_path: TEST_INDEX_128DIM,
+                index_path_prefix: TEST_INDEX_PREFIX_128DIM,
+                ..Default::default()
+            },
+            &storage,
+        );
+        let queries = load_source_data(storage.as_ref(), TEST_QUERY_10PTS_128DIM);
+        let capture = CaptureSpans::default();
+        let subscriber = Registry::default().with(capture.clone());
+        tracing::subscriber::with_default(subscriber, || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .build()
+                .unwrap();
+            let result = runtime.block_on(searcher.search(
+                queries.row(0),
+                10,
+                20,
+                Some(0),
+                SearchMode::graph(),
+            ));
+            assert!(result.is_err());
+        });
+        let closed = capture.0.lock().unwrap();
+        assert_eq!(closed.len(), 1);
+        assert_eq!(closed[0].0.name, "diskann.disk.search.diagnostics");
+        assert!(closed[0].0.fields.is_empty());
     }
 
     const TEST_INDEX_PREFIX_100DIM: &str = "/disk_index_search/256pts_100dim_f32_truth_Index";
