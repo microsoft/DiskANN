@@ -12,6 +12,7 @@ use std::{
     },
 };
 
+use diskann_utils::future::SendFuture;
 use thiserror::Error;
 
 use crate::convert_error;
@@ -140,140 +141,216 @@ impl<'a, T> Iterator for Around<'a, T> {
 // Our implementation of `size_hint` is exact.
 impl<T> ExactSizeIterator for Around<'_, T> {}
 
-///////////////////////////
-// Dynamic Load Balancer //
-///////////////////////////
+///////////////
+// Broadcast //
+///////////////
 
-/// A utility for dynamically processing elements in a slice `T` across multiple threads.
-///
-/// This works by using a local `AtomicUsize` to track which indices inside the slice have
-/// been processed and is useful when the work to be performed on each `T` is not suitable
-/// for static partitioning.
-///
-/// This can occur when the work is highly variable.
-#[derive(Debug)]
-pub(crate) struct DynamicBalancer<T> {
-    items: Arc<[T]>,
-    current: AtomicUsize,
-}
+pub fn fork_and_join<F, Fut, M>(
+    runtime: &tokio::runtime::Handle,
+    mut spawn: F,
+    ntasks: NonZeroUsize,
+    mut merge: M,
+) -> impl SendFuture<Result<(), ForkAndJoinError>>
+where
+    F: FnMut(usize) -> Fut + Send,
+    Fut: std::future::Future<Output: Send> + Send + 'static,
+    M: FnMut(Fut::Output) -> crate::ANNResult<()> + Send,
+{
+    async move {
+        let mut join = tokio::task::JoinSet::new();
+        let mut failures = 0;
+        let mut errors = Vec::new();
 
-impl<T> DynamicBalancer<T> {
-    /// Construdct a new `DynamicBalancer` over `items`. The first invocation of `next` will
-    /// return index `0` (assuming `items` is non-empty).
-    pub(crate) fn new(items: Arc<[T]>) -> Self {
-        Self {
-            items,
-            current: AtomicUsize::new(0),
+        for i in 0..ntasks.get() {
+            join.spawn_on(spawn(i), runtime);
         }
-    }
 
-    /// Retrieve the next unclamied item and return a tuple `(item, index)` containing said
-    /// item and its position in the underlying slice.
-    ///
-    /// If all items have been claimed, return `None`.
-    ///
-    /// This function yields all items in the underlying slice exactly once.
-    pub(crate) fn next(&self) -> Option<(&T, usize)> {
-        let i = self.current.fetch_add(1, Ordering::Relaxed);
-
-        // There is technically a race here where enough concurrent calls to `next` in
-        // between the retrieval of `i` and "putting it back" that the counter wraps around.
-        //
-        // The odds of that happening, however, are exceedingly rare.
-        match self.items.get(i) {
-            Some(v) => Some((v, i)),
-            None => {
-                // This branch will never be hit in a realistic program.
-                if i == usize::MAX {
-                    std::process::abort();
-                }
-
-                self.current.fetch_sub(1, Ordering::Relaxed);
-                None
+        while let Some(result) = join.join_next().await {
+            match result {
+                Ok(output) => if let Err(err) = merge(output) {
+                    errors.push(err)
+                },
+                Err(_) => failures += 1,
             }
         }
-    }
 
-    /// Return all work items as a slice.
-    pub(crate) fn all(&self) -> &[T] {
-        &self.items
-    }
-
-    /// Return the number of work items.
-    pub(crate) fn len(&self) -> usize {
-        self.items.len()
-    }
-}
-
-////////////////
-// arc_chunks //
-////////////////
-
-/// Return an iterator over `chunk_size` elements of the slice at a time, starting at the
-/// beginning of the slice.
-///
-/// The chunks are `ArcChunk<T>` slices that do not overlap. If `chunk_size` does not divide
-/// the length of the slice, then the last chunk will not have length `chunk_size`.
-///
-/// Unlike `std::slice::chunks`, the items yielded by this iterator are `'static` and thus
-/// may be given to spawned tasks.
-pub(crate) fn arc_chunks<T>(
-    arc_slice: Arc<[T]>,
-    chunk_size: NonZeroUsize,
-) -> impl Iterator<Item = ArcChunk<T>> {
-    let slice_len = arc_slice.len();
-    let num_chunks = slice_len.div_ceil(chunk_size.into());
-    (0..num_chunks).map(move |chunk| {
-        let chunk_size: usize = chunk_size.into();
-        let start = chunk_size * chunk;
-        let stop = (start + chunk_size).min(slice_len);
-        ArcChunk::new(arc_slice.clone(), start..stop)
-    })
-}
-
-#[derive(Debug)]
-pub(crate) struct ArcChunk<T> {
-    /// The data we are iterating over.
-    data: Arc<[T]>,
-    /// The sub-chunk of `data` that this batch represents..
-    chunk: Range<usize>,
-}
-
-// Manually implement `Clone` so it works even if `T` is not constrained to be `Clone`.
-impl<T> Clone for ArcChunk<T> {
-    fn clone(&self) -> Self {
-        Self {
-            data: self.data.clone(),
-            chunk: self.chunk.clone(),
+        if failures == 0 && errors.is_empty() {
+            Ok(())
+        } else {
+            Err(ForkAndJoinError::new(failures, ntasks.get(), errors))
         }
     }
 }
 
-impl<T> ArcChunk<T> {
-    pub(crate) fn new(data: Arc<[T]>, chunk: Range<usize>) -> Self {
-        assert!(chunk.end <= data.len(), "range is invalid for data");
-        Self { data, chunk }
-    }
+#[derive(Debug)]
+pub struct ForkAndJoinError {
+    failures: usize,
+    total: usize,
+    errors: Vec<crate::ANNError>,
+}
 
-    /// Return the length of this slice chunk.
-    pub(crate) fn len(&self) -> usize {
-        self.chunk.len()
-    }
-
-    /// Gat the underlying slice chunk.
-    pub(crate) fn get_chunk(&self) -> &[T] {
-        &self.data[self.chunk.clone()]
-    }
-
-    /// Get the `i`th entry in the slice chunk.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `i >= self.len()`.
-    pub(crate) fn get(&self, i: usize) -> &T {
-        &self.get_chunk()[i]
+impl ForkAndJoinError {
+    fn new(failures: usize, total: usize, errors: Vec<crate::ANNError>) -> Self {
+        Self { failures, total, errors }
     }
 }
+
+impl std::fmt::Display for ForkAndJoinError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} of {} tasks failed and {} returned errors",
+            self.failures,
+            self.total,
+            self.errors.len()
+        )?;
+
+        for err in self.errors.iter() {
+            write!(f, "\n{}", err)?;
+        };
+
+        Ok(())
+    }
+}
+
+impl std::error::Error for ForkAndJoinError {}
+
+convert_error!(ForkAndJoinError);
+
+// ///////////////////////////
+// // Dynamic Load Balancer //
+// ///////////////////////////
+//
+// /// A utility for dynamically processing elements in a slice `T` across multiple threads.
+// ///
+// /// This works by using a local `AtomicUsize` to track which indices inside the slice have
+// /// been processed and is useful when the work to be performed on each `T` is not suitable
+// /// for static partitioning.
+// ///
+// /// This can occur when the work is highly variable.
+// #[derive(Debug)]
+// pub(crate) struct DynamicBalancer<T> {
+//     items: Arc<[T]>,
+//     current: AtomicUsize,
+// }
+//
+// impl<T> DynamicBalancer<T> {
+//     /// Construdct a new `DynamicBalancer` over `items`. The first invocation of `next` will
+//     /// return index `0` (assuming `items` is non-empty).
+//     pub(crate) fn new(items: Arc<[T]>) -> Self {
+//         Self {
+//             items,
+//             current: AtomicUsize::new(0),
+//         }
+//     }
+//
+//     /// Retrieve the next unclamied item and return a tuple `(item, index)` containing said
+//     /// item and its position in the underlying slice.
+//     ///
+//     /// If all items have been claimed, return `None`.
+//     ///
+//     /// This function yields all items in the underlying slice exactly once.
+//     pub(crate) fn next(&self) -> Option<(&T, usize)> {
+//         let i = self.current.fetch_add(1, Ordering::Relaxed);
+//
+//         // There is technically a race here where enough concurrent calls to `next` in
+//         // between the retrieval of `i` and "putting it back" that the counter wraps around.
+//         //
+//         // The odds of that happening, however, are exceedingly rare.
+//         match self.items.get(i) {
+//             Some(v) => Some((v, i)),
+//             None => {
+//                 // This branch will never be hit in a realistic program.
+//                 if i == usize::MAX {
+//                     std::process::abort();
+//                 }
+//
+//                 self.current.fetch_sub(1, Ordering::Relaxed);
+//                 None
+//             }
+//         }
+//     }
+//
+//     /// Return all work items as a slice.
+//     pub(crate) fn all(&self) -> &[T] {
+//         &self.items
+//     }
+//
+//     /// Return the number of work items.
+//     pub(crate) fn len(&self) -> usize {
+//         self.items.len()
+//     }
+// }
+
+// ////////////////
+// // arc_chunks //
+// ////////////////
+//
+// /// Return an iterator over `chunk_size` elements of the slice at a time, starting at the
+// /// beginning of the slice.
+// ///
+// /// The chunks are `ArcChunk<T>` slices that do not overlap. If `chunk_size` does not divide
+// /// the length of the slice, then the last chunk will not have length `chunk_size`.
+// ///
+// /// Unlike `std::slice::chunks`, the items yielded by this iterator are `'static` and thus
+// /// may be given to spawned tasks.
+// pub(crate) fn arc_chunks<T>(
+//     arc_slice: Arc<[T]>,
+//     chunk_size: NonZeroUsize,
+// ) -> impl Iterator<Item = ArcChunk<T>> {
+//     let slice_len = arc_slice.len();
+//     let num_chunks = slice_len.div_ceil(chunk_size.into());
+//     (0..num_chunks).map(move |chunk| {
+//         let chunk_size: usize = chunk_size.into();
+//         let start = chunk_size * chunk;
+//         let stop = (start + chunk_size).min(slice_len);
+//         ArcChunk::new(arc_slice.clone(), start..stop)
+//     })
+// }
+//
+// #[derive(Debug)]
+// pub(crate) struct ArcChunk<T> {
+//     /// The data we are iterating over.
+//     data: Arc<[T]>,
+//     /// The sub-chunk of `data` that this batch represents..
+//     chunk: Range<usize>,
+// }
+//
+// // Manually implement `Clone` so it works even if `T` is not constrained to be `Clone`.
+// impl<T> Clone for ArcChunk<T> {
+//     fn clone(&self) -> Self {
+//         Self {
+//             data: self.data.clone(),
+//             chunk: self.chunk.clone(),
+//         }
+//     }
+// }
+//
+// impl<T> ArcChunk<T> {
+//     pub(crate) fn new(data: Arc<[T]>, chunk: Range<usize>) -> Self {
+//         assert!(chunk.end <= data.len(), "range is invalid for data");
+//         Self { data, chunk }
+//     }
+//
+//     /// Return the length of this slice chunk.
+//     pub(crate) fn len(&self) -> usize {
+//         self.chunk.len()
+//     }
+//
+//     /// Gat the underlying slice chunk.
+//     pub(crate) fn get_chunk(&self) -> &[T] {
+//         &self.data[self.chunk.clone()]
+//     }
+//
+//     /// Get the `i`th entry in the slice chunk.
+//     ///
+//     /// # Panics
+//     ///
+//     /// Panics if `i >= self.len()`.
+//     pub(crate) fn get(&self, i: usize) -> &T {
+//         &self.get_chunk()[i]
+//     }
+// }
 
 //////////////
 // Parition //
@@ -378,85 +455,85 @@ mod tests {
 
     use super::*;
 
-    // Test when the chunk-size evenly divides the range.
-    #[test]
-    fn test_chunks_even() {
-        let x: Arc<[usize]> = (0..12).collect();
-        let ptr = x.as_ptr();
+    // // Test when the chunk-size evenly divides the range.
+    // #[test]
+    // fn test_chunks_even() {
+    //     let x: Arc<[usize]> = (0..12).collect();
+    //     let ptr = x.as_ptr();
 
-        let mut chunks = arc_chunks(x.clone(), NonZeroUsize::new(4).unwrap());
-        let c = chunks.next().unwrap();
-        assert_eq!(c.data.as_ptr(), ptr, "expected the pointer to be preserved");
-        assert_eq!(c.len(), 4);
-        assert_eq!(c.get_chunk(), &[0, 1, 2, 3]);
-        for i in 0..4 {
-            assert_eq!(c.get(i), &i)
-        }
+    //     let mut chunks = arc_chunks(x.clone(), NonZeroUsize::new(4).unwrap());
+    //     let c = chunks.next().unwrap();
+    //     assert_eq!(c.data.as_ptr(), ptr, "expected the pointer to be preserved");
+    //     assert_eq!(c.len(), 4);
+    //     assert_eq!(c.get_chunk(), &[0, 1, 2, 3]);
+    //     for i in 0..4 {
+    //         assert_eq!(c.get(i), &i)
+    //     }
 
-        let c = chunks.next().unwrap();
-        assert_eq!(c.data.as_ptr(), ptr, "expected the pointer to be preserved");
-        assert_eq!(c.len(), 4);
-        assert_eq!(c.get_chunk(), &[4, 5, 6, 7]);
-        for i in 0..4 {
-            assert_eq!(c.get(i), &(i + 4))
-        }
+    //     let c = chunks.next().unwrap();
+    //     assert_eq!(c.data.as_ptr(), ptr, "expected the pointer to be preserved");
+    //     assert_eq!(c.len(), 4);
+    //     assert_eq!(c.get_chunk(), &[4, 5, 6, 7]);
+    //     for i in 0..4 {
+    //         assert_eq!(c.get(i), &(i + 4))
+    //     }
 
-        let c = chunks.next().unwrap();
-        assert_eq!(c.data.as_ptr(), ptr, "expected the pointer to be preserved");
-        assert_eq!(c.len(), 4);
-        assert_eq!(c.get_chunk(), &[8, 9, 10, 11]);
-        for i in 0..4 {
-            assert_eq!(c.get(i), &(i + 8))
-        }
+    //     let c = chunks.next().unwrap();
+    //     assert_eq!(c.data.as_ptr(), ptr, "expected the pointer to be preserved");
+    //     assert_eq!(c.len(), 4);
+    //     assert_eq!(c.get_chunk(), &[8, 9, 10, 11]);
+    //     for i in 0..4 {
+    //         assert_eq!(c.get(i), &(i + 8))
+    //     }
 
-        let c = chunks.next();
-        assert!(c.is_none());
-    }
+    //     let c = chunks.next();
+    //     assert!(c.is_none());
+    // }
 
-    // Test when the chunk-size does not evenly divide the range.
-    #[test]
-    fn test_chunks_odd() {
-        let x: Arc<[usize]> = (0..11).collect();
-        let ptr = x.as_ptr();
+    // // Test when the chunk-size does not evenly divide the range.
+    // #[test]
+    // fn test_chunks_odd() {
+    //     let x: Arc<[usize]> = (0..11).collect();
+    //     let ptr = x.as_ptr();
 
-        let mut chunks = arc_chunks(x.clone(), NonZeroUsize::new(4).unwrap());
-        let c = chunks.next().unwrap();
-        assert_eq!(c.data.as_ptr(), ptr, "expected the pointer to be preserved");
-        assert_eq!(c.len(), 4);
-        assert_eq!(c.get_chunk(), &[0, 1, 2, 3]);
-        for i in 0..4 {
-            assert_eq!(c.get(i), &i)
-        }
+    //     let mut chunks = arc_chunks(x.clone(), NonZeroUsize::new(4).unwrap());
+    //     let c = chunks.next().unwrap();
+    //     assert_eq!(c.data.as_ptr(), ptr, "expected the pointer to be preserved");
+    //     assert_eq!(c.len(), 4);
+    //     assert_eq!(c.get_chunk(), &[0, 1, 2, 3]);
+    //     for i in 0..4 {
+    //         assert_eq!(c.get(i), &i)
+    //     }
 
-        let c = chunks.next().unwrap();
-        assert_eq!(c.data.as_ptr(), ptr, "expected the pointer to be preserved");
-        assert_eq!(c.len(), 4);
-        assert_eq!(c.get_chunk(), &[4, 5, 6, 7]);
-        for i in 0..4 {
-            assert_eq!(c.get(i), &(i + 4))
-        }
+    //     let c = chunks.next().unwrap();
+    //     assert_eq!(c.data.as_ptr(), ptr, "expected the pointer to be preserved");
+    //     assert_eq!(c.len(), 4);
+    //     assert_eq!(c.get_chunk(), &[4, 5, 6, 7]);
+    //     for i in 0..4 {
+    //         assert_eq!(c.get(i), &(i + 4))
+    //     }
 
-        let c = chunks.next().unwrap();
-        assert_eq!(c.data.as_ptr(), ptr, "expected the pointer to be preserved");
-        assert_eq!(c.len(), 3);
-        assert_eq!(c.get_chunk(), &[8, 9, 10]);
-        for i in 0..3 {
-            assert_eq!(c.get(i), &(i + 8))
-        }
+    //     let c = chunks.next().unwrap();
+    //     assert_eq!(c.data.as_ptr(), ptr, "expected the pointer to be preserved");
+    //     assert_eq!(c.len(), 3);
+    //     assert_eq!(c.get_chunk(), &[8, 9, 10]);
+    //     for i in 0..3 {
+    //         assert_eq!(c.get(i), &(i + 8))
+    //     }
 
-        let c = chunks.next();
-        assert!(c.is_none());
-    }
+    //     let c = chunks.next();
+    //     assert!(c.is_none());
+    // }
 
-    #[test]
-    #[should_panic]
-    fn test_chunks_panics() {
-        let x: Arc<[usize]> = (0..11).collect();
-        let mut chunks = arc_chunks(x.clone(), NonZeroUsize::new(4).unwrap());
-        let c = chunks.next().unwrap();
-        assert_eq!(c.len(), 4);
-        let _: &usize = c.get(4);
-    }
+    // #[test]
+    // #[should_panic]
+    // fn test_chunks_panics() {
+    //     let x: Arc<[usize]> = (0..11).collect();
+    //     let mut chunks = arc_chunks(x.clone(), NonZeroUsize::new(4).unwrap());
+    //     let c = chunks.next().unwrap();
+    //     assert_eq!(c.len(), 4);
+    //     let _: &usize = c.get(4);
+    // }
 
     #[test]
     fn test_around_empty() {
@@ -613,12 +690,12 @@ mod tests {
         }
     }
 
-    #[test]
-    #[should_panic(expected = "range is invalid for data")]
-    fn test_arc_chunk_new_panics() {
-        let x: Arc<[usize]> = Arc::new([]);
-        let _: ArcChunk<usize> = ArcChunk::new(x, 0..1);
-    }
+    // #[test]
+    // #[should_panic(expected = "range is invalid for data")]
+    // fn test_arc_chunk_new_panics() {
+    //     let x: Arc<[usize]> = Arc::new([]);
+    //     let _: ArcChunk<usize> = ArcChunk::new(x, 0..1);
+    // }
 
     fn test_partitioning<F>(get_ranges: F)
     where

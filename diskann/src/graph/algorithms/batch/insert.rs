@@ -9,6 +9,7 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
+use diskann_utils::future::SendFuture;
 use hashbrown::HashMap;
 
 use crate::{
@@ -19,7 +20,7 @@ use crate::{
         glue::PruneAccessor,
         internal::{BackedgeBuffer, prune},
     },
-    utils::{VectorId, async_tools},
+    utils::{VectorId, async_tools, balancer::{Balancer, BatchPosition}},
 };
 
 //--------------//
@@ -32,6 +33,16 @@ pub struct ForwardEdges<I> {
 }
 
 impl<I> ForwardEdges<I> {
+    pub fn new() -> Self {
+        Self {
+            edges: Vec::new()
+        }
+    }
+
+    pub fn merge(&mut self, other: ForwardEdges<I>) {
+        self.edges.extend(other.edges.into_iter());
+    }
+
     fn push(&mut self, edge: ForwardEdge<I>) {
         self.edges.push(edge)
     }
@@ -97,6 +108,10 @@ pub struct BackEdges<I> {
 }
 
 impl<I> BackEdges<I> {
+    pub fn new() -> Self {
+        Self { edges: HashMap::new() }
+    }
+
     pub fn len(&self) -> usize {
         self.edges.len()
     }
@@ -114,13 +129,7 @@ impl<I> BackEdges<I>
 where
     I: VectorId,
 {
-    fn new(forward: &ForwardEdges<I>) -> Self {
-        let mut me = Self::default();
-        me.accumulate(forward);
-        me
-    }
-
-    fn accumulate(&mut self, forward: &ForwardEdges<I>) {
+    pub fn accumulate(&mut self, forward: &ForwardEdges<I>) {
         for ForwardEdge {
             source,
             destinations,
@@ -137,7 +146,7 @@ where
         }
     }
 
-    fn merge(&mut self, other: Self) {
+    pub fn merge(&mut self, other: Self) {
         for (src, dst) in other.edges.into_iter() {
             self.edges
                 .entry(src)
@@ -203,43 +212,6 @@ impl<I> BackEdge<I> {
     }
 }
 
-//----------------//
-// Batch Position //
-//----------------//
-
-#[derive(Debug)]
-pub struct BatchPosition<'a, T> {
-    batch: &'a [T],
-    // Must be less than `batch.len()`.
-    position: usize,
-}
-
-impl<'a, T> BatchPosition<'a, T> {
-    fn current(&self) -> &T {
-        &self.batch[self.position]
-    }
-
-    fn around(&self, count: usize) -> async_tools::Around<'_, T> {
-        async_tools::around(self.batch, self.position, count)
-    }
-
-    fn all(&self) -> &[T] {
-        self.batch
-    }
-
-    fn len(&self) -> usize {
-        self.batch.len()
-    }
-}
-
-impl<T> Clone for BatchPosition<'_, T> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl<T> Copy for BatchPosition<'_, T> {}
-
 //-------------//
 // BatchInsert //
 //-------------//
@@ -257,31 +229,40 @@ impl<I> BatchInsert<I>
 where
     I: VectorId,
 {
-    async fn find_forward_edges<A>(
+    pub fn new() -> Self {
+        Self {
+            find: algorithms::FindInsertCandidates::new(),
+            buf: AdjacencyList::new()
+        }
+    }
+
+    pub fn find_forward_edges<A>(
         &mut self,
         forward_edges: &mut ForwardEdges<I>,
         accessor: &mut A,
         batch: BatchPosition<'_, I>,
         config: &Config,
-    ) -> ANNResult<()>
+    ) -> impl SendFuture<ANNResult<()>>
     where
         A: algorithms::Insert<Id = I>,
     {
-        // Add other vector id pairs in the mini batch to the candidate pool.
-        let intra_batch_candidates = config.intra_batch_candidates().get(batch.len());
-        let id = *batch.current();
+        async move {
+            // Add other vector id pairs in the mini batch to the candidate pool.
+            let intra_batch_candidates = config.intra_batch_candidates().get(batch.len());
+            let id = *batch.current();
 
-        self.find
-            .find_insert_candidates(
-                accessor,
-                id,
-                config,
-                batch.around(intra_batch_candidates).copied(),
-            )
-            .await?;
+            self.find
+                .find_insert_candidates(
+                    accessor,
+                    id,
+                    config,
+                    batch.around(intra_batch_candidates).copied(),
+                )
+                .await?;
 
-        forward_edges.push(ForwardEdge::new(id, self.find.candidates().clone()));
-        Ok(())
+            forward_edges.push(ForwardEdge::new(id, self.find.candidates().clone()));
+            Ok(())
+        }
     }
 
     async fn bootstrap<A>(
@@ -400,65 +381,3 @@ impl<I> Candidates<I> {
     }
 }
 
-/// A utility for dynamically processing elements in a slice `T` across multiple threads.
-///
-/// This works by using a local `AtomicUsize` to track which indices inside the slice have
-/// been processed and is useful when the work to be performed on each `T` is not suitable
-/// for static partitioning.
-///
-/// This can occur when the work is highly variable.
-#[derive(Debug)]
-pub struct Balancer<T, C> {
-    items: C,
-    current: AtomicUsize,
-    _type: PhantomData<T>,
-}
-
-impl<T, C> Balancer<T, C>
-where
-    C: AsRef<[T]>,
-{
-    pub fn new(items: C) -> Self {
-        Self {
-            items,
-            current: AtomicUsize::new(0),
-            _type: PhantomData,
-        }
-    }
-
-    /// Retrieve the next unclamied item and return a tuple `(item, index)` containing said
-    /// item and its position in the underlying slice.
-    ///
-    /// If all items have been claimed, return `None`.
-    ///
-    /// This function yields all items in the underlying slice exactly once.
-    pub fn next(&self) -> Option<BatchPosition<'_, T>> {
-        let i = self.current.fetch_add(1, Ordering::Relaxed);
-        let items = self.items.as_ref();
-
-        // There is technically a race here where enough concurrent calls to `next` in
-        // between the retrieval of `i` and "putting it back" that the counter wraps around.
-        //
-        // The odds of that happening, however, are exceedingly rare.
-        match items.get(i) {
-            Some(v) => Some(BatchPosition {
-                batch: items,
-                position: i,
-            }),
-            None => {
-                // This branch will never be hit in a realistic program.
-                if i == usize::MAX {
-                    std::process::abort();
-                }
-
-                self.current.fetch_sub(1, Ordering::Relaxed);
-                None
-            }
-        }
-    }
-
-    /// Return the number of work items.
-    pub(crate) fn len(&self) -> usize {
-        self.items.as_ref().len()
-    }
-}
