@@ -13,6 +13,22 @@ use diskann_wide::{SIMDMask, SIMDPartialOrd, SIMDVector};
 
 use super::Neighbor;
 
+/// Strategy for finding the first queue entry at or above a candidate's distance.
+#[derive(Debug, Clone, Copy, Default)]
+pub enum LowerBoundMethod {
+    /// SIMD scan on x86-64, scalar scan on other architectures.
+    #[default]
+    Linear,
+    /// Binary search over the current queue contents.
+    Binary,
+    /// Scan below the configured queue size; use binary search at or above it.
+    Hybrid {
+        /// Compare against the current size, not capacity or search L.
+        /// Zero selects binary search for every lookup.
+        binary_search_threshold: usize,
+    },
+}
+
 /// Shared trait for the generic `I` parameter used by `NeighborQueue`.
 pub trait NeighborPriorityQueueIdType: Eq + Clone + Copy + Debug + Display + Send + Sync {}
 
@@ -99,6 +115,8 @@ pub struct NeighborPriorityQueue<I: NeighborPriorityQueueIdType> {
 
     // Search parameter L: search stops once we have explored the L best candidates.
     search_param_l: usize,
+
+    lower_bound_method: LowerBoundMethod,
 }
 
 impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
@@ -114,6 +132,7 @@ impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
             distances: Vec::with_capacity(search_param_l),
             auto_resizable: false,
             search_param_l,
+            lower_bound_method: LowerBoundMethod::Linear,
         }
     }
 
@@ -127,7 +146,17 @@ impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
             distances: Vec::with_capacity(search_param_l),
             auto_resizable: true,
             search_param_l,
+            lower_bound_method: LowerBoundMethod::Linear,
         }
+    }
+
+    /// Select insertion-point lookup for individual inserts and batch prefix lookup.
+    ///
+    /// Both constructors default to [`LowerBoundMethod::Linear`]. This does not change
+    /// tie ordering or the batch top-L partition.
+    pub fn with_lower_bound_method(mut self, lower_bound_method: LowerBoundMethod) -> Self {
+        self.lower_bound_method = lower_bound_method;
+        self
     }
 
     /// Inserts item with order.
@@ -348,8 +377,32 @@ impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
     /// Get the lower bound of the neighbor - the index of the first neighbor
     /// that has a distance greater than or equal to the target neighbor
     /// PERFORMANCE: This function is performance critical - please benchmark any changes
-    #[cfg(target_arch = "x86_64")]
     fn get_lower_bound(&mut self, nbr: &Neighbor<I>) -> usize {
+        match self.lower_bound_method {
+            LowerBoundMethod::Linear => self.get_lower_bound_linear(nbr),
+            LowerBoundMethod::Binary => self.get_lower_bound_binary(nbr),
+            LowerBoundMethod::Hybrid {
+                binary_search_threshold,
+            } => {
+                if self.size < binary_search_threshold {
+                    self.get_lower_bound_linear(nbr)
+                } else {
+                    self.get_lower_bound_binary(nbr)
+                }
+            }
+        }
+    }
+
+    fn get_lower_bound_binary(&self, nbr: &Neighbor<I>) -> usize {
+        if nbr.distance.is_nan() {
+            return self.size;
+        }
+        self.distances
+            .partition_point(|distance| *distance < nbr.distance)
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    fn get_lower_bound_linear(&mut self, nbr: &Neighbor<I>) -> usize {
         diskann_wide::alias!(f32s = f32x8);
         let target = f32s::splat(diskann_wide::ARCH, nbr.distance);
 
@@ -402,11 +455,8 @@ impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
         self.size
     }
 
-    /// Get the lower bound of the neighbor - the index of the first neighbor
-    /// that has a distance greater than or equal to the target neighbor
-    /// PERFORMANCE: This function is performance critical - please benchmark any changes
     #[cfg(not(target_arch = "x86_64"))]
-    fn get_lower_bound(&mut self, nbr: &Neighbor<I>) -> usize {
+    fn get_lower_bound_linear(&mut self, nbr: &Neighbor<I>) -> usize {
         let target = nbr.distance;
 
         for (i, d) in self.distances.iter().take(self.size).enumerate() {
@@ -762,6 +812,42 @@ mod neighbor_priority_queue_test {
                 .eq(expected.distances.iter().map(|d| d.to_bits())),
             "distance bit patterns differ"
         );
+    }
+
+    #[test]
+    fn lower_bound_methods_match_linear() {
+        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+        for size in [0, 1, 7, 8, 15, 16, 17, 65] {
+            let mut queue = NeighborPriorityQueue::new(128);
+            for id in 0..size {
+                queue.insert(Neighbor::new(id, rng.random_range(-8..=8) as f32));
+            }
+            let targets: Vec<_> = (0..32)
+                .map(|_| rng.random_range(-20..=20) as f32 / 2.0)
+                .chain(queue.distances.iter().copied())
+                .chain([f32::NEG_INFINITY, -0.0, 0.0, f32::INFINITY, f32::NAN])
+                .collect();
+            for method in [
+                LowerBoundMethod::Binary,
+                LowerBoundMethod::Hybrid {
+                    binary_search_threshold: 16,
+                },
+                LowerBoundMethod::Hybrid {
+                    binary_search_threshold: 0,
+                },
+            ] {
+                queue = queue.with_lower_bound_method(method);
+                for &target in &targets {
+                    let neighbor = Neighbor::new(0, target);
+                    let expected = queue.get_lower_bound_linear(&neighbor);
+                    assert_eq!(
+                        queue.get_lower_bound(&neighbor),
+                        expected,
+                        "{method:?}, size={size}, target={target}",
+                    );
+                }
+            }
+        }
     }
 
     #[test]
