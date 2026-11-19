@@ -22,8 +22,9 @@
 //!
 pub mod index;
 pub mod strategy;
+mod topk;
 
-pub use index::{SearchStats, knn_search};
+pub use index::{SearchOptions, SearchStats, knn_search, knn_search_with_options};
 pub use strategy::DistancesUnordered;
 
 #[cfg(test)]
