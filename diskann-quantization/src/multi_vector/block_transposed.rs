@@ -1145,10 +1145,24 @@ impl<T: Copy + Default, const GROUP: usize, const PACK: usize> BlockTransposed<T
     /// row-within-block, pack-lane — so that writes to the backing allocation are
     /// sequential. Source reads stride across rows of the [`Strided`], which is
     /// acceptable because read-side prefetch is more effective than write-side.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the padded dimensions overflow the allocation budget.
+    #[expect(clippy::expect_used)]
     pub fn from_strided(v: Strided<'_, T>) -> Self {
+        Self::try_from_strided(v).expect("dimensions should not overflow")
+    }
+
+    /// Fallible variant of [`from_strided`](Self::from_strided).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Overflow`] if the padded dimensions exceed the allocation budget.
+    pub fn try_from_strided(v: Strided<'_, T>) -> Result<Self, Overflow> {
         let nrows = v.nrows();
         let ncols = v.ncols();
-        let mut mat = Self::new(nrows, ncols);
+        let mut mat = Self::try_new(nrows, ncols)?;
 
         let repr = *mat.data.repr();
         let num_blocks = repr.num_blocks();
@@ -1192,12 +1206,21 @@ impl<T: Copy + Default, const GROUP: usize, const PACK: usize> BlockTransposed<T
             }
         }
 
-        mat
+        Ok(mat)
     }
 
     /// Construct a block-transposed matrix by copying data from a [`rowmajor::Ref`].
     pub fn from_matrix_view(v: rowmajor::Ref<'_, T>) -> Self {
         Self::from_strided(v.into())
+    }
+
+    /// Fallible variant of [`from_matrix_view`](Self::from_matrix_view).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Overflow`] if the padded dimensions exceed the allocation budget.
+    pub fn try_from_matrix_view(v: rowmajor::Ref<'_, T>) -> Result<Self, Overflow> {
+        Self::try_from_strided(v.into())
     }
 }
 
@@ -1757,6 +1780,9 @@ mod tests {
             let via_matrix = BlockTransposed::<T, GROUP, PACK>::from_matrix_view(data.as_view());
             assert_eq!(via_matrix.as_slice(), transpose.as_slice(), "{}", context);
         }
+        let via_matrix =
+            BlockTransposed::<T, GROUP, PACK>::try_from_matrix_view(data.as_view()).unwrap();
+        assert_eq!(via_matrix.as_slice(), transpose.as_slice(), "{}", context);
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -2145,7 +2171,7 @@ mod tests {
 
         let strided = Strided::try_from_data(&flat, nrows, ncols, cstride)
             .expect("should construct strided view");
-        let transpose = BlockTransposed::<f32, GROUP, PACK>::from_strided(strided);
+        let transpose = BlockTransposed::<f32, GROUP, PACK>::try_from_strided(strided).unwrap();
 
         assert_eq!(transpose.nrows(), nrows);
         assert_eq!(transpose.ncols(), ncols);
@@ -2175,6 +2201,13 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn fallible_packing_rejects_padded_extent_overflow() {
+        let view = rowmajor::Ref::try_from_data(&[] as &[f32], usize::MAX, 0).unwrap();
+        assert!(BlockTransposed::<f32, 8>::try_from_matrix_view(view).is_err());
+        assert!(BlockTransposed::<f32, 8>::try_from_strided(view.into()).is_err());
     }
 
     // ── Concurrent multi-row mutation ───────────────────────────────

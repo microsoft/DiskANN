@@ -16,7 +16,10 @@ use std::marker::PhantomData;
 use crate::ANNResult;
 use diskann_utils::views::rowmajor;
 use diskann_vector::distance::Metric;
-use diskann_wide::arch::{self, Target};
+use diskann_wide::{
+    Architecture,
+    arch::{self, Target},
+};
 
 use super::{
     Cosine, CosineNormalized, InnerProduct, L2,
@@ -24,7 +27,6 @@ use super::{
     leaf_metric::LeafMetric,
     partition_kernel::{PartitionKernelWorkspace, assign_leaders},
     partition_metric::{PartitionLeaders, PartitionMetric},
-    simd::Simd,
     topk::Candidate,
 };
 
@@ -71,12 +73,12 @@ struct Select {
 
 impl<A> Target<A, Box<dyn Kernels>> for Select
 where
-    A: Simd,
+    A: Architecture,
 {
     fn run(self, arch: A) -> Box<dyn Kernels> {
         fn boxed<A, M>(arch: A) -> Box<dyn Kernels>
         where
-            A: Simd,
+            A: Architecture,
             M: LeafMetric + PartitionMetric,
         {
             Box::new(Kernel::<A, M> {
@@ -101,7 +103,7 @@ struct Kernel<A, M> {
 
 impl<A, M> Kernels for Kernel<A, M>
 where
-    A: Simd,
+    A: Architecture,
     M: LeafMetric + PartitionMetric,
 {
     fn create_leaders<'a>(&self, values: rowmajor::Ref<'a, f32>) -> PartitionLeaders<'a> {
