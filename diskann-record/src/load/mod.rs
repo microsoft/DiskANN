@@ -62,6 +62,7 @@ use crate::{Version, save};
 /// # Errors
 ///
 /// Returns [`Error`] if the context cannot produce a root value or if `T`'s loader fails.
+#[cfg_attr(not(any(feature = "disk", test)), expect(dead_code))]
 pub(crate) fn load<'a, T>(context: &'a dyn LoadContext) -> Result<T>
 where
     T: Loadable<'a>,
@@ -70,6 +71,7 @@ where
 }
 
 /// Load the root value using caller-supplied settings or resources.
+#[cfg_attr(not(any(feature = "disk", test)), expect(dead_code))]
 pub(crate) fn load_with<'a, L>(context: &'a dyn LoadContext, loader: L) -> Result<L::Value>
 where
     L: Loader<'a>,
