@@ -3,11 +3,6 @@
  * Licensed under the MIT license.
  */
 
-//! Version 1 stores counts, dimension, maximum degree, and metric in the record.
-//! Artifact scalars are little-endian: external IDs are `u32`, vectors are row-major
-//! `f32`, and each graph row contains a `u32` degree followed by that many `u32` targets.
-//! Vector and graph rows include frozen points first; external IDs include only live nodes.
-
 use diskann_record::{Version, load, save};
 
 use super::{super::Provider, common};
@@ -20,12 +15,10 @@ use crate::{
 
 pub(super) const VERSION: Version = Version::new(1, 0);
 
-/// Runtime settings for loading a [`crate::Provider`] with `f32` full-precision vectors
-/// and `u32` external IDs.
+/// Runtime settings for loading a [`crate::Provider`] with `f32` vecs and
+/// `u32` external IDs.
 ///
-/// Frozen points precede live nodes in saved artifacts. Increasing capacity only adds
-/// empty writable slots and does not change saved graph IDs. Prefetch settings use
-/// [`Full`]'s defaults.
+/// **NOTE**: Capacity must be at least as large as the number of live nodes
 #[derive(Debug, Default)]
 pub struct FullProviderLoader {
     capacity: Option<Capacity>,
@@ -33,18 +26,18 @@ pub struct FullProviderLoader {
 }
 
 impl FullProviderLoader {
-    /// Create a loader whose writable capacity matches the saved live-node count.
+    /// Default capacity = live-node count
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Override writable capacity, which must be at least the saved live-node count.
+    /// Override writable capacity: MUST be >= saved live-node count
     pub fn capacity(mut self, capacity: Capacity) -> Self {
         self.capacity = Some(capacity);
         self
     }
 
-    /// Override the store's concurrency settings.
+    /// Override the store's concurrency settings
     pub fn store(mut self, config: store::Config) -> Self {
         self.store = config;
         self
@@ -307,7 +300,7 @@ mod tests {
         std::thread::scope(|scope| {
             let reader = provider
                 .representation
-                .search_accessor(&[0.0, 0.0], &provider, provider.local_counters())
+                .search_accessor(&[0.0, 0.0], &provider, None, provider.local_counters())
                 .unwrap();
             let writer = provider
                 .representation
@@ -528,8 +521,20 @@ mod tests {
     }
 
     #[test]
-    fn rejects_invalid_runtime_capacity() {
-        for capacity in [1, usize::MAX, u32::MAX as usize] {
+    fn rejects_runtime_capacity_below_live_count() {
+        let err = Fixture::default()
+            .load(FullProviderLoader::new().capacity(Capacity::new(1)))
+            .unwrap_err();
+        assert!(!err.is_recoverable());
+        assert!(
+            err.to_string()
+                .contains("capacity is smaller than the saved live-node count")
+        );
+    }
+
+    #[test]
+    fn rejects_runtime_capacity_overflow() {
+        for capacity in [usize::MAX, u32::MAX as usize] {
             let err = Fixture::default()
                 .load(FullProviderLoader::new().capacity(Capacity::new(capacity)))
                 .unwrap_err();
@@ -604,7 +609,7 @@ mod tests {
             let provider = round_trip(&fixture.load(FullProviderLoader::default()).unwrap());
             let representation = &provider.representation;
             let accessor = representation
-                .search_accessor(&[0.0, 0.0], &provider, provider.local_counters())
+                .search_accessor(&[0.0, 0.0], &provider, None, provider.local_counters())
                 .unwrap();
             assert_eq!(accessor.start_points.start(), 0);
             assert_eq!(accessor.start_points.end(), frozen_count);

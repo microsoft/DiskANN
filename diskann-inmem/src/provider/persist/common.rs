@@ -10,9 +10,11 @@ use diskann_record::{load, save};
 use super::super::{Id, Provider};
 use crate::{ids::IdMap, num::IdLimit, repr::Representation};
 
+// Compacted representation: no 'holes' from deleted nodes, only contains live nodes
 pub(super) struct Compact {
     frozen_count: u32,
     id_limit: u32,
+    // Map from old ID -> new ID for live nodes
     renaming: Vec<u32>,
     live_count: u32,
 }

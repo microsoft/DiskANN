@@ -21,7 +21,7 @@ impl Full<f32> {
         renaming: &[u32],
         live_count: u32,
     ) -> save::Result<save::Record<'_>> {
-        let reader = self.reader().map_err(save::Error::new)?;
+        let reader = self.reader(None).map_err(save::Error::new)?;
         let mut vectors = context.write(Some("vectors"))?;
         let mut graph = context.write(Some("graph"))?;
         let mut neighbors = AdjacencyList::new();
