@@ -9,7 +9,7 @@ use std::{
     borrow::{BorrowMut, Cow},
     collections::{HashMap, HashSet},
     num::NonZeroUsize,
-    sync::{Arc},
+    sync::Arc,
 };
 
 use dashmap::{DashMap, mapref::entry::Entry};
@@ -719,7 +719,6 @@ impl Provider {
             self.set(vector, *id)?;
         }
 
-
         struct CountSpawns<'a> {
             counter: &'a Counter,
             handle: &'a tokio::runtime::Handle,
@@ -728,7 +727,8 @@ impl Provider {
         impl crate::tokio::Spawn for CountSpawns<'_> {
             fn spawn<F>(&self, future: F) -> tokio::task::JoinHandle<F::Output>
             where
-                F: std::future::Future<Output: Send + 'static> + Send + 'static {
+                F: std::future::Future<Output: Send + 'static> + Send + 'static,
+            {
                 self.counter.increment();
                 self.handle.spawn(future)
             }

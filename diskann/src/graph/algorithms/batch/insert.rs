@@ -645,8 +645,7 @@ async fn worker<S>(
                 }
             }
             Command::ApplyBackward { balancer, response } => {
-                let result =
-                    apply_backward(&mut worker, &mut workspace, &balancer, &config).await;
+                let result = apply_backward(&mut worker, &mut workspace, &balancer, &config).await;
 
                 if response.send(result).is_err() {
                     // Gracefully exit.

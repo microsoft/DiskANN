@@ -571,8 +571,15 @@ where
 {
     let delete_set = HashSet::from_iter(std::iter::once(id));
     for (src, dsts) in edges {
-        algorithms::insert::add_edge_and_prune(prune, dsts, *src, scratch, Some(&delete_set), config)
-            .await?;
+        algorithms::insert::add_edge_and_prune(
+            prune,
+            dsts,
+            *src,
+            scratch,
+            Some(&delete_set),
+            config,
+        )
+        .await?;
     }
 
     prune.neighbors().clear(id).await?;

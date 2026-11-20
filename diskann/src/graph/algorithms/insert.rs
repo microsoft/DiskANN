@@ -12,18 +12,11 @@ use diskann_utils::{
 use diskann_vector::DistanceFunction;
 use hashbrown::HashSet;
 
-
 use crate::{
     ANNResult,
     error::ErrorExt,
-    internal,
-    neighbor::{Neighbor},
-    provider::{HasId, NeighborAccessor, NeighborAccessorMut},
-    tracked_trace,
-    utils::{IntoUsize, VectorId},
     graph::{
-        algorithms,
-        AdjacencyList, Config,
+        AdjacencyList, Config, algorithms,
         glue::{PruneAccessor, SearchAccessor},
         internal::prune,
         search::{
@@ -31,7 +24,12 @@ use crate::{
             scratch::{PriorityQueueConfiguration, SearchScratch},
         },
         workingset::View,
-    }
+    },
+    internal,
+    neighbor::Neighbor,
+    provider::{HasId, NeighborAccessor, NeighborAccessorMut},
+    tracked_trace,
+    utils::{IntoUsize, VectorId},
 };
 
 pub trait Access: HasId + Send {
@@ -81,7 +79,8 @@ where
     where
         A: Access<Id = I>,
     {
-        self.find_insert_candidates(accessor, id, config, std::iter::empty()).await?;
+        self.find_insert_candidates(accessor, id, config, std::iter::empty())
+            .await?;
 
         let new_neighbors = std::mem::take(self.candidates());
 
@@ -192,7 +191,10 @@ where
 
                     self.prune
                         .pool
-                        .reserve(algorithms::estimate_visited_set_capacity(config, Some(l_build)));
+                        .reserve(algorithms::estimate_visited_set_capacity(
+                            config,
+                            Some(l_build),
+                        ));
                 }
 
                 algorithms::search(
