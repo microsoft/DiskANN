@@ -117,10 +117,10 @@ fn run_build(
     batchsize: Option<NonZeroUsize>,
     working_set_reuse: bool,
     runtime: &tokio::runtime::Runtime,
-) -> test_provider::Context {
+) -> test_provider::SpawnCount {
     let strategy = test_provider::Strategy::with_options(working_set_reuse);
-    let context = test_provider::Context::new();
 
+    let mut spawn_count = test_provider::SpawnCount::default();
     match batchsize {
         None => {
             for (id, vector) in data.rows().enumerate() {
@@ -134,7 +134,7 @@ fn run_build(
             while start < data.nrows() {
                 let stop = (start + batchsize.get()).min(data.nrows());
                 let batch = Arc::new(data.subview(start..stop).unwrap().to_rowmajor_owned());
-                runtime
+                spawn_count += runtime
                     .block_on(index.batch_insert(
                         batch,
                         (start..stop).map(|i| i as u32).collect(),
@@ -148,7 +148,7 @@ fn run_build(
         }
     }
 
-    context
+    spawn_count
 }
 
 /// Capture the graph state as sorted adjacency lists, if [`DUMP_GRAPH_STATE`] is enabled.
@@ -195,7 +195,6 @@ fn run_searches(
     for (query, desc) in queries {
         let k_value = 10;
         let params = Knn::new(10, None).unwrap();
-        let search_ctx = test_provider::Context::new();
 
         let (neighbors, stats) = runtime
             .block_on(index.search(params, &*query, NonZeroUsize::new(k_value)))
@@ -254,8 +253,8 @@ struct GridInsertBaseline {
     /// Provider-level metrics captured immediately after all inserts complete.
     insert_metrics: test_provider::Metrics,
 
-    /// Context-level metrics across all searches.
-    context_metrics: test_provider::ContextMetrics,
+    /// The number of task spawns at levels below the top.
+    spawns: test_provider::SpawnCount,
 
     /// Search results collected after all inserts.
     searches: Vec<GridSearch>,
@@ -272,7 +271,7 @@ verbose_eq!(GridInsertBaseline {
     grid_size,
     num_inserted,
     insert_metrics,
-    context_metrics,
+    spawns,
     searches,
     graph_state,
 });
@@ -337,7 +336,7 @@ fn _grid_build_and_search(params: TestParams, mut parent: TestPath<'_>) {
     let index = build_index(grid, size, intra_batch_candidates, max_minibatch_par);
 
     // Build the index.
-    let insert_context = run_build(&index, grid_data.as_view(), batchsize, false, &rt);
+    let spawns = run_build(&index, grid_data.as_view(), batchsize, false, &rt);
 
     let insert_metrics = index.metrics();
     index.is_consistent().unwrap();
@@ -368,7 +367,7 @@ fn _grid_build_and_search(params: TestParams, mut parent: TestPath<'_>) {
         grid_size: size,
         num_inserted: num_points,
         insert_metrics,
-        context_metrics: insert_context.metrics(),
+        spawns,
         searches,
         graph_state,
     };

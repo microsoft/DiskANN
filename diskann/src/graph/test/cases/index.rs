@@ -24,7 +24,6 @@ async fn test_count_reachable_nodes() {
 
     assert_eq!(initial_result, 5);
 
-    let ctx = test_provider::Context::default();
     let strat = test_provider::Strategy::new();
 
     index
@@ -88,7 +87,6 @@ async fn test_get_degree_stats() {
 async fn test_prune_range() {
     let adjacency_list = generate_2d_square_adjacency_list();
     let index = setup_2d_square(adjacency_list, 1);
-    let ctx = test_provider::Context::default();
     let strat = test_provider::Strategy::new();
 
     index.prune_range(&strat, &ctx, 0..4).await.unwrap();
@@ -181,7 +179,6 @@ async fn test_get_degree_stats_mixed() {
 async fn test_is_any_neighbor_deleted() {
     let adjacency_list = generate_2d_square_adjacency_list();
     let index = setup_2d_square(adjacency_list, 4);
-    let ctx = test_provider::Context::new();
     let mut accessor = index.provider().neighbors();
 
     // Before any deletion, no node should have deleted neighbors.
@@ -212,7 +209,6 @@ async fn test_is_any_neighbor_deleted() {
 async fn test_drop_deleted_neighbors() {
     let adjacency_list = generate_2d_square_adjacency_list();
     let index = setup_2d_square(adjacency_list, 4);
-    let ctx = test_provider::Context::new();
     let mut accessor = index.provider().neighbors();
 
     // Delete node 3, then drop deleted neighbors from node 2 (neighbors: [3, 4]).
@@ -241,7 +237,6 @@ async fn test_drop_deleted_neighbors() {
 async fn test_drop_deleted_neighbors_only_orphans() {
     let adjacency_list = generate_2d_square_adjacency_list();
     let index = setup_2d_square(adjacency_list, 4);
-    let ctx = test_provider::Context::new();
     let mut accessor = index.provider().neighbors();
 
     // Delete node 3 but don't clear its adjacency list — it's not an orphan.
@@ -271,7 +266,6 @@ async fn test_drop_deleted_neighbors_only_orphans() {
 async fn test_drop_deleted_neighbors_noop() {
     let adjacency_list = generate_2d_square_adjacency_list();
     let index = setup_2d_square(adjacency_list, 4);
-    let ctx = test_provider::Context::new();
     let mut accessor = index.provider().neighbors();
 
     // No deletions — should be a no-op.

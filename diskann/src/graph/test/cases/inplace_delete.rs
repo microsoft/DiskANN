@@ -18,9 +18,7 @@ use crate::{
     provider::NeighborAccessor,
 };
 
-use super::helpers::{
-    generate_2d_square_adjacency_list, setup_2d_square, setup_2d_square_using_synthetics_grid,
-};
+use super::helpers::{generate_2d_square_adjacency_list, setup_2d_square};
 
 fn inplace_delete_setup() -> Arc<test_provider::Provider> {
     let provider_config = test_provider::Config::new(
@@ -57,7 +55,6 @@ fn inplace_delete_setup() -> Arc<test_provider::Provider> {
 async fn basic_single() {
     let index = inplace_delete_setup();
 
-    let ctx = test_provider::Context::default();
     let strat = test_provider::Strategy::new();
 
     for i in 1..6 {
@@ -82,7 +79,6 @@ async fn basic_single() {
 async fn basic_multi() {
     let index = inplace_delete_setup();
 
-    let ctx = test_provider::Context::default();
     let strat = test_provider::Strategy::new();
 
     for i in 1..6 {
@@ -109,7 +105,6 @@ async fn basic_multi() {
 async fn delete_node_3_and_validate(method: InplaceDeleteMethod) {
     let adjacency_lists = generate_2d_square_adjacency_list();
     let index = setup_2d_square(adjacency_lists, 4);
-    let ctx = test_provider::Context::new();
 
     index
         .delete(3, method, &test_provider::Strategy::new())
@@ -124,7 +119,6 @@ async fn delete_node_3_and_validate(method: InplaceDeleteMethod) {
 // async fn multi_delete_2_and_3_and_validate(method: InplaceDeleteMethod) {
 //     let adjacency_lists = generate_2d_square_adjacency_list();
 //     let index = setup_2d_square(adjacency_lists, 4);
-//     let ctx = test_provider::Context::new();
 //
 //     index
 //         .multi_inplace_delete(
@@ -145,21 +139,36 @@ const THREE: NonZeroUsize = NonZeroUsize::new(3).unwrap();
 
 #[tokio::test(flavor = "current_thread")]
 async fn inplace_delete_onehop() {
-    delete_node_3_and_validate(OneHop  { replacements: THREE }.into()).await;
+    delete_node_3_and_validate(
+        OneHop {
+            replacements: THREE,
+        }
+        .into(),
+    )
+    .await;
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn inplace_delete_twohop_and_onehop() {
-    delete_node_3_and_validate(TwoHopAndOneHop { replacements: THREE }.into()).await;
+    delete_node_3_and_validate(
+        TwoHopAndOneHop {
+            replacements: THREE,
+        }
+        .into(),
+    )
+    .await;
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn inplace_delete_visited_and_topk() {
-    delete_node_3_and_validate(VisitedAndTopK {
-        replacements: THREE,
-        k_value: NonZeroUsize::new(4).unwrap(),
-        l_value: NonZeroUsize::new(10).unwrap(),
-    }.into())
+    delete_node_3_and_validate(
+        VisitedAndTopK {
+            replacements: THREE,
+            k_value: NonZeroUsize::new(4).unwrap(),
+            l_value: NonZeroUsize::new(10).unwrap(),
+        }
+        .into(),
+    )
     .await;
 }
 
@@ -283,7 +292,6 @@ async fn delete_isolated_node() {
     ];
 
     let index = setup_2d_square(adjacency_list, 4);
-    let ctx = test_provider::Context::new();
 
     //capture state of neighbors pre-delete (ignoring node 2)
     let mut accessor = index.neighbors();
@@ -298,14 +306,20 @@ async fn delete_isolated_node() {
     index
         .delete(
             2,
-            OneHop { replacements: THREE }.into(),
+            OneHop {
+                replacements: THREE,
+            }
+            .into(),
             &test_provider::Strategy::new(),
         )
         .await
         .unwrap(); // shouldn't panic
 
     for (i, node) in [0u32, 1, 3, 4].iter().enumerate() {
-        accessor.get_neighbors(*node, list.as_empty()).await.unwrap();
+        accessor
+            .get_neighbors(*node, list.as_empty())
+            .await
+            .unwrap();
         let after: Vec<u32> = list.iter().copied().collect();
         assert_eq!(
             after, before[i],
@@ -318,7 +332,6 @@ async fn delete_isolated_node() {
 // async fn inplace_delete_two_hop_and_one_hop_wider_topology() {
 //     let start_id = u32::MAX;
 //     let index = setup_2d_square_using_synthetics_grid(3, start_id, 4);
-//     let ctx = test_provider::Context::new();
 //
 //     index
 //         .delete(
@@ -357,7 +370,6 @@ async fn delete_isolated_node() {
 // async fn multi_inplace_delete_wider_topology() {
 //     let start_id = u32::MAX;
 //     let index = setup_2d_square_using_synthetics_grid(3, start_id, 4);
-//     let ctx = test_provider::Context::new();
 //
 //     let deleted: [u32; 3] = [0, 4, 6];
 //     index

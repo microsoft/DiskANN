@@ -14,7 +14,6 @@ use hashbrown::HashSet;
 
 use super::{
     AdjacencyList, Config,
-    adjacencylist::Empty,
     glue::{self, PruneAccessor, SearchAccessor},
     internal::prune,
     search::{

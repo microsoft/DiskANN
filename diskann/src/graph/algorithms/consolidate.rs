@@ -7,28 +7,19 @@
 //!
 //! Lots of races.
 
-use std::{borrow::BorrowMut, fmt::Debug, num::NonZeroUsize};
+use std::{borrow::BorrowMut, fmt::Debug};
 
-use diskann_utils::{Reborrow, future::SendFuture};
-use diskann_vector::DistanceFunction;
-use hashbrown::{HashMap, HashSet};
+use diskann_utils::future::SendFuture;
+use hashbrown::HashSet;
 
 use crate::graph::{
-    AdjacencyList, Config,
-    adjacencylist::Empty,
-    algorithms,
-    glue::{PruneAccessor, SearchAccessor},
-    internal::{BackedgeBuffer, prune},
-    search::record::NoopSearchRecord,
-    workingset::View,
+    AdjacencyList, Config, adjacencylist::Empty, algorithms, glue::PruneAccessor, internal::prune,
 };
 
 use crate::{
     ANNResult,
-    error::{ErrorExt, IntoANNResult},
-    internal,
-    neighbor::{self, Neighbor},
-    provider::{HasId, NeighborAccessor, NeighborAccessorMut},
+    error::ErrorExt,
+    provider::{HasId, NeighborAccessorMut},
     utils::{Bool, VectorId},
 };
 

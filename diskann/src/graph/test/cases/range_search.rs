@@ -13,7 +13,6 @@ use std::sync::Arc;
 
 use crate::{
     graph::{
-        self,
         algorithms::SearchStats,
         search::Range,
         test::{provider as test_provider, synthetic::Grid},

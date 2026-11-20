@@ -11,13 +11,8 @@
 
 use std::{num::NonZeroUsize, sync::Arc};
 
-use diskann_vector::distance::Metric;
-
 use crate::{
-    graph::{
-        self,
-        test::{provider as test_provider, synthetic::Grid},
-    },
+    graph::test::{provider as test_provider, synthetic::Grid},
     neighbor::Neighbor,
     test::{
         TestRoot,
@@ -144,8 +139,6 @@ fn basic_paged_search() {
     let (index, query) = setup_grid_index_and_basic_query(grid_size, dims);
     let search_l = NonZeroUsize::new(32).unwrap();
     let page_size = 4;
-    let ctx = test_provider::Context::new();
-    let strategy = test_provider::Strategy::new();
 
     let mut search = rt
         .block_on(index.paged(query.as_slice(), search_l))
@@ -183,8 +176,6 @@ fn single_page() {
     let (index, query) = setup_grid_index_and_basic_query(grid_size, dims);
     let search_l = NonZeroUsize::new(200).unwrap();
     let page_size = 200; // larger than total points (125)
-    let ctx = test_provider::Context::new();
-    let strategy = test_provider::Strategy::new();
 
     let mut search = rt
         .block_on(index.paged(query.as_slice(), search_l))
@@ -222,8 +213,6 @@ fn small_page_size() {
     let (index, query) = setup_grid_index_and_basic_query(grid_size, dims);
     let search_l = NonZeroUsize::new(32).unwrap();
     let page_size = 1; // one result per page, maximum iterations
-    let ctx = test_provider::Context::new();
-    let strategy = test_provider::Strategy::new();
 
     let mut search = rt
         .block_on(index.paged(query.as_slice(), search_l))

@@ -15,11 +15,9 @@ use crate::{
         self, AdjacencyList,
         ext::labeled,
         search::{AdaptiveL, InlineFilterSearch, Knn},
-        search_output_buffer,
         test::provider as test_provider,
         test::synthetic::Grid,
     },
-    neighbor::Neighbor,
     test::{
         TestRoot,
         cmp::{assert_eq_verbose, verbose_eq},
