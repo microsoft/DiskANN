@@ -179,6 +179,15 @@ where
     pub(crate) matched_results: Vec<Neighbor<I>>,
 }
 
+#[cfg_attr(
+    feature = "tracing",
+    tracing::instrument(
+        name = "diskann.graph.search.traversal",
+        target = "diskann::graph::search::traversal",
+        level = "debug",
+        skip_all
+    )
+)]
 pub(crate) async fn inline_filter_search_internal<I, A, SR>(
     max_degree_with_slack: usize,
     search_params: &Knn,

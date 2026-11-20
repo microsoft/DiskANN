@@ -1531,7 +1531,7 @@ mod disk_provider_tests {
     use diskann_vector::distance::Metric;
     use rayon::prelude::IndexedParallelIterator;
     use rstest::rstest;
-    use std::sync::atomic::Ordering;
+    use std::sync::Mutex;
     use tracing::{Instrument, Subscriber, instrument::WithSubscriber};
     use tracing_subscriber::{
         filter::{LevelFilter, Targets},
@@ -1588,10 +1588,12 @@ mod disk_provider_tests {
     const SIFT_DISTANCE_ABS_TOLERANCE: f32 = 0.02;
 
     const POSTPROCESS_TARGET: &str = "diskann::disk::search::postprocess";
+    const TRAVERSAL_TARGET: &str = "diskann::graph::search::traversal";
+    const SCAN_TARGET: &str = "diskann::flat::search::scan";
 
-    struct PostprocessSpans(Arc<AtomicUsize>);
+    struct SearchPhaseSpans(Arc<Mutex<Vec<(&'static str, bool)>>>);
 
-    impl<S> tracing_subscriber::Layer<S> for PostprocessSpans
+    impl<S> tracing_subscriber::Layer<S> for SearchPhaseSpans
     where
         S: Subscriber + for<'a> LookupSpan<'a>,
     {
@@ -1602,26 +1604,44 @@ mod disk_provider_tests {
             ctx: Context<'_, S>,
         ) {
             let metadata = attrs.metadata();
-            if metadata.target() != POSTPROCESS_TARGET {
-                return;
-            }
-            assert_eq!(metadata.name(), "diskann.disk.search.postprocess");
+            let name = match metadata.target() {
+                POSTPROCESS_TARGET => "diskann.disk.search.postprocess",
+                TRAVERSAL_TARGET => "diskann.graph.search.traversal",
+                SCAN_TARGET => "diskann.flat.search.scan",
+                _ => return,
+            };
+            assert_eq!(metadata.name(), name);
             assert_eq!(*metadata.level(), tracing::Level::DEBUG);
             assert!(metadata.fields().is_empty());
             let span = ctx.span(id).unwrap();
             assert_eq!(span.parent().unwrap().metadata().name(), "caller.search");
-            self.0.fetch_add(1, Ordering::Relaxed);
+            self.0.lock().unwrap().push((metadata.name(), true));
+        }
+
+        fn on_close(&self, id: tracing::span::Id, ctx: Context<'_, S>) {
+            let span = ctx.span(&id).unwrap();
+            if matches!(
+                span.metadata().target(),
+                POSTPROCESS_TARGET | TRAVERSAL_TARGET | SCAN_TARGET
+            ) {
+                self.0.lock().unwrap().push((span.metadata().name(), false));
+            }
         }
     }
 
     #[rstest]
-    #[case::rerank(|| SearchMode::graph_filtered(|id| id % 2 == 0))]
+    #[case::graph(|| SearchMode::graph_filtered(|id| id % 2 == 0), "diskann.graph.search.traversal")]
+    #[case::inline(|| SearchMode::inline_filter(|id| id % 2 == 0, None), "diskann.graph.search.traversal")]
+    #[case::flat(|| SearchMode::flat_filtered(|id| id % 2 == 0), "diskann.flat.search.scan")]
     #[case::determinant_diversity(|| SearchMode::diverse_graph_filtered(
         |id| id % 2 == 0,
         DeterminantDiversityParams::new(2.0, 0.01).unwrap(),
-    ))]
+    ), "diskann.graph.search.traversal")]
     #[tokio::test]
-    async fn test_postprocess_tracing(#[case] mode: fn() -> SearchMode<'static>) {
+    async fn test_search_phase_tracing(
+        #[case] mode: fn() -> SearchMode<'static>,
+        #[case] phase: &'static str,
+    ) {
         let storage_provider = Arc::new(VirtualStorageProvider::new_overlay(test_data_root()));
         let search_engine = create_disk_index_searcher::<GraphDataF32VectorUnitData>(
             CreateDiskIndexSearcherParams {
@@ -1635,13 +1655,15 @@ mod disk_provider_tests {
         );
 
         let mut outputs = Vec::new();
-        for (level, expected_spans) in [(LevelFilter::OFF, 0), (LevelFilter::DEBUG, 1)] {
-            let spans = Arc::new(AtomicUsize::new(0));
+        for level in [LevelFilter::OFF, LevelFilter::DEBUG] {
+            let spans = Arc::new(Mutex::new(Vec::new()));
             let subscriber = tracing_subscriber::registry()
-                .with(PostprocessSpans(Arc::clone(&spans)))
+                .with(SearchPhaseSpans(Arc::clone(&spans)))
                 .with(
                     Targets::new()
                         .with_default(LevelFilter::TRACE)
+                        .with_target(TRAVERSAL_TARGET, level)
+                        .with_target(SCAN_TARGET, level)
                         .with_target(POSTPROCESS_TARGET, level),
                 );
             let result = async {
@@ -1654,7 +1676,17 @@ mod disk_provider_tests {
             .with_subscriber(subscriber)
             .await;
 
-            assert_eq!(spans.load(Ordering::Relaxed), expected_spans);
+            let expected = if level == LevelFilter::OFF {
+                vec![]
+            } else {
+                vec![
+                    (phase, true),
+                    (phase, false),
+                    ("diskann.disk.search.postprocess", true),
+                    ("diskann.disk.search.postprocess", false),
+                ]
+            };
+            assert_eq!(*spans.lock().unwrap(), expected);
             assert_eq!(result.stats.result_count, 10);
             outputs.push(
                 result

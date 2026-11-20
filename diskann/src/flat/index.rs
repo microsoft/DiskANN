@@ -59,13 +59,24 @@ where
         let mut queue = NeighborPriorityQueue::new(k);
         let mut cmps: u32 = 0;
 
-        visitor
-            .distances_unordered(|id, dist| {
-                cmps += 1;
-                queue.insert(Neighbor::new(id, dist));
-            })
-            .await
-            .escalate("flat scan must complete to produce correct k-NN results")?;
+        let scan = async {
+            visitor
+                .distances_unordered(|id, dist| {
+                    cmps += 1;
+                    queue.insert(Neighbor::new(id, dist));
+                })
+                .await
+                .escalate("flat scan must complete to produce correct k-NN results")
+        };
+        #[cfg(feature = "tracing")]
+        let scan = tracing::Instrument::instrument(
+            scan,
+            tracing::debug_span!(
+                target: "diskann::flat::search::scan",
+                "diskann.flat.search.scan"
+            ),
+        );
+        scan.await?;
 
         let result_count = processor
             .post_process(visitor, query, queue.iter().take(k), output)

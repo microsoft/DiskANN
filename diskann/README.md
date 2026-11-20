@@ -2,6 +2,22 @@
 
 Stay tuned for more updates!
 
+## Search phase tracing
+
+With the default `tracing` feature, shared graph traversal routines emit a `DEBUG`
+span named `diskann.graph.search.traversal` with target
+`diskann::graph::search::traversal`. Flat search emits `diskann.flat.search.scan`
+with target `diskann::flat::search::scan` around distance scanning and candidate
+queue insertion. Both exclude outer accessor/scratch setup and postprocessing,
+and record no arguments. These routines can also be called during construction
+or repeatedly during a paged search.
+
+The caller's subscriber controls filtering and records span lifetimes for elapsed
+phase timing, not CPU time. An unfiltered subscriber can enable `DEBUG`; explicitly
+filter these targets `off` to disable them. See the
+[disk search tracing documentation](../diskann-disk/README.md#search-phase-tracing)
+for exact boundaries and example filter directives.
+
 ## Developer Docs
 
 ### Test Baselines

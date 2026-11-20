@@ -1927,6 +1927,15 @@ where
         }
     }
 
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(
+            name = "diskann.graph.search.traversal",
+            target = "diskann::graph::search::traversal",
+            level = "debug",
+            skip_all
+        )
+    )]
     pub(crate) fn search_internal<A, SR, Q>(
         &self,
         beam_width: Option<usize>,

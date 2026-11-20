@@ -48,37 +48,49 @@ This crate has been populated with the core disk index functionality from the ma
 
 - Disk-specific partitioning utilities
 
-## Search postprocessing tracing
+## Search phase tracing
 
-When enabled, each invocation of either disk search postprocessor emits one `DEBUG` span named
-`diskann.disk.search.postprocess`, with target `diskann::disk::search::postprocess`.
-The span covers the complete async `post_process` method: filtering and cache lookup,
-loading missing nodes, recomputing distances, sorting or selecting for diversity, and
-writing the postprocessed output. Arguments, vectors, candidates, and results are not
-recorded.
+The caller's subscriber can enable these `DEBUG` spans. Each phase invocation emits
+one span, with no arguments, vectors, candidates, or results recorded:
 
-The caller's subscriber controls whether this span is enabled. For a consumer using
-`tracing_subscriber::EnvFilter`, explicitly disable the target with:
+| Target | Span name | Boundary |
+| --- | --- | --- |
+| `diskann::graph::search::traversal` | `diskann.graph.search.traversal` | Complete shared graph traversal, including start-point distances, node loading, full/PQ distance work, beam/neighbor handling and candidate queues. Inline-filter traversal also includes matching, adaptive-L updates and sorting matched candidates. |
+| `diskann::flat::search::scan` | `diskann.flat.search.scan` | The flat visitor's distance scan and insertion into the top-k queue. |
+| `diskann::disk::search::postprocess` | `diskann.disk.search.postprocess` | Complete async `post_process`: filtering/cache lookup, loading missing nodes, recomputing distances, sorting or diversity selection, and writing postprocessed output. |
+
+Graph, inline-filter and diverse-graph searches produce a traversal span followed
+by a postprocess span; flat searches produce a scan span followed by a postprocess
+span. The phase ends before postprocessing starts. Accessor/query preprocessing,
+starting-point count lookup and outer scratch/queue setup are outside traversal/scan;
+result packaging after `post_process` is outside these spans.
+
+The traversal and scan targets belong to the shared `diskann` crate and also apply
+to non-disk users of those routines, including repeated invocations during paged
+search or construction. They require its `tracing` feature (enabled by default,
+including by this crate's existing dependency).
+
+For a consumer using `tracing_subscriber::EnvFilter`, explicitly disable all three
+targets with:
 
 ```text
-RUST_LOG=info,diskann::disk::search::postprocess=off
+RUST_LOG=info,diskann::graph::search::traversal=off,diskann::flat::search::scan=off,diskann::disk::search::postprocess=off
 ```
 
 Or enable it at `DEBUG`:
 
 ```text
-RUST_LOG=info,diskann::disk::search::postprocess=debug
+RUST_LOG=info,diskann::graph::search::traversal=debug,diskann::flat::search::scan=debug,diskann::disk::search::postprocess=debug
 ```
 
 `DEBUG` is not automatically disabled by an unfiltered subscriber. These directives
 must be applied by the consumer's subscriber; this library does not install one.
-The span is a child of the caller's current span, so reuse an existing search/root
-span rather than adding another total-search wrapper.
+These are sibling spans under the caller's current span, so reuse an existing
+search/root span rather than adding another total-search wrapper.
 
 Configure the subscriber/exporter to record span lifetimes for phase-level elapsed
 timing, including any time suspended within the method. This is not an internal
-lookup breakdown or true CPU time, and excludes traversal and work outside
-`post_process`.
+lookup breakdown or true CPU time. The phases do not account for all work in a search.
 
 ## Dependencies
 
