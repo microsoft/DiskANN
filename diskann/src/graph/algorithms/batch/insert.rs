@@ -217,26 +217,26 @@ impl<I> BackEdge<I> {
     }
 }
 
-//-------------//
-// BatchInsert //
-//-------------//
+//-----------//
+// Workspace //
+//-----------//
 
 #[derive(Debug)]
-pub struct BatchInsert<I>
+pub struct Workspace<I>
 where
     I: VectorId,
 {
-    find: algorithms::FindInsertCandidates<I>,
+    find: algorithms::insert::Workspace<I>,
     buf: AdjacencyList<I>,
 }
 
-impl<I> BatchInsert<I>
+impl<I> Workspace<I>
 where
     I: VectorId,
 {
     pub fn new() -> Self {
         Self {
-            find: algorithms::FindInsertCandidates::new(),
+            find: algorithms::insert::Workspace::new(),
             buf: AdjacencyList::new(),
         }
     }
@@ -249,7 +249,7 @@ where
         config: &Config,
     ) -> impl SendFuture<ANNResult<()>>
     where
-        A: algorithms::Insert<Id = I>,
+        A: algorithms::insert::Access<Id = I>,
     {
         async move {
             // Add other vector id pairs in the mini batch to the candidate pool.
@@ -291,7 +291,7 @@ where
         };
 
         let id = batch.current().source;
-        algorithms::robust_prune_list(
+        algorithms::insert::robust_prune_list(
             accessor,
             id,
             &self.buf,
@@ -338,7 +338,7 @@ where
         // algorithm will sort the results, which can improve determinism.
         self.buf
             .replace_from_iter_untrusted(destinations.iter().copied());
-        algorithms::add_edge_and_prune(
+        algorithms::insert::add_edge_and_prune(
             accessor,
             &self.buf,
             *source,
@@ -391,7 +391,7 @@ impl<I> Candidates<I> {
 //----------//
 
 pub trait Standard: std::fmt::Debug + HasId + Send + Sync + 'static {
-    type InsertAccessor<'a>: algorithms::Insert<Id = Self::Id>
+    type InsertAccessor<'a>: algorithms::insert::Access<Id = Self::Id>
     where
         Self: 'a;
 
@@ -616,10 +616,10 @@ async fn worker<S>(
 ) where
     S: Standard,
 {
-    let mut batch_insert = BatchInsert::new();
+    let mut workspace = Workspace::new();
 
     // Immediately on start up, begin computing forward edges.
-    let result = compute_forward(&mut worker, &mut batch_insert, &forward_balancer, &config).await;
+    let result = compute_forward(&mut worker, &mut workspace, &forward_balancer, &config).await;
 
     if forward_response.send(result).is_err() {
         // Gracefully exit.
@@ -630,7 +630,7 @@ async fn worker<S>(
     while let Some(command) = command.recv().await {
         match command {
             Command::Bootstrap { balancer, response } => {
-                let result = bootstrap(&mut worker, &mut batch_insert, &balancer, &config).await;
+                let result = bootstrap(&mut worker, &mut workspace, &balancer, &config).await;
                 if response.send(result).is_err() {
                     // Gracefully exit.
                     return;
@@ -646,7 +646,7 @@ async fn worker<S>(
             }
             Command::ApplyBackward { balancer, response } => {
                 let result =
-                    apply_backward(&mut worker, &mut batch_insert, &balancer, &config).await;
+                    apply_backward(&mut worker, &mut workspace, &balancer, &config).await;
 
                 if response.send(result).is_err() {
                     // Gracefully exit.
@@ -659,7 +659,7 @@ async fn worker<S>(
 
 async fn compute_forward<S>(
     standard: &mut S,
-    batch_insert: &mut BatchInsert<S::Id>,
+    workspace: &mut Workspace<S::Id>,
     balancer: &Balancer<S::Id, Arc<[S::Id]>>,
     config: &Config,
 ) -> ANNResult<ForwardEdges<S::Id>>
@@ -669,7 +669,7 @@ where
     let mut edges = ForwardEdges::new();
     while let Some(batch) = balancer.next() {
         let mut accessor = standard.insert_accessor(*batch.current())?;
-        batch_insert
+        workspace
             .find_forward_edges(&mut edges, accessor.borrow_mut(), batch, config)
             .await?;
     }
@@ -678,7 +678,7 @@ where
 
 async fn bootstrap<S>(
     standard: &mut S,
-    batch_insert: &mut BatchInsert<S::Id>,
+    workspace: &mut Workspace<S::Id>,
     balancer: &Balancer<ForwardEdge<S::Id>, Vec<ForwardEdge<S::Id>>>,
     config: &Config,
 ) -> ANNResult<ForwardEdges<S::Id>>
@@ -688,7 +688,7 @@ where
     let mut edges = ForwardEdges::new();
     let mut accessor = standard.prune_accessor();
     while let Some(batch) = balancer.next() {
-        batch_insert
+        workspace
             .bootstrap(&mut edges, accessor.borrow_mut(), batch, config)
             .await?;
     }
@@ -718,7 +718,7 @@ where
 
 async fn apply_backward<S>(
     standard: &mut S,
-    batch_insert: &mut BatchInsert<S::Id>,
+    workspace: &mut Workspace<S::Id>,
     balancer: &Balancer<BackEdge<S::Id>, Vec<BackEdge<S::Id>>>,
     config: &Config,
 ) -> ANNResult<()>
@@ -727,7 +727,7 @@ where
 {
     let mut accessor = standard.prune_accessor();
     while let Some(edge) = balancer.next() {
-        batch_insert
+        workspace
             .apply_back_edge(accessor.borrow_mut(), edge.current(), config)
             .await?;
     }
