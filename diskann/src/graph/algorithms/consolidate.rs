@@ -138,7 +138,7 @@ impl<I> Workspace<I> {
                     force_saturate: false,
                 };
 
-                if algorithms::robust_prune_list(
+                if algorithms::insert::robust_prune_list(
                     prune_accessor.borrow_mut(),
                     id,
                     &self.live,

@@ -690,7 +690,7 @@ impl Provider {
         self.set(vector, id)?;
 
         // Step 2 - run the insertion algorithm.
-        algorithms::insert(
+        algorithms::insert::insert(
             &mut self.insert_accessor(vector, options, None)?,
             id,
             &self.graph,
@@ -844,7 +844,7 @@ struct Insert<'a> {
 
 provider::has_id!(Insert<'_> = u32);
 
-impl<'a> algorithms::Insert for Insert<'a> {
+impl<'a> algorithms::insert::Access for Insert<'a> {
     type SearchAccessor<'b>
         = Accessor<'a>
     where

@@ -571,7 +571,7 @@ where
 {
     let delete_set = HashSet::from_iter(std::iter::once(id));
     for (src, dsts) in edges {
-        algorithms::add_edge_and_prune(prune, dsts, *src, scratch, Some(&delete_set), config)
+        algorithms::insert::add_edge_and_prune(prune, dsts, *src, scratch, Some(&delete_set), config)
             .await?;
     }
 
