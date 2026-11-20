@@ -600,6 +600,24 @@ impl Provider {
         }
     }
 
+    fn partition_live(&self, ids: &mut AdjacencyList<u32>, deleted: Option<Empty<'_, u32>>) {
+        let mut deleted = deleted.map(Empty::take);
+
+        ids.retain(|i| {
+            let retain = match self.is_deleted(*i) {
+                Ok(true) => false,
+                Ok(false) => true,
+                Err(_) => false,
+            };
+
+            if !retain && let Some(deleted) = deleted.as_mut() {
+                deleted.push(*i);
+            }
+
+            retain
+        });
+    }
+
     //--------//
     // Search //
     //--------//
@@ -710,6 +728,49 @@ impl Provider {
         .await
     }
 
+    //--------//
+    // Delete //
+    //--------//
+
+    pub async fn delete(
+        &self,
+        id: u32,
+        kind: algorithms::inplace_delete::InplaceDeleteMethod,
+        options: &Strategy,
+    ) -> ANNResult<()> {
+        use algorithms::inplace_delete::{self, InplaceDeleteMethod};
+
+        let prune = self.prune_accessor(options, None);
+        let mut workspace = inplace_delete::Workspace::new();
+
+        self.soft_delete(id)?;
+        match kind {
+            InplaceDeleteMethod::OneHop(kind) => {
+                workspace
+                    .one_hop(&kind, &mut InplaceDelete::new(prune), id, &self.graph)
+                    .await
+            }
+            InplaceDeleteMethod::TwoHopAndOneHop(kind) => {
+                workspace
+                    .one_hop_and_two_hop(&kind, &mut InplaceDelete::new(prune), id, &self.graph)
+                    .await
+            }
+            InplaceDeleteMethod::VisitedAndTopK(kind) => {
+                let vector: Vec<f32> = self
+                    .terms
+                    .get(&id)
+                    .map(|v| (*v.data).into())
+                    .ok_or(AccessedInvalidId(id))?;
+
+                let search = self.search_accessor(&vector)?;
+                let mut accessor = TopKInplaceDelete::new(prune, search);
+                workspace
+                    .visited_and_topk(&kind, &mut accessor, id, &self.graph)
+                    .await
+            }
+        }
+    }
+
     //-------------//
     // Consolidate //
     //-------------//
@@ -740,9 +801,7 @@ struct Insert<'a> {
     prune: PruneAccessor<'a>,
 }
 
-impl provider::HasId for Insert<'_> {
-    type Id = u32;
-}
+provider::has_id!(Insert<'_> = u32);
 
 impl<'a> algorithms::Insert for Insert<'a> {
     type SearchAccessor<'b>
@@ -774,9 +833,7 @@ struct BatchInsert {
     options: Strategy,
 }
 
-impl provider::HasId for BatchInsert {
-    type Id = u32;
-}
+provider::has_id!(BatchInsert = u32);
 
 impl algorithms::batch::insert::Standard for BatchInsert {
     type InsertAccessor<'a>
@@ -819,9 +876,7 @@ struct Consolidate<'a> {
     prune: PruneAccessor<'a>,
 }
 
-impl provider::HasId for Consolidate<'_> {
-    type Id = u32;
-}
+provider::has_id!(Consolidate<'_> = u32);
 
 impl<'a> algorithms::consolidate::Access for Consolidate<'a> {
     type PruneAccessor<'b>
@@ -841,21 +896,82 @@ impl<'a> algorithms::consolidate::Access for Consolidate<'a> {
     }
 
     fn partition_live(&mut self, ids: &mut AdjacencyList<u32>, deleted: Option<Empty<'_, u32>>) {
-        let mut deleted = deleted.map(Empty::take);
+        self.parent.partition_live(ids, deleted)
+    }
+}
 
-        ids.retain(|i| {
-            let retain = match self.parent.is_deleted(*i) {
-                Ok(true) => false,
-                Ok(false) => true,
-                Err(_) => false,
-            };
+//----------------//
+// Inplace Delete //
+//----------------//
 
-            if !retain && let Some(deleted) = deleted.as_mut() {
-                deleted.push(*i);
-            }
+#[derive(Debug)]
+struct InplaceDelete<'a> {
+    prune: PruneAccessor<'a>,
+}
 
-            retain
-        });
+impl<'a> InplaceDelete<'a> {
+    fn new(prune: PruneAccessor<'a>) -> Self {
+        Self { prune }
+    }
+}
+
+provider::has_id!(InplaceDelete<'_> = u32);
+
+impl<'a> algorithms::inplace_delete::Access for InplaceDelete<'a> {
+    type PruneAccessor<'x>
+        = PruneAccessor<'a>
+    where
+        Self: 'x;
+
+    fn prune_accessor(&mut self) -> impl BorrowMut<PruneAccessor<'a>> + Send {
+        &mut self.prune
+    }
+
+    fn keep_live(&mut self, ids: &mut AdjacencyList<u32>) {
+        self.prune.provider().partition_live(ids, None)
+    }
+}
+
+#[derive(Debug)]
+struct TopKInplaceDelete<'a> {
+    inplace: InplaceDelete<'a>,
+    search: Accessor<'a>,
+}
+
+impl<'a> TopKInplaceDelete<'a> {
+    fn new(prune: PruneAccessor<'a>, search: Accessor<'a>) -> Self {
+        Self {
+            inplace: InplaceDelete::new(prune),
+            search,
+        }
+    }
+}
+
+provider::has_id!(TopKInplaceDelete<'_> = u32);
+
+impl<'a> algorithms::inplace_delete::Access for TopKInplaceDelete<'a> {
+    type PruneAccessor<'x>
+        = PruneAccessor<'a>
+    where
+        Self: 'x;
+
+    fn prune_accessor(&mut self) -> impl BorrowMut<PruneAccessor<'a>> + Send {
+        self.inplace.prune_accessor()
+    }
+
+    fn keep_live(&mut self, ids: &mut AdjacencyList<u32>) {
+        self.inplace.keep_live(ids)
+    }
+}
+
+impl<'a> algorithms::inplace_delete::TopKAccess for TopKInplaceDelete<'a> {
+    type SearchAccessor<'x>
+        = Accessor<'a>
+    where
+        Self: 'x;
+
+    fn search_accessor(&mut self) -> impl BorrowMut<Accessor<'a>> + Send {
+        &mut self.search
     }
 }
 
@@ -1288,9 +1404,7 @@ impl<'a> NeighborAccessor<'a> {
     }
 }
 
-impl provider::HasId for NeighborAccessor<'_> {
-    type Id = u32;
-}
+provider::has_id!(NeighborAccessor<'_> = u32);
 
 impl provider::NeighborAccessor for NeighborAccessor<'_> {
     async fn get_neighbors(
@@ -1419,11 +1533,13 @@ impl<'a> PruneAccessor<'a> {
             set,
         }
     }
+
+    fn provider(&self) -> &Provider {
+        self.provider
+    }
 }
 
-impl provider::HasId for PruneAccessor<'_> {
-    type Id = u32;
-}
+provider::has_id!(PruneAccessor<'_> = u32);
 
 impl glue::PruneAccessor for PruneAccessor<'_> {
     type ElementRef<'a> = &'a [f32];
@@ -1559,9 +1675,7 @@ pub struct DimMismatch {
 
 convert_error!(DimMismatch);
 
-impl provider::HasId for Accessor<'_> {
-    type Id = u32;
-}
+provider::has_id!(Accessor<'_> = u32);
 
 impl glue::SearchAccessor for Accessor<'_> {
     fn starting_points(&self) -> impl Future<Output = ANNResult<Vec<u32>>> + Send {

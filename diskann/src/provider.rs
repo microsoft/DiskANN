@@ -58,12 +58,7 @@
 
 use std::ops::Deref;
 
-use crate::{
-    ANNResult,
-    error::ToRanked,
-    graph::{AdjacencyList, adjacencylist},
-    utils::VectorId,
-};
+use crate::{ANNResult, error::ToRanked, graph::adjacencylist, utils::VectorId};
 
 //////////////////////
 // ExecutionContext //
@@ -258,6 +253,16 @@ where
 {
     type Id = T::Id;
 }
+
+macro_rules! has_id {
+    ($T:ty = $Id:ty) => {
+        impl $crate::provider::HasId for $T {
+            type Id = $Id;
+        }
+    };
+}
+
+pub(crate) use has_id;
 
 ////////////////
 // SetElement //

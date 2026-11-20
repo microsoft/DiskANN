@@ -28,7 +28,7 @@ use crate::{
     utils::VectorId,
 };
 
-pub trait InplaceDelete: HasId + Send {
+pub trait Access: HasId + Send {
     type PruneAccessor<'a>: PruneAccessor<Id = Self::Id>
     where
         Self: 'a;
@@ -44,7 +44,7 @@ pub trait InplaceDelete: HasId + Send {
     fn keep_live(&mut self, ids: &mut AdjacencyList<Self::Id>);
 }
 
-pub trait SearchInplaceDelete: InplaceDelete {
+pub trait TopKAccess: Access {
     type SearchAccessor<'a>: SearchAccessor<Id = Self::Id>
     where
         Self: 'a;
@@ -65,7 +65,7 @@ pub trait SearchInplaceDelete: InplaceDelete {
 }
 
 #[derive(Debug)]
-pub struct Scratch<I>
+pub struct Workspace<I>
 where
     I: VectorId,
 {
@@ -81,7 +81,7 @@ where
     set: HashSet<I>,
 }
 
-impl<I> Scratch<I>
+impl<I> Workspace<I>
 where
     I: VectorId,
 {
@@ -109,7 +109,7 @@ where
         config: &Config,
     ) -> ANNResult<()>
     where
-        A: InplaceDelete<Id = I>,
+        A: Access<Id = I>,
     {
         one_hop.discover(accessor, id, self).await?;
 
@@ -125,15 +125,15 @@ where
         Ok(())
     }
 
-    pub async fn two_hop<A>(
+    pub async fn one_hop_and_two_hop<A>(
         &mut self,
-        two_hop: &TwoHop,
+        two_hop: &TwoHopAndOneHop,
         accessor: &mut A,
         id: A::Id,
         config: &Config,
     ) -> ANNResult<()>
     where
-        A: InplaceDelete<Id = I>,
+        A: Access<Id = I>,
     {
         two_hop.discover(accessor, id, self).await?;
 
@@ -157,7 +157,7 @@ where
         config: &Config,
     ) -> ANNResult<()>
     where
-        A: SearchInplaceDelete<Id = I>,
+        A: TopKAccess<Id = I>,
     {
         visited_and_topk
             .discover(accessor, id, config, self)
@@ -176,13 +176,38 @@ where
     }
 }
 
+#[derive(Debug, Clone)]
+pub enum InplaceDeleteMethod {
+    OneHop(OneHop),
+    TwoHopAndOneHop(TwoHopAndOneHop),
+    VisitedAndTopK(VisitedAndTopK),
+}
+
+impl From<OneHop> for InplaceDeleteMethod {
+    fn from(one_hop: OneHop) -> Self {
+        Self::OneHop(one_hop)
+    }
+}
+
+impl From<TwoHopAndOneHop> for InplaceDeleteMethod {
+    fn from(two_hop: TwoHopAndOneHop) -> Self {
+        Self::TwoHopAndOneHop(two_hop)
+    }
+}
+
+impl From<VisitedAndTopK> for InplaceDeleteMethod {
+    fn from(visited_and_topk: VisitedAndTopK) -> Self {
+        Self::VisitedAndTopK(visited_and_topk)
+    }
+}
+
 //--------//
 // OneHop //
 //--------//
 
 #[derive(Debug, Clone)]
 pub struct OneHop {
-    replacements: NonZeroUsize,
+    pub replacements: NonZeroUsize,
 }
 
 impl OneHop {
@@ -194,10 +219,10 @@ impl OneHop {
         &self,
         accessor: &mut A,
         id: A::Id,
-        scratch: &mut Scratch<A::Id>,
+        scratch: &mut Workspace<A::Id>,
     ) -> ANNResult<()>
     where
-        A: InplaceDelete,
+        A: Access,
     {
         let Self { replacements } = self.clone();
 
@@ -243,10 +268,10 @@ fn assert_send_one_hop<A>(
     accessor: &mut A,
     id: A::Id,
     config: &Config,
-    scratch: &mut Scratch<A::Id>,
+    scratch: &mut Workspace<A::Id>,
 ) -> impl SendFuture<ANNResult<()>>
 where
-    A: InplaceDelete,
+    A: Access,
 {
     async move { one_hop.discover(accessor, id, scratch).await }
 }
@@ -256,11 +281,11 @@ where
 //--------//
 
 #[derive(Debug, Clone)]
-pub struct TwoHop {
-    replacements: NonZeroUsize,
+pub struct TwoHopAndOneHop {
+    pub replacements: NonZeroUsize,
 }
 
-impl TwoHop {
+impl TwoHopAndOneHop {
     pub fn new(replacements: NonZeroUsize) -> Self {
         Self { replacements }
     }
@@ -269,10 +294,10 @@ impl TwoHop {
         &self,
         accessor: &mut A,
         id: A::Id,
-        scratch: &mut Scratch<A::Id>,
+        scratch: &mut Workspace<A::Id>,
     ) -> ANNResult<()>
     where
-        A: InplaceDelete,
+        A: Access,
     {
         let Self { replacements } = self.clone();
         accessor
@@ -302,11 +327,12 @@ impl TwoHop {
                 if temp.contains(id) {
                     // We can use `push_unique` because this is already coming from an
                     // adjacency list.
-                    scratch.in_neighbors.push_unique(id);
+                    scratch.in_neighbors.push_unique(*neighbor);
                 }
             }
         }
 
+        set.remove(&id);
         scratch
             .replace
             .replace_from_iter_unique(set.iter().copied());
@@ -325,29 +351,21 @@ impl TwoHop {
 
 #[derive(Debug, Clone)]
 pub struct VisitedAndTopK {
-    replacements: NonZeroUsize,
-    l_value: NonZeroUsize,
-    k_value: NonZeroUsize,
+    pub replacements: NonZeroUsize,
+    pub l_value: NonZeroUsize,
+    pub k_value: NonZeroUsize,
 }
 
 impl VisitedAndTopK {
-    pub fn new(replacements: NonZeroUsize, l_value: NonZeroUsize, k_value: NonZeroUsize) -> Self {
-        Self {
-            replacements,
-            l_value,
-            k_value,
-        }
-    }
-
     pub(crate) async fn discover<A>(
         &self,
         accessor: &mut A,
         id: A::Id,
         config: &Config,
-        scratch: &mut Scratch<A::Id>,
+        scratch: &mut Workspace<A::Id>,
     ) -> ANNResult<()>
     where
-        A: SearchInplaceDelete,
+        A: TopKAccess,
     {
         let Self {
             replacements,
@@ -433,7 +451,7 @@ impl FilterCandidates {
     async fn filter_candidates<A>(
         &self,
         prune: &mut A,
-        scratch: &mut Scratch<A::Id>,
+        scratch: &mut Workspace<A::Id>,
     ) -> ANNResult<()>
     where
         A: PruneAccessor,
@@ -457,7 +475,7 @@ impl FilterCandidates {
         Ok(())
     }
 
-    fn filter_candidates_inner<M, I, C>(&self, view: M, computer: &C, scratch: &mut Scratch<I>)
+    fn filter_candidates_inner<M, I, C>(&self, view: M, computer: &C, scratch: &mut Workspace<I>)
     where
         I: VectorId,
         M: View<I>,
