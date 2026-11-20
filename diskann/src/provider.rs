@@ -58,7 +58,12 @@
 
 use std::ops::Deref;
 
-use crate::{ANNResult, error::ToRanked, graph::AdjacencyList, utils::VectorId};
+use crate::{
+    ANNResult,
+    error::ToRanked,
+    graph::{AdjacencyList, adjacencylist},
+    utils::VectorId,
+};
 
 //////////////////////
 // ExecutionContext //
@@ -350,7 +355,7 @@ pub trait NeighborAccessor: HasId + Send + Sync {
     fn get_neighbors(
         &mut self,
         id: Self::Id,
-        neighbors: &mut AdjacencyList<Self::Id>,
+        neighbors: adjacencylist::Empty<'_, Self::Id>,
     ) -> impl std::future::Future<Output = ANNResult<()>> + Send;
 }
 

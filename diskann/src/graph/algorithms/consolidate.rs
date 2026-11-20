@@ -14,7 +14,9 @@ use diskann_vector::DistanceFunction;
 use hashbrown::{HashMap, HashSet};
 
 use crate::graph::{
-    AdjacencyList, Config, algorithms,
+    AdjacencyList, Config,
+    adjacencylist::Empty,
+    algorithms,
     glue::{PruneAccessor, SearchAccessor},
     internal::{BackedgeBuffer, prune},
     search::record::NoopSearchRecord,
@@ -37,22 +39,26 @@ pub trait Access: HasId {
 
     fn prune_accessor(&mut self) -> impl std::borrow::BorrowMut<Self::PruneAccessor<'_>> + Send;
 
-    /// Retrieve the adjacency list for the item being consolidated.
+    /// Retrieve the adjacency list for the item.
     ///
-    /// Return `true` if the retrieval was successful, otherwise return `false` to abort
-    /// the consolidation operation.
-    #[must_use = "this indicates if the operation should continue"]
+    /// This method has very particular semantics:
+    ///
+    /// 1. It should **only** return an error for truly catastrophic problems. Accessing an
+    ///    ID that doesn't exist should return `false`, not an error.
+    ///
+    /// 2. The returned [`Bool`] indicates if the operation was successful. Only return `true`
+    ///    if `id` exists and the retrieval was successful. Otherwise, it should return `false`.
     fn neighbors(
         &mut self,
         id: Self::Id,
-        neighbors: &mut AdjacencyList<Self::Id>,
-    ) -> impl SendFuture<Bool>;
+        neighbors: Empty<'_, Self::Id>,
+    ) -> impl SendFuture<ANNResult<Bool>>;
 
     /// Out-of-bounds IDs may be considered as deleted.
     fn partition_live(
         &mut self,
         ids: &mut AdjacencyList<Self::Id>,
-        deleted: Option<&mut AdjacencyList<Self::Id>>,
+        deleted: Option<Empty<'_, Self::Id>>,
     );
 }
 
@@ -100,14 +106,14 @@ impl<I> Workspace<I> {
         I: VectorId,
         A: Access<Id = I>,
     {
-        if !access.neighbors(id, &mut self.live).await.get() {
+        if !access.neighbors(id, self.live.as_empty()).await?.get() {
             return Ok(ConsolidateKind::Deleted);
         }
 
         self.deleted.clear();
         self.neighborhood.clear();
 
-        access.partition_live(&mut self.live, Some(&mut self.deleted));
+        access.partition_live(&mut self.live, Some(self.deleted.as_empty()));
         if self.deleted.is_empty() && self.live.len() <= config.pruned_degree().get() {
             return Ok(ConsolidateKind::Complete);
         }
@@ -117,8 +123,7 @@ impl<I> Workspace<I> {
         for &deleted in self.deleted.iter() {
             // Always consolidate the neighborhood, even if there is a race and this deleted
             // neighbor gets resurrected.
-            let _ = access.neighbors(deleted, &mut self.live).await;
-
+            let _ = access.neighbors(deleted, self.live.as_empty()).await?;
             access.partition_live(&mut self.live, None);
             self.neighborhood.extend(self.live.iter().copied());
         }

@@ -22,8 +22,8 @@ use crate::{
     error::ranked::ErrorExt,
     error::{RankedError, ToRanked, TransientError, message},
     graph::{
-        self, AdjacencyList, SearchOutputBuffer, algorithms, ext::labeled, glue,
-        search::PagedSearch, test::synthetic, workingset,
+        self, AdjacencyList, SearchOutputBuffer, adjacencylist::Empty, algorithms, ext::labeled,
+        glue, search::PagedSearch, test::synthetic, workingset,
     },
     internal::counter::{Counter, LocalCounter},
     neighbor::Neighbor,
@@ -473,12 +473,12 @@ impl Provider {
     pub(crate) fn get_neighbors(
         &self,
         id: u32,
-        neighbors: &mut AdjacencyList<u32>,
+        neighbors: Empty<'_, u32>,
     ) -> Result<bool, AccessedInvalidId> {
         match self.terms.get(&id) {
             Some(v) => {
                 self.get_neighbors.increment();
-                neighbors.overwrite_trusted(&v.neighbors);
+                neighbors.take().overwrite_trusted(&v.neighbors);
                 Ok(!v.data.is_deleted())
             }
             None => Err(AccessedInvalidId(id)),
@@ -574,10 +574,7 @@ impl Provider {
         }
     }
 
-    pub(super) fn soft_delete(
-        &self,
-        id: u32,
-    ) -> Result<(), InvalidId> {
+    pub(super) fn soft_delete(&self, id: u32) -> Result<(), InvalidId> {
         if self.is_start_point(id) {
             return Err(InvalidId::IsStartPoint(id));
         }
@@ -591,10 +588,7 @@ impl Provider {
         }
     }
 
-    pub(super) fn hard_delete(
-        &self,
-        id: u32,
-    ) -> Result<(), InvalidId> {
+    pub(super) fn hard_delete(&self, id: u32) -> Result<(), InvalidId> {
         if self.is_start_point(id) {
             return Err(InvalidId::IsStartPoint(id));
         }
@@ -839,19 +833,16 @@ impl<'a> algorithms::consolidate::Access for Consolidate<'a> {
         &mut self.prune
     }
 
-    async fn neighbors(&mut self, id: u32, neighbors: &mut AdjacencyList<u32>) -> Bool {
-        neighbors.clear();
+    async fn neighbors(&mut self, id: u32, neighbors: Empty<'_, u32>) -> ANNResult<Bool> {
         match self.parent.get_neighbors(id, neighbors) {
-            Ok(is_valid) => is_valid.into(),
-            Err(AccessedInvalidId(_)) => false.into(),
+            Ok(is_valid) => Ok(is_valid.into()),
+            Err(AccessedInvalidId(_)) => Ok(false.into()),
         }
     }
 
-    fn partition_live(
-        &mut self,
-        ids: &mut AdjacencyList<u32>,
-        mut deleted: Option<&mut AdjacencyList<u32>>,
-    ) {
+    fn partition_live(&mut self, ids: &mut AdjacencyList<u32>, deleted: Option<Empty<'_, u32>>) {
+        let mut deleted = deleted.map(Empty::take);
+
         ids.retain(|i| {
             let retain = match self.parent.is_deleted(*i) {
                 Ok(true) => false,
@@ -1305,7 +1296,7 @@ impl provider::NeighborAccessor for NeighborAccessor<'_> {
     async fn get_neighbors(
         &mut self,
         id: Self::Id,
-        neighbors: &mut AdjacencyList<Self::Id>,
+        neighbors: Empty<'_, Self::Id>,
     ) -> ANNResult<()> {
         self.provider.get_neighbors(id, neighbors)?;
         Ok(())
@@ -1604,7 +1595,7 @@ impl glue::SearchAccessor for Accessor<'_> {
         // We put it back when we're done.
         let mut neighbors = std::mem::take(&mut self.neighbors);
         for id in ids {
-            self.provider().get_neighbors(id, &mut neighbors)?;
+            self.provider().get_neighbors(id, neighbors.as_empty())?;
             for &n in neighbors.iter().filter(|i| pred.eval_mut(i)) {
                 if let Some(distance) = self
                     .get_distance(n)
@@ -2041,7 +2032,7 @@ mod tests {
 
     #[test]
     fn test_neighbor_accessor() {
-        use provider::{NeighborAccessor};
+        use provider::NeighborAccessor;
 
         let provider = create_test_provider();
         let mut accessor = provider.neighbors();
@@ -2051,20 +2042,26 @@ mod tests {
 
         // The following accesses should all be successful and reflact the initialization
         // performed in `create_test_provider`.
-        rt.block_on(accessor.get_neighbors(0, &mut v)).unwrap();
+        rt.block_on(accessor.get_neighbors(0, v.as_empty()))
+            .unwrap();
         assert_eq!(&*v, &[1, 2, 3]);
 
-        rt.block_on(accessor.get_neighbors(1, &mut v)).unwrap();
+        rt.block_on(accessor.get_neighbors(1, v.as_empty()))
+            .unwrap();
         assert_eq!(&*v, &[0, 3]);
 
-        rt.block_on(accessor.get_neighbors(2, &mut v)).unwrap();
+        rt.block_on(accessor.get_neighbors(2, v.as_empty()))
+            .unwrap();
         assert_eq!(&*v, &[0, 3]);
 
-        rt.block_on(accessor.get_neighbors(3, &mut v)).unwrap();
+        rt.block_on(accessor.get_neighbors(3, v.as_empty()))
+            .unwrap();
         assert_eq!(&*v, &[0, 1, 2]);
 
         // Accessing an uninitialized vector is an error.
-        let err = rt.block_on(accessor.get_neighbors(4, &mut v)).unwrap_err();
+        let err = rt
+            .block_on(accessor.get_neighbors(4, v.as_empty()))
+            .unwrap_err();
         assert_contains!(err.to_string(), "Attempt to access an invalid id");
     }
 
@@ -2080,13 +2077,15 @@ mod tests {
 
         // Test that emptying neighbors works.
         rt.block_on(accessor.set_neighbors(2, &[])).unwrap();
-        rt.block_on(accessor.get_neighbors(2, &mut v)).unwrap();
+        rt.block_on(accessor.get_neighbors(2, v.as_empty()))
+            .unwrap();
         assert!(v.is_empty());
         assert_eq!(provider.set_neighbors.value(), 1);
 
         // Adding a few neighbors behaves well.
         rt.block_on(accessor.set_neighbors(2, &[1, 3])).unwrap();
-        rt.block_on(accessor.get_neighbors(2, &mut v)).unwrap();
+        rt.block_on(accessor.get_neighbors(2, v.as_empty()))
+            .unwrap();
         assert_eq!(&*v, &[1, 3]);
         assert_eq!(provider.set_neighbors.value(), 2);
 
@@ -2100,7 +2099,8 @@ mod tests {
             let err = rt
                 .block_on(accessor.set_neighbors(2, &[1, 2, 3, 4, 5]))
                 .unwrap_err();
-            rt.block_on(accessor.get_neighbors(2, &mut v)).unwrap();
+            rt.block_on(accessor.get_neighbors(2, v.as_empty()))
+                .unwrap();
             assert_eq!(&*v, &[1, 3], "original neighbors should be unchanged");
 
             let msg = err.to_string();
@@ -2119,7 +2119,8 @@ mod tests {
                 .block_on(accessor.set_neighbors(2, &[1, 2, 3, 2]))
                 .unwrap_err();
 
-            rt.block_on(accessor.get_neighbors(2, &mut v)).unwrap();
+            rt.block_on(accessor.get_neighbors(2, v.as_empty()))
+                .unwrap();
             assert_eq!(
                 &*v,
                 &[1, 2, 3],
@@ -2156,12 +2157,14 @@ mod tests {
 
         let rt = current_thread_runtime();
 
-        rt.block_on(accessor.get_neighbors(2, &mut v)).unwrap();
+        rt.block_on(accessor.get_neighbors(2, v.as_empty()))
+            .unwrap();
         assert_eq!(&*v, &[0, 3]);
 
         // We can successfully add neighbors.
         rt.block_on(accessor.append_vector(2, &[1])).unwrap();
-        rt.block_on(accessor.get_neighbors(2, &mut v)).unwrap();
+        rt.block_on(accessor.get_neighbors(2, v.as_empty()))
+            .unwrap();
         assert_eq!(&*v, &[0, 3, 1]);
         assert_eq!(provider.append_neighbors.value(), 1);
 
@@ -2169,7 +2172,8 @@ mod tests {
         {
             rt.block_on(accessor.set_neighbors(2, &[])).unwrap();
             rt.block_on(accessor.append_vector(2, &[1, 3, 4])).unwrap();
-            rt.block_on(accessor.get_neighbors(2, &mut v)).unwrap();
+            rt.block_on(accessor.get_neighbors(2, v.as_empty()))
+                .unwrap();
             assert_eq!(&*v, &[1, 3, 4]);
             assert_eq!(provider.append_neighbors.value(), 2);
         }
@@ -2177,7 +2181,8 @@ mod tests {
         // Appending duplicates is an error.
         {
             let err = rt.block_on(accessor.append_vector(2, &[1])).unwrap_err();
-            rt.block_on(accessor.get_neighbors(2, &mut v)).unwrap();
+            rt.block_on(accessor.get_neighbors(2, v.as_empty()))
+                .unwrap();
             assert_eq!(&*v, &[1, 3, 4]);
 
             let msg = err.to_string();
@@ -2195,7 +2200,8 @@ mod tests {
             let err = rt
                 .block_on(accessor.append_vector(2, &[1, 1, 1]))
                 .unwrap_err();
-            rt.block_on(accessor.get_neighbors(2, &mut v)).unwrap();
+            rt.block_on(accessor.get_neighbors(2, v.as_empty()))
+                .unwrap();
             assert_eq!(&*v, &[1]);
 
             let msg = err.to_string();
@@ -2212,7 +2218,8 @@ mod tests {
             let err = rt
                 .block_on(accessor.append_vector(2, &[2, 3, 4, 5]))
                 .unwrap_err();
-            rt.block_on(accessor.get_neighbors(2, &mut v)).unwrap();
+            rt.block_on(accessor.get_neighbors(2, v.as_empty()))
+                .unwrap();
             assert_eq!(&*v, &[1]);
 
             let msg = err.to_string();

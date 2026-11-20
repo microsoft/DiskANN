@@ -138,7 +138,7 @@ pub(super) fn generate_2d_square_adjacency_list() -> Vec<AdjacencyList<u32>> {
 pub(super) fn assert_neighbors(index: &Provider, id: u32, expected: &[u32]) {
     let mut list = AdjacencyList::new();
     index
-        .get_neighbors(id, &mut list)
+        .get_neighbors(id, list.as_empty())
         .expect("get_neighbors failed");
     list.sort();
     assert_eq!(&*list, expected, "neighbors of node {id}");

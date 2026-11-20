@@ -14,6 +14,7 @@ use hashbrown::HashSet;
 
 use super::{
     AdjacencyList, Config,
+    adjacencylist::Empty,
     glue::{self, PruneAccessor, SearchAccessor},
     internal::prune,
     search::{
@@ -424,7 +425,7 @@ where
         let mut adj_list = AdjacencyList::with_capacity(config.max_degree().get());
         accessor
             .neighbors()
-            .get_neighbors(source, &mut adj_list)
+            .get_neighbors(source, adj_list.as_empty())
             .await?;
 
         let mut did_remove = false;
