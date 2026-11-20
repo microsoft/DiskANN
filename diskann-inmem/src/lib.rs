@@ -26,7 +26,7 @@ pub mod provider;
 pub mod repr;
 pub mod store;
 
-pub use provider::{Context, Provider, Strategy};
+pub use provider::{Context, FullProviderLoader, Provider, Strategy};
 
 #[cfg(test)]
 mod test;

@@ -28,6 +28,7 @@ pub enum Number {
     F64(f64),
 }
 
+#[cfg(feature = "serde")]
 impl Number {
     /// Returns the string sentinel for a non-finite `f64`, or `None` for any finite or
     /// integer value.

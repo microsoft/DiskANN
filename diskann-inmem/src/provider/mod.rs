@@ -24,8 +24,23 @@
 //!
 //! * Failed insert rollback: again, this needs some upstream changes to full support.
 //!
-//! * Lack of save/load support: The index is currently ephemeral, but there are plans to
-//!   address this gap.
+//! * Quantization + reranking: The current version of this index targets just a single
+//!   data-store and is planned to be addressed in the near future.
+//!
+//! # Persistence
+//!
+//! Full-precision `f32` providers with `u32` external IDs support saving through
+//! [`diskann_record::save::Save`] and loading through [`FullProviderLoader`].
+//! Saving "freezes" the world, then holds writer exclusion until the snapshot is complete.
+//! New writer accessors and retirements fail while writers are excluded; searches may continue.
+//! See "Deadlock Potential" in the source docs for `crate::epoch::Registry::try_exclude_writers`.
+//!
+//! NOTE: Slots can still be acquired and insertions published while writers are blocked.
+//! Callers must prevent concurrent insertions to obtain a consistent snapshot.
+
+mod persist;
+
+pub use persist::FullProviderLoader;
 
 use std::hash::Hash;
 

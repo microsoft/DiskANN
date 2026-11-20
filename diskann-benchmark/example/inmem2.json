@@ -7,6 +7,7 @@
     {
       "type": "inmem2-fp-static",
       "content": {
+        "save_path": "",
         "build": {
           "alpha": 1.2,
           "l_build": 100,
@@ -46,6 +47,7 @@
     {
       "type": "inmem2-fp-static",
       "content": {
+        "save_path": "",
         "build": {
           "alpha": 1.2,
           "l_build": 100,

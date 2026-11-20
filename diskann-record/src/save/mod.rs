@@ -47,6 +47,7 @@ use crate::Version;
 ///
 /// Returns [`Error`] if a user impl returns an error or if the context fails to commit
 /// the manifest.
+#[cfg_attr(not(any(feature = "disk", test)), expect(dead_code))]
 pub(crate) fn save<T, C>(x: &T, context: C) -> Result<C::Output>
 where
     T: Saveable,
