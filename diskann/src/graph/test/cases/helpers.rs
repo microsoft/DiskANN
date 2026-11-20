@@ -10,15 +10,12 @@ use std::{iter, sync::Arc};
 use diskann_utils::views::rowmajor::Matrix;
 use diskann_vector::distance::Metric;
 
-use crate::{
-    graph::{
-        self, AdjacencyList,
-        test::{
-            provider::{self as test_provider, Provider, StartPoint},
-            synthetic::Grid,
-        },
+use crate::graph::{
+    self, AdjacencyList,
+    test::{
+        provider::{self as test_provider, Provider, StartPoint},
+        synthetic::Grid,
     },
-    provider::NeighborAccessor,
 };
 
 /// Build a 2D square index with a start point at (0.5, 0.5).

@@ -408,7 +408,7 @@ pub trait Standard: std::fmt::Debug + HasId + Send + Sync + 'static {
 }
 
 pub async fn standard<S, F>(
-    handle: &tokio::runtime::Handle,
+    spawn: &impl crate::tokio::Spawn,
     batch: Arc<[S::Id]>,
     config: &Config,
     make: F,
@@ -434,7 +434,7 @@ where
             let (forward_sender, forward_receiver) = oneshot::channel();
             let (command_sender, command_receiver) = mpsc::channel(1);
 
-            let h = handle.spawn(worker(
+            let h = spawn.spawn(worker(
                 standard,
                 config_clone,
                 command_receiver,

@@ -262,6 +262,7 @@ macro_rules! has_id {
     };
 }
 
+#[cfg(any(test, feature = "testing"))]
 pub(crate) use has_id;
 
 ////////////////

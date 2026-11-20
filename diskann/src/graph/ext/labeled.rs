@@ -379,7 +379,6 @@ mod tests {
     #[tokio::test]
     async fn filtered_strategy_produces_accessor() {
         let provider = test_provider::Provider::grid(Grid::Two, 4).unwrap();
-        let context = test_provider::Context::new();
         let filter = EvenFilter;
 
         let mut accessor =

@@ -20,7 +20,6 @@ use crate::{
         algorithms::consolidate::ConsolidateKind,
         test::provider::{self as test_provider, Provider, Strategy},
     },
-    provider::Delete,
     provider::NeighborAccessor,
     test::tokio::current_thread_runtime,
 };
@@ -109,7 +108,6 @@ fn flaky_consolidate_returns_failed_retrieval() {
     ];
 
     let index = setup_consolidation_index(vectors, adjacency_lists);
-    let ctx = test_provider::Context::new();
 
     // Make only the consolidated node (0) transient. During robust_prune_list, fill()
     // requests node 0's vector first — the transient error causes view.get(0) to return
@@ -136,7 +134,6 @@ fn consolidate_deleted_vertex_returns_deleted() {
     let adjacency_lists = generate_2d_square_adjacency_list();
 
     let index = setup_2d_square(adjacency_lists, 4);
-    let ctx = test_provider::Context::new();
     let strategy = Strategy::new();
 
     // Delete vertex 3, then try to consolidate it.
@@ -155,7 +152,6 @@ fn consolidate_nothing_to_do_returns_complete() {
     let adjacency_lists = generate_2d_square_adjacency_list();
 
     let index = setup_2d_square(adjacency_lists, 4);
-    let ctx = test_provider::Context::new();
     let strategy = Strategy::new();
 
     // No deletions, all degrees within limit → nothing to do.
@@ -179,7 +175,6 @@ fn consolidate_repairs_after_deletion() {
     ];
 
     let index = setup_2d_square(adjacency_lists, 4);
-    let ctx = test_provider::Context::new();
     let strategy = Strategy::new();
 
     // Delete vertex 3.
@@ -216,7 +211,6 @@ fn consolidate_prune_only_no_deleted_neighbors() {
     // pruned_degree=2, but start node (4) has degree 4 → must prune
     let adjacency_lists = generate_2d_square_adjacency_list();
     let index = setup_2d_square(adjacency_lists, 2);
-    let ctx = test_provider::Context::new();
     let strategy = Strategy::new();
 
     // Verify start node exceeds pruned_degree before consolidation.

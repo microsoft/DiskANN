@@ -117,22 +117,7 @@ fn run(
     let rt = current_thread_runtime();
     rt.block_on(async {
         let multihop = MultihopFilterSearch::new(Knn::new_default(l).unwrap());
-        let mut neighbors = Vec::<Neighbor<u32>>::new();
-
         let (neighbors, stats) = index.filtered(multihop, query, filter, None).await.unwrap();
-
-        // let stats = index
-        //     .search_with(
-        //         multihop,
-        //         &labeled::Filtered::new(test_provider::Strategy::new(), filter),
-        //         graph::glue::CopyIds,
-        //         &test_provider::Context::new(),
-        //         query,
-        //         &mut neighbors,
-        //     )
-        //     .await
-        //     .unwrap();
-
         (stats, neighbors)
     })
 }
@@ -343,7 +328,6 @@ fn two_hop_reaches_through_non_matching() {
         .block_on(index.filtered(multihop, query.as_slice(), &filter, NonZeroUsize::new(k)))
         .unwrap();
 
-    let result_count = stats.result_count as usize;
     let baseline = MultihopFilterBaseline {
         grid_size: 0, // hand-constructed, not grid-based
         query: query.clone(),
@@ -398,7 +382,6 @@ fn even_filtering_grid() {
         .block_on(index.filtered(multihop, query.as_slice(), &filter, NonZeroUsize::new(k)))
         .unwrap();
 
-    let result_count = stats.result_count as usize;
     let baseline = MultihopFilterBaseline {
         grid_size,
         query: query.clone(),

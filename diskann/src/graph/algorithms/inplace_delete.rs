@@ -10,9 +10,7 @@ use diskann_vector::DistanceFunction;
 use hashbrown::{HashMap, HashSet};
 
 use crate::graph::{
-    AdjacencyList, Config,
-    adjacencylist::Empty,
-    algorithms,
+    AdjacencyList, Config, algorithms,
     glue::{PruneAccessor, SearchAccessor},
     internal::{BackedgeBuffer, prune},
     search::record::NoopSearchRecord,
@@ -267,7 +265,6 @@ fn assert_send_one_hop<A>(
     one_hop: OneHop,
     accessor: &mut A,
     id: A::Id,
-    config: &Config,
     scratch: &mut Workspace<A::Id>,
 ) -> impl SendFuture<ANNResult<()>>
 where
@@ -313,7 +310,7 @@ impl TwoHopAndOneHop {
         set.clear();
 
         scratch.in_neighbors.clear();
-        let mut temp = &mut scratch.replace;
+        let temp = &mut scratch.replace;
 
         let mut prune = accessor.prune_accessor();
 

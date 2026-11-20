@@ -9,7 +9,7 @@ use std::{
     borrow::{BorrowMut, Cow},
     collections::{HashMap, HashSet},
     num::NonZeroUsize,
-    sync::Arc,
+    sync::{Arc},
 };
 
 use dashmap::{DashMap, mapref::entry::Entry};
@@ -706,7 +706,7 @@ impl Provider {
         ids: Arc<[u32]>,
         options: &Strategy,
         handle: &tokio::runtime::Handle,
-    ) -> ANNResult<()> {
+    ) -> ANNResult<SpawnCount> {
         // Did the provide us with sensible number of values.
         if data.nrows() != ids.len() {
             return Err(ANNError::message(
@@ -719,13 +719,37 @@ impl Provider {
             self.set(vector, *id)?;
         }
 
+
+        struct CountSpawns<'a> {
+            counter: &'a Counter,
+            handle: &'a tokio::runtime::Handle,
+        }
+
+        impl crate::tokio::Spawn for CountSpawns<'_> {
+            fn spawn<F>(&self, future: F) -> tokio::task::JoinHandle<F::Output>
+            where
+                F: std::future::Future<Output: Send + 'static> + Send + 'static {
+                self.counter.increment();
+                self.handle.spawn(future)
+            }
+        }
+
+        let counter = Counter::new();
+
+        let spawner = CountSpawns {
+            counter: &counter,
+            handle,
+        };
+
         let overlay = workingset::map::Overlay::from_batch(data.clone(), ids.iter().cloned());
-        algorithms::batch::insert::standard(handle, ids, &self.graph, || BatchInsert {
+        algorithms::batch::insert::standard(&spawner, ids, &self.graph, || BatchInsert {
             provider: self.clone(),
             overlay: overlay.clone(),
             options: options.clone(),
         })
-        .await
+        .await?;
+
+        Ok(SpawnCount(counter.value()))
     }
 
     //--------//
@@ -788,6 +812,23 @@ impl Provider {
         algorithms::consolidate::Workspace::new()
             .run(&mut consolidate, id, &self.graph)
             .await
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
+pub struct SpawnCount(usize);
+
+impl std::ops::AddAssign for SpawnCount {
+    fn add_assign(&mut self, rhs: Self) {
+        self.0 += rhs.0
+    }
+}
+
+#[cfg(test)]
+impl crate::test::cmp::VerboseEq for SpawnCount {
+    fn verbose_eq(&self, other: &Self) -> ANNResult<()> {
+        self.0.verbose_eq(&other.0)
     }
 }
 
@@ -1117,86 +1158,6 @@ impl std::ops::Deref for Vector {
     }
 }
 
-/////////////
-// Context //
-/////////////
-
-/// The execution context used by the test provider.
-///
-/// This records the number of task spawns launched by this context.
-#[derive(Debug)]
-pub struct Context(Arc<ContextInner>);
-
-impl Context {
-    /// Create a new context.
-    pub fn new() -> Self {
-        let inner = ContextInner {
-            spawns: Counter::new(),
-            clones: Counter::new(),
-        };
-
-        Self(Arc::new(inner))
-    }
-
-    /// Return the number of spawns made through this context.
-    pub fn spawns(&self) -> usize {
-        self.0.spawns.value()
-    }
-
-    /// Return the number of clones made of the context.
-    pub fn clones(&self) -> usize {
-        self.0.clones.value()
-    }
-
-    /// Aggregate the context level metrics.
-    pub fn metrics(&self) -> ContextMetrics {
-        ContextMetrics {
-            spawns: self.spawns(),
-            clones: self.clones(),
-        }
-    }
-}
-
-/// Metrics recorded by [`Context`].
-#[derive(Debug, Clone)]
-#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
-pub struct ContextMetrics {
-    pub spawns: usize,
-    pub clones: usize,
-}
-
-#[cfg(test)]
-crate::test::cmp::verbose_eq!(ContextMetrics { spawns, clones });
-
-impl Default for Context {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl provider::ExecutionContext for Context {
-    fn wrap_spawn<F, T>(&self, f: F) -> impl Future<Output = T> + Send + 'static
-    where
-        F: Future<Output = T> + Send + 'static,
-    {
-        self.0.spawns.increment();
-        f
-    }
-}
-
-impl Clone for Context {
-    fn clone(&self) -> Self {
-        self.0.clones.increment();
-        Self(self.0.clone())
-    }
-}
-
-#[derive(Debug)]
-struct ContextInner {
-    spawns: Counter,
-    clones: Counter,
-}
-
 //////////////////
 // DataProvider //
 //////////////////
@@ -1214,80 +1175,6 @@ pub enum InvalidId {
 
 crate::always_escalate!(InvalidId);
 convert_error!(InvalidId);
-
-// impl provider::DataProvider for Provider {
-//     type Context = Context;
-//     type InternalId = u32;
-//     type ExternalId = u32;
-//
-//     type Error = InvalidId;
-//     type Guard = provider::NoopGuard<u32>;
-//
-//     fn to_internal_id(&self, _context: &Context, gid: &u32) -> Result<u32, InvalidId> {
-//         let valid = self.terms.contains_key(gid);
-//         if valid {
-//             Ok(*gid)
-//         } else {
-//             Err(InvalidId::External(*gid))
-//         }
-//     }
-// }
-
-// impl provider::Delete for Provider {
-//     async fn delete(
-//         &self,
-//         _context: &Self::Context,
-//         gid: &Self::ExternalId,
-//     ) -> Result<(), Self::Error> {
-//         if self.is_start_point(*gid) {
-//             return Err(InvalidId::IsStartPoint(*gid));
-//         }
-//
-//         match self.terms.entry(*gid) {
-//             Entry::Occupied(mut occupied) => {
-//                 occupied.get_mut().mark_deleted();
-//                 Ok(())
-//             }
-//             Entry::Vacant(_) => Err(InvalidId::External(*gid)),
-//         }
-//     }
-//
-//     async fn release(
-//         &self,
-//         _context: &Self::Context,
-//         id: Self::InternalId,
-//     ) -> Result<(), Self::Error> {
-//         if self.is_start_point(id) {
-//             return Err(InvalidId::IsStartPoint(id));
-//         }
-//
-//         if self.terms.remove(&id).is_none() {
-//             Err(InvalidId::Internal(id))
-//         } else {
-//             Ok(())
-//         }
-//     }
-//
-//     async fn status_by_internal_id(
-//         &self,
-//         _context: &Context,
-//         id: u32,
-//     ) -> Result<provider::ElementStatus, Self::Error> {
-//         if self.is_deleted(id)? {
-//             Ok(provider::ElementStatus::Deleted)
-//         } else {
-//             Ok(provider::ElementStatus::Valid)
-//         }
-//     }
-//
-//     fn status_by_external_id(
-//         &self,
-//         context: &Context,
-//         gid: &u32,
-//     ) -> impl Future<Output = Result<provider::ElementStatus, Self::Error>> + Send {
-//         self.status_by_internal_id(context, *gid)
-//     }
-// }
 
 //////////////////////
 // NeighborAccessor //
@@ -1772,41 +1659,6 @@ impl glue::DefaultPostProcessor<u32> for Accessor<'_> {
     default_post_processor!(glue::Pipeline<glue::FilterStartPoints, glue::CopyIds>);
 }
 
-// impl glue::InplaceDeleteStrategy<Provider> for Strategy {
-//     type DeleteElement<'a> = &'a [f32];
-//     type DeleteElementGuard = Box<[f32]>;
-//     type DeleteElementError = AccessedInvalidId;
-//     type PruneStrategy = Self;
-//     type DeleteSearchAccessor<'a> = Accessor<'a>;
-//     type SearchStrategy = Self;
-//     type SearchPostProcessor = glue::Pipeline<FilterDeleted, glue::CopyIds>;
-//
-//     fn prune_strategy(&self) -> Self::PruneStrategy {
-//         self.clone()
-//     }
-//
-//     fn search_strategy(&self) -> Self::SearchStrategy {
-//         self.clone()
-//     }
-//
-//     fn search_post_processor(&self) -> Self::SearchPostProcessor {
-//         glue::Pipeline::new(FilterDeleted, glue::CopyIds)
-//     }
-//
-//     async fn get_delete_element<'a>(
-//         &'a self,
-//         provider: &'a Provider,
-//         _context: &'a <Provider as provider::DataProvider>::Context,
-//         id: <Provider as provider::DataProvider>::InternalId,
-//     ) -> Result<Self::DeleteElementGuard, Self::DeleteElementError> {
-//         provider
-//             .terms
-//             .get(&id)
-//             .map(|v| (*v.data).into())
-//             .ok_or(AccessedInvalidId(id))
-//     }
-// }
-
 ///////////
 // Tests //
 ///////////
@@ -1929,35 +1781,6 @@ mod tests {
         t.mark_deleted();
         assert!(t.is_deleted());
         assert_eq!(t.data.as_ptr(), ptr);
-    }
-
-    #[test]
-    fn test_context() {
-        use provider::ExecutionContext;
-
-        let context = Context::default();
-        let ContextMetrics { spawns, clones } = context.metrics();
-        assert_eq!(spawns, 0);
-        assert_eq!(clones, 0);
-
-        // Test clones are recorded
-        {
-            let c0 = context.clone();
-            let _c1 = c0.clone();
-        }
-
-        let ContextMetrics { spawns, clones } = context.metrics();
-        assert_eq!(spawns, 0);
-        assert_eq!(clones, 2);
-
-        // Test spawns are recorded.
-        let rt = current_thread_runtime();
-        let v = rt.block_on(context.clone().wrap_spawn(async { 2usize }));
-        assert_eq!(v, 2);
-
-        let ContextMetrics { spawns, clones } = context.metrics();
-        assert_eq!(spawns, 1);
-        assert_eq!(clones, 3);
     }
 
     #[test]
@@ -2110,7 +1933,6 @@ mod tests {
     fn test_set() {
         let provider = create_test_provider();
 
-        let context = Context::new();
         let query = vec![0.0; provider.dim()];
         let mut accessor = super::Accessor::new(&provider, &query).unwrap();
         let id = 5;
@@ -2129,7 +1951,7 @@ mod tests {
         // Setting with the correct dimension is successful.
         {
             let v = vec![1.0f32; provider.dim()];
-            let guard = provider.set(&v, id).unwrap();
+            provider.set(&v, id).unwrap();
 
             let distance = accessor.get_distance(id).unwrap();
             assert_eq!(distance, provider.dim() as f32);
@@ -2181,7 +2003,7 @@ mod tests {
 
     #[test]
     fn test_set_neighbors() {
-        use provider::{DefaultAccessor, NeighborAccessor, NeighborAccessorMut};
+        use provider::{NeighborAccessor, NeighborAccessorMut};
 
         let provider = create_test_provider();
         let mut accessor = provider.neighbors();
@@ -2263,7 +2085,7 @@ mod tests {
 
     #[test]
     fn test_append_vector() {
-        use provider::{DefaultAccessor, NeighborAccessor, NeighborAccessorMut};
+        use provider::{NeighborAccessor, NeighborAccessorMut};
 
         let provider = create_test_provider();
         let mut accessor = provider.neighbors();
@@ -2354,10 +2176,7 @@ mod tests {
 
     #[test]
     fn test_delete() {
-        use provider::Delete;
-
         let provider = create_test_provider();
-        let rt = current_thread_runtime();
 
         let ids = [0, 1, 2, 3];
         let invalid_id = 5;
@@ -2374,7 +2193,6 @@ mod tests {
             assert!(!provider.is_start_point(3));
         }
 
-        let context = Context::new();
         for i in ids {
             let is_deleted = provider.is_deleted(i).unwrap();
             assert!(!is_deleted);
@@ -2405,15 +2223,11 @@ mod tests {
 
     #[test]
     fn test_start_points_cannot_be_deleted() {
-        use provider::Delete;
-
         let provider = create_test_provider();
-        let rt = current_thread_runtime();
 
         assert!(provider.is_start_point(0));
         assert!(provider.is_start_point(1));
 
-        let context = Context::new();
         let err = provider.soft_delete(0).unwrap_err();
         let msg = err.to_string();
         assert_contains!(msg, "cannot delete start point");

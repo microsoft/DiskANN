@@ -11,6 +11,9 @@ pub mod provider;
 pub mod tracing;
 pub mod utils;
 
+// Runtime
+pub mod tokio;
+
 // Internals
 pub(crate) mod internal;
 

@@ -8,8 +8,6 @@
 //! These cover the filtered-range cases directly and validate the filtered-range
 //! behavior against its own baselines.
 
-use std::sync::Arc;
-
 use super::range_search::{
     RangeSearchBaseline, assert_no_duplicates, assert_range_invariants,
     setup_grid_index_and_default_query,
@@ -217,8 +215,6 @@ fn empty_results() {
     let filter = AlwaysTrueFilter;
 
     let filtered_range = FilteredRange::new(starting_l, radius).unwrap();
-    let mut filtered_results: Vec<Neighbor<u32>> = Vec::new();
-
     let (filtered_results, filtered_stats) = rt
         .block_on(index.filtered(filtered_range, query.as_slice(), &filter, None))
         .unwrap();
