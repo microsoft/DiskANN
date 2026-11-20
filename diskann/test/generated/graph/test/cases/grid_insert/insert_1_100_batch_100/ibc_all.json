@@ -2,10 +2,6 @@
   "file": "diskann/src/graph/test/cases/grid_insert.rs",
   "test": "graph/test/cases/grid_insert/insert_1_100_batch_100/ibc_all",
   "payload": {
-    "context_metrics": {
-      "clones": 0,
-      "spawns": 0
-    },
     "description": "After inserting 100 points (batch (all-at-once), ibc=all) into a 1D grid of size 100.",
     "grid_dims": 1,
     "grid_size": 100,
@@ -140,6 +136,7 @@
           ]
         ]
       }
-    ]
+    ],
+    "spawns": 2
   }
 }

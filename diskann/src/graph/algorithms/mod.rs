@@ -9,7 +9,7 @@ use super::{
     Config,
     glue::{self, SearchAccessor},
     search::{
-        record::{SearchRecord},
+        record::SearchRecord,
         scratch::{self, PriorityQueueConfiguration, SearchScratch},
     },
 };
@@ -17,7 +17,7 @@ use super::{
 use crate::{
     ANNResult,
     neighbor::{Neighbor, NeighborQueue},
-    utils::{ VectorId},
+    utils::VectorId,
 };
 
 //-------------//
@@ -25,6 +25,7 @@ use crate::{
 //-------------//
 
 pub mod insert;
+pub mod measure;
 
 pub mod consolidate;
 pub mod inplace_delete;
