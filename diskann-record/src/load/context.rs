@@ -465,10 +465,10 @@ mod tests {
         let err = object
             .field_with("missing", Append(&mut names))
             .unwrap_err();
-        assert_eq!(
-            err.to_string(),
-            error::Error::from(error::Kind::MissingField).to_string()
-        );
+        let kind = std::error::Error::source(&err)
+            .unwrap()
+            .downcast_ref::<error::Kind>();
+        assert!(matches!(kind, Some(error::Kind::MissingField)));
         assert!(err.is_recoverable());
         assert_eq!(names.len(), 2);
     }
@@ -483,14 +483,18 @@ mod tests {
         let object = context.as_object().unwrap();
 
         for kind in [error::Kind::TypeMismatch, error::Kind::MissingFile] {
-            let expected = error::Error::from(kind).to_string();
-            let err = context.load_with(Fail(kind.into())).unwrap_err();
-            assert_eq!(err.to_string(), expected);
-            assert_eq!(err.is_recoverable(), kind.is_recoverable());
-
-            let err = object.field_with("field", Fail(kind.into())).unwrap_err();
-            assert_eq!(err.to_string(), expected);
-            assert_eq!(err.is_recoverable(), kind.is_recoverable());
+            let errors = [
+                context.load_with(Fail(kind.into())).unwrap_err(),
+                object.field_with("field", Fail(kind.into())).unwrap_err(),
+            ];
+            for err in errors {
+                let actual = std::error::Error::source(&err)
+                    .unwrap()
+                    .downcast_ref::<error::Kind>()
+                    .unwrap();
+                assert_eq!(actual.as_str(), kind.as_str());
+                assert_eq!(err.is_recoverable(), kind.is_recoverable());
+            }
         }
     }
 

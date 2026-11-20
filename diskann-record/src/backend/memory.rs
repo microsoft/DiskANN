@@ -363,9 +363,13 @@ mod tests {
         let err = load::load::<Doc>(&context)
             .expect_err("a version mismatch must dispatch to load_legacy, which refuses");
         let with_loader = load::load_with(&context, PhantomData::<Doc>).unwrap_err();
-        assert_eq!(err.to_string(), with_loader.to_string());
-        assert_eq!(err.is_recoverable(), with_loader.is_recoverable());
-        assert!(format!("{err}").contains("unknown version"));
+        for error in [err, with_loader] {
+            let kind = std::error::Error::source(&error)
+                .unwrap()
+                .downcast_ref::<load::error::Kind>();
+            assert!(matches!(kind, Some(load::error::Kind::UnknownVersion)));
+            assert!(!error.is_recoverable());
+        }
     }
 
     // Regression for the NaN float-field bug, demonstrated end-to-end through the in-memory
