@@ -600,11 +600,10 @@ impl Quantized {
     fn create_accessor<'a>(
         &'a self,
         query: &'a [f32],
-        provider: &'a (dyn std::any::Any + Send + Sync),
         guard: Option<repr::ReadGuard<'a>>,
         counters: LocalCounters<'a>,
         args: AccessorArgs,
-    ) -> ANNResult<crate::provider::SearchAccessor<'a>> {
+    ) -> ANNResult<crate::index::accessors::Search<'a>> {
         let AccessorArgs { insert } = args;
 
         // NOTE: `ProcessInto` panics on a query dimension mismatch.
@@ -656,11 +655,10 @@ impl Quantized {
             None => self.store.read_guard(make_objects)??,
         };
 
-        Ok(crate::provider::SearchAccessor::new(
+        Ok(crate::index::accessors::Search::new(
             self.store.neighbors(),
             expand_beam,
             post_process,
-            provider,
             self.start_point_ids,
             counters,
         ))
@@ -711,17 +709,10 @@ impl repr::Search for Quantized {
     fn search_accessor<'a>(
         &'a self,
         query: &'a [f32],
-        provider: &'a (dyn std::any::Any + Send + Sync),
         guard: Option<repr::ReadGuard<'a>>,
         counters: LocalCounters<'a>,
-    ) -> ANNResult<crate::provider::SearchAccessor<'a>> {
-        self.create_accessor(
-            query,
-            provider,
-            guard,
-            counters,
-            AccessorArgs { insert: false },
-        )
+    ) -> ANNResult<crate::index::accessors::Search<'a>> {
+        self.create_accessor(query, guard, counters, AccessorArgs { insert: false })
     }
 }
 
@@ -729,30 +720,23 @@ impl repr::Insert for Quantized {
     fn insert_search_accessor<'a>(
         &'a self,
         query: Self::Query<'a>,
-        provider: &'a (dyn std::any::Any + Send + Sync),
         guard: Option<repr::ReadGuard<'a>>,
         counters: LocalCounters<'a>,
-    ) -> ANNResult<crate::provider::SearchAccessor<'a>> {
-        self.create_accessor(
-            query,
-            provider,
-            guard,
-            counters,
-            AccessorArgs { insert: true },
-        )
+    ) -> ANNResult<crate::index::accessors::Search<'a>> {
+        self.create_accessor(query, guard, counters, AccessorArgs { insert: true })
     }
 
     fn prune_accessor<'a>(
         &'a self,
         counters: LocalCounters<'a>,
-    ) -> ANNResult<crate::provider::PruneAccessor<'a>> {
+    ) -> ANNResult<crate::index::accessors::Prune<'a>> {
         let reader = self
             .store
             .write_guard(|slots, guard| slots.first().reader(guard.into_read_guard()))?;
 
         let prune = self.quantizer.prune(reader);
 
-        Ok(crate::provider::PruneAccessor::new(
+        Ok(crate::index::accessors::Prune::new(
             prune,
             self.store.neighbors(),
             counters,
@@ -1400,7 +1384,6 @@ mod tests {
             let mut sa = repr::Insert::insert_search_accessor(
                 quantized,
                 insert_vector.as_slice(),
-                &(),
                 None,
                 counters.local(),
             )
@@ -1427,7 +1410,6 @@ mod tests {
             let mut sa = repr::Search::search_accessor(
                 quantized,
                 query_vector.as_slice(),
-                &(),
                 None,
                 counters.local(),
             )
@@ -1670,7 +1652,7 @@ mod tests {
         let (quantized, _) = make_test_repr(Metric::SquaredL2, Rerank::None, false);
 
         let counters = Counters::new();
-        let err = repr::Search::search_accessor(&quantized, &[1.0], &(), None, counters.local())
+        let err = repr::Search::search_accessor(&quantized, &[1.0], None, counters.local())
             .unwrap_err();
 
         assert_contains!(

@@ -28,8 +28,8 @@ impl KnnSearch {
     }
 }
 
-impl From<diskann::graph::index::SearchStats> for KnnSearch {
-    fn from(stats: diskann::graph::index::SearchStats) -> Self {
+impl From<diskann::graph::algorithms::SearchStats> for KnnSearch {
+    fn from(stats: diskann::graph::algorithms::SearchStats) -> Self {
         Self {
             hops: stats.hops.into_usize(),
             cmps: stats.cmps.into_usize(),

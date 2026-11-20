@@ -60,6 +60,7 @@ path = "integration/main.rs"
 required-features = [
     "integration-test",
     "quantization",
+    "diskann-builtins",
 ]
 
 [features]
@@ -80,6 +81,16 @@ integration-test = [
     "dep:anyhow",
     "dep:rand",
     "diskann-utils/testing",
+]
+
+# `diskann` has some built-in algorithms for batch routine that use `tokio` for task
+# spawning and management. This enables `diskann-inmem` compatibiltiy with these algorithms
+# so they can be tested on large-scale data.
+#
+# Where possible, `diskann-inmem` maintains its own synchronous implementation of these
+# algorithms.
+diskann-builtins = [
+    "dep:tokio",
 ]
 
 # Note

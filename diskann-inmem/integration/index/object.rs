@@ -66,9 +66,10 @@ pub(crate) trait Index: PartialIndex {
     //--------//
 
     fn multi_insert<'a>(
-        &'a self,
+        self: Arc<Self>,
         batch: DatasetView<'a>,
         ids: std::ops::Range<u64>,
+        handl: &'a tokio::runtime::Handle,
     ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + 'a>>;
 }
 
@@ -163,15 +164,15 @@ macro_rules! index {
             //--------//
 
             fn multi_insert<'a>(
-                &'a self,
+                self: Arc<Self>,
                 batch: DatasetView<'a>,
                 ids: std::ops::Range<u64>,
+                handle: &'a tokio::runtime::Handle,
             ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + 'a>> {
                 let fut = async move {
-                    let write = self.write()?;
-                    let vectors = Arc::new(batch.try_cast()?.to_rowmajor_owned());
-                    let ids: Arc<[u64]> = ids.collect();
-                    write.multi_insert(vectors, ids).await?;
+                    let vectors = batch.try_cast()?.to_rowmajor_owned();
+                    let ids: Vec<u64> = ids.collect();
+                    self.batch_insert_builtin(vectors, &ids, handle).await?;
                     Ok(())
                 };
 

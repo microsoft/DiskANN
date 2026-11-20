@@ -7,7 +7,7 @@ use std::{num::NonZeroUsize, sync::Arc};
 
 use diskann::graph::Config;
 use diskann_inmem::{
-    self as di, Provider,
+    self as di,
     num::{Capacity, MaxDegree},
     repr::Full,
 };
@@ -70,42 +70,46 @@ fn create_full(
     let max_degree = graph_config.max_degree().get();
     let index_config = graph_config.clone();
 
-    let index = match start_points {
-        Dataset::F32(v) => finish(
-            Provider::new(Full::config(
+    let index: Arc<dyn Index> = match start_points {
+        Dataset::F32(v) => Arc::new(
+            di::Index::new(Full::config(
                 capacity,
                 MaxDegree::new(max_degree),
                 metric,
                 v,
-            )?)?,
+            )?,
             index_config,
+            )?,
         ),
-        Dataset::F16(v) => finish(
-            Provider::new(Full::config(
+        Dataset::F16(v) => Arc::new(
+            di::Index::new(Full::config(
                 capacity,
                 MaxDegree::new(max_degree),
                 metric,
                 v,
-            )?)?,
+            )?,
             index_config,
+            )?,
         ),
-        Dataset::U8(v) => finish(
-            Provider::new(Full::config(
+        Dataset::U8(v) => Arc::new(
+            di::Index::new(Full::config(
                 capacity,
                 MaxDegree::new(max_degree),
                 metric,
                 v,
-            )?)?,
+            )?,
             index_config,
+            )?,
         ),
-        Dataset::I8(v) => finish(
-            Provider::new(Full::config(
+        Dataset::I8(v) => Arc::new(
+            di::Index::new(Full::config(
                 capacity,
                 MaxDegree::new(max_degree),
                 metric,
                 v,
-            )?)?,
+            )?,
             index_config,
+            )?,
         ),
     };
 
@@ -162,7 +166,7 @@ fn create_spherical(
     let config = Config::new(backend, capacity, max_degree, start_point, rerank)?;
     let index_config = graph_config.clone();
 
-    Ok(finish(Provider::new(config)?, index_config))
+    Ok(Arc::new(di::Index::new(config, index_config)?))
 }
 
 fn create_product(
@@ -215,7 +219,7 @@ fn create_product(
     )?;
 
     let index_config = graph_config.clone();
-    Ok(finish(Provider::new(config)?, index_config))
+    Ok(Arc::new(di::Index::new(config, index_config)?))
 }
 
 fn create_scalar(
@@ -263,7 +267,7 @@ fn create_scalar(
     let config = Quantized::config(backend, capacity, max_degree, start_point, rerank)?;
 
     let index_config = graph_config.clone();
-    Ok(finish(Provider::new(config)?, index_config))
+    Ok(Arc::new(di::Index::new(config, index_config)?))
 }
 
 // pub(super) fn create_partial(
@@ -293,18 +297,6 @@ fn create_scalar(
 //     let provider = di::provider::buildonly::Provider::new(full_config)?;
 //     Ok(Arc::new(DiskANNIndex::new(index_config, provider, None)))
 // }
-
-fn finish<R, M>(
-    provider: di::provider::Provider<R, M>,
-    config: diskann::graph::Config,
-) -> Arc<dyn Index>
-where
-    R: di::repr::Representation, // FIXME: structural bounds
-    M: di::provider::Id,         // FIXME: structural bounds
-    di::index::Index<R, M>: Index,
-{
-    Arc::new(di::index::Index::temp_new(provider, config))
-}
 
 fn quantizer_rerank(rerank: quantization::Rerank, metric: Metric) -> di::repr::quantized::Rerank {
     match rerank {

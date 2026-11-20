@@ -98,7 +98,6 @@ pub trait FullPrecision: bytemuck::Pod + std::fmt::Debug + Send + Sync {
     fn __search_accessor<'a>(
         representation: &'a Full<Self>,
         query: &'a [Self],
-        provider: &'a (dyn std::any::Any + Send + Sync),
         guard: Option<repr::ReadGuard<'a>>,
         counters: LocalCounters<'a>,
     ) -> ANNResult<crate::index::accessors::Search<'a>>;
@@ -507,11 +506,10 @@ where
     fn search_accessor<'a>(
         &'a self,
         query: Self::Query<'a>,
-        provider: &'a (dyn std::any::Any + Send + Sync),
         guard: Option<repr::ReadGuard<'a>>,
         counters: LocalCounters<'a>,
     ) -> ANNResult<crate::index::accessors::Search<'a>> {
-        T::__search_accessor(self, query, provider, guard, counters)
+        T::__search_accessor(self, query, guard, counters)
     }
 }
 
@@ -921,7 +919,6 @@ macro_rules! impl_full_precision {
             fn __search_accessor<'a>(
                 representation: &'a Full<Self>,
                 query: &'a [Self],
-                provider: &'a (dyn std::any::Any + Send + Sync),
                 guard: Option<repr::ReadGuard<'a>>,
                 counters: LocalCounters<'a>,
             ) -> ANNResult<crate::index::accessors::Search<'a>> {
@@ -934,7 +931,6 @@ macro_rules! impl_full_precision {
                     representation.store.neighbors(),
                     expand_beam,
                     None,
-                    provider,
                     representation.start_point_ids,
                     counters,
                 ))
@@ -1183,7 +1179,6 @@ mod tests {
             let sa = repr::Search::search_accessor(
                 full,
                 query.as_slice(),
-                &(),
                 Some(guard),
                 counters.local(),
             )
@@ -1376,7 +1371,7 @@ mod tests {
         for dim in [1, 3] {
             let query = vec![1.0; dim];
             let err =
-                repr::Search::search_accessor(&full, query.as_slice(), &(), None, counters.local())
+                repr::Search::search_accessor(&full, query.as_slice(), None, counters.local())
                     .unwrap_err();
             assert_contains!(
                 err.to_string(),

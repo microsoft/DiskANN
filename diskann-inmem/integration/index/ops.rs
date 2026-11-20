@@ -76,7 +76,7 @@ pub(super) fn multi_insert(
             .expect("this should be in-bounds by construction");
 
         let ids = (start as u64)..(end as u64);
-        rt.block_on(index.multi_insert(batch, ids))?;
+        rt.block_on(index.clone().multi_insert(batch, ids, rt))?;
         start = end;
     }
     before.delta(&index.counters())

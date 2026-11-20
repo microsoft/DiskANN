@@ -83,7 +83,7 @@ pub trait RepresentationConfig {
 /// - [`Set`]: For assigning into the store.
 /// - [`Search`]: Search compatibility with [`crate::Provider`].
 /// - [`Insert`]: Insert compatibility with [`crate::Provider`].
-pub trait Representation: Send + Sync + 'static {
+pub trait Representation: std::fmt::Debug + Send + Sync + 'static {
     /// Return the [`MaxDegree`] of the internal graph.
     fn max_degree(&self) -> MaxDegree;
 
@@ -201,7 +201,6 @@ pub trait Search: Representation {
     fn search_accessor<'a>(
         &'a self,
         query: Self::Query<'a>,
-        provider: &'a (dyn std::any::Any + Send + Sync),
         guard: Option<ReadGuard<'a>>,
         counters: LocalCounters<'a>,
     ) -> ANNResult<crate::index::accessors::Search<'a>>;
@@ -219,11 +218,10 @@ pub trait Insert: Search + for<'a> Set<Self::Query<'a>> {
     fn insert_search_accessor<'a>(
         &'a self,
         query: Self::Query<'a>,
-        provider: &'a (dyn std::any::Any + Send + Sync),
         guard: Option<ReadGuard<'a>>,
         counters: LocalCounters<'a>,
     ) -> ANNResult<crate::index::accessors::Search<'a>> {
-        self.search_accessor(query, provider, guard, counters)
+        self.search_accessor(query, guard, counters)
     }
 
     #[doc(hidden)]

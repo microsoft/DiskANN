@@ -5,21 +5,18 @@
 
 use diskann::{
     ANNError, ANNResult,
-    graph::{
-        SearchOutputBuffer,
-        glue,
-    },
+    graph::{SearchOutputBuffer, glue},
     neighbor::Neighbor,
 };
 use diskann_utils::views::rowmajor;
 
 use crate::{
     bitvector::BitVector,
-    num::{Capacity, MaxDegree, IdLimit},
+    counters::{Counters, LocalCounters},
+    ids::IdMap,
+    num::{Capacity, IdLimit, MaxDegree},
     poll::{poll, ready},
     repr,
-    ids::IdMap,
-    counters::{Counters, LocalCounters},
 };
 
 //------------//
@@ -34,9 +31,9 @@ mod algorithms;
 ///////////
 
 /// Aggregate trait for the external ID type of [`Provider`].
-pub trait Id: Send + Sync + std::hash::Hash + Eq + Clone + 'static {}
+pub trait Id: Send + Sync + std::hash::Hash + Eq + std::fmt::Debug + Clone + 'static {}
 
-impl<T> Id for T where T: Send + Sync + std::hash::Hash + Eq + Clone + 'static {}
+impl<T> Id for T where T: Send + Sync + std::hash::Hash + std::fmt::Debug + Eq + Clone + 'static {}
 
 #[derive(Debug)]
 pub struct Index<R, M>
@@ -53,7 +50,6 @@ where
     // `Counters` is only non-trivial under the `integration-test` feature flag. Otherwise,
     // all counter related operations are no-ops.
     counters: Counters,
-
 }
 
 impl<R, M> Index<R, M>
@@ -78,10 +74,7 @@ where
 
     pub fn read(&self) -> ANNResult<Read<'_, R, M>> {
         let guard = repr::Representation::read_guard(&self.representation)?;
-        Ok(Read {
-            index: self,
-            guard,
-        })
+        Ok(Read { index: self, guard })
     }
 
     pub fn write(&self) -> ANNResult<Write<'_, R, M>> {
@@ -130,6 +123,44 @@ where
         entry.delete();
 
         Ok(())
+    }
+
+    //------------------//
+    // diskann-builtins //
+    //------------------//
+
+    #[doc(hidden)]
+    #[cfg(feature = "diskann-builtins")]
+    pub fn batch_insert_builtin<'a, T>(
+        self: &'a std::sync::Arc<Self>,
+        data: rowmajor::Owned<T>,
+        ids: &'a [M],
+        handle: &'a tokio::runtime::Handle,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ANNResult<()>> + 'a>>
+    where
+        R: for<'q> repr::Insert<Query<'q> = &'q [T]>,
+        T: std::fmt::Debug + Send + Sync + 'static,
+    {
+        use diskann_utils::views::rowmajor::Matrix;
+
+        Box::pin(async move {
+            // Acquire a write guard and hold onto it for the duration of the batch insert.
+            let write = self.write()?;
+
+            // FIXME: allow all IDs to be rolled-back.
+            // FIXME: assert lengths are the same.
+            let ids: std::sync::Arc<[u32]> = std::iter::zip(data.rows(), ids.iter())
+                .map(|(v, id)| write.set(v, id.clone()))
+                .collect::<ANNResult<_>>()?;
+
+            let batch_insert = algorithms::BatchInsert::new(self.clone(), data, &ids)?;
+            diskann::graph::algorithms::batch::insert::standard(
+                handle,
+                ids,
+                &self.graph,
+                || batch_insert.clone(),
+            ).await
+        })
     }
 }
 
@@ -190,7 +221,6 @@ where
         let mut accessor = repr::Search::search_accessor(
             &self.index.representation,
             query,
-            &(),
             Some(self.guard.share()),
             self.index.local_counters(),
         )?;
@@ -233,7 +263,6 @@ where
         let search = <R as repr::Search>::search_accessor(
             &self.index.representation,
             query,
-            self.index,
             Some(self.guard.share()),
             self.index.local_counters(),
         )?;
@@ -254,7 +283,9 @@ where
         R: repr::Representation,
         F: FnMut(&M) -> bool,
     {
-        let mut bitvec = BitVector::new(<R as repr::Representation>::id_limit(&self.index.representation));
+        let mut bitvec = BitVector::new(<R as repr::Representation>::id_limit(
+            &self.index.representation,
+        ));
 
         // We need to protect against the case where a predicate also tries to insert and
         // delete items, which would acquire the ID translation locks.
@@ -352,46 +383,48 @@ where
     translate: Translate<'a, M>,
 }
 
-// impl<M> Filtered<'_, M>
-// where
-//     M: Id,
-// {
-//     /// Run [`diskann::graph::search::InlineFilterSearch`] and store the results in `output`.
-//     pub fn inline_filtered<O>(
-//         &mut self,
-//         params: diskann::graph::search::InlineFilterSearch,
-//         output: &mut O,
-//     ) -> ANNResult<diskann::graph::index::SearchStats>
-//     where
-//         O: diskann::graph::SearchOutputBuffer<M> + Send,
-//     {
-//         let
-//
-//         let strategy = provider::Smuggle::new(&mut self.accessor);
-//         let fut = self
-//             .read
-//             .index
-//             .search(params, &strategy, &Context, (), output);
-//         crate::poll(fut)
-//     }
-//
-//     /// Run [`diskann::graph::search::MultihopFilterSearch`] and store the results in `output`.
-//     pub fn multihop_filtered<O>(
-//         &mut self,
-//         params: diskann::graph::search::MultihopFilterSearch,
-//         output: &mut O,
-//     ) -> ANNResult<diskann::graph::index::SearchStats>
-//     where
-//         O: diskann::graph::SearchOutputBuffer<M> + Send,
-//     {
-//         let strategy = provider::Smuggle::new(&mut self.accessor);
-//         let fut = self
-//             .read
-//             .index
-//             .search(params, &strategy, &Context, (), output);
-//         crate::poll(fut)
-//     }
-// }
+impl<M> Filtered<'_, M>
+where
+    M: Id,
+{
+    /// Run [`diskann::graph::search::InlineFilterSearch`] and store the results in `output`.
+    pub fn inline_filtered<O>(
+        &mut self,
+        params: diskann::graph::search::InlineFilterSearch,
+        output: &mut O,
+    ) -> ANNResult<diskann::graph::algorithms::SearchStats>
+    where
+        O: diskann::graph::SearchOutputBuffer<M> + Send,
+    {
+        let fut = <_ as diskann::graph::search::Search<_>>::search(
+            params,
+            &mut self.accessor,
+            self.translate,
+            output,
+        );
+
+        poll(fut)
+    }
+
+    /// Run [`diskann::graph::search::MultihopFilterSearch`] and store the results in `output`.
+    pub fn multihop_filtered<O>(
+        &mut self,
+        params: diskann::graph::search::MultihopFilterSearch,
+        output: &mut O,
+    ) -> ANNResult<diskann::graph::algorithms::SearchStats>
+    where
+        O: diskann::graph::SearchOutputBuffer<M> + Send,
+    {
+        let fut = <_ as diskann::graph::search::Search<_>>::search(
+            params,
+            &mut self.accessor,
+            self.translate,
+            output,
+        );
+
+        poll(fut)
+    }
+}
 
 ///////////
 // Write //
@@ -413,7 +446,7 @@ where
     guard: repr::WriteGuard<'a>,
 }
 
-impl<R, M> Write<'_, R, M>
+impl<'a, R, M> Write<'a, R, M>
 where
     R: repr::Representation, // FIXME: Remove structural bounds
     M: Id,
@@ -444,50 +477,49 @@ where
         Ok(internal)
     }
 
-    pub fn insert<'a>(&'a self, vector: R::Query<'a>, id: M) -> ANNResult<()>
+    pub fn insert<'q>(&self, vector: R::Query<'q>, id: M) -> ANNResult<()>
     where
         R: repr::Insert,
+        'a: 'q,
     {
         // TODO: IT would be great to fuse setting with creation of the search accessor.
         //
         // For some quantization schemes, it could avoid compressing the vector twice.
         let internal = self.set(vector, id)?;
 
-        let mut access = algorithms::Insert::new(
-            repr::Insert::insert_search_accessor(
-                &self.index.representation,
-                vector,
-                &(),
-                Some(self.guard.as_read_guard()),
-                self.index.local_counters(),
-            )?,
-            repr::Insert::prune_accessor(&self.index.representation, self.index.local_counters())?,
-        );
-        let fut = diskann::graph::algorithms::insert::insert(
-            &mut access,
-            internal,
-            &self.index.graph,
-        );
+        let mut access = self.insert_access(vector)?;
+        let fut =
+            diskann::graph::algorithms::insert::insert(&mut access, internal, &self.index.graph);
 
         poll(fut)
     }
 
-    // // FIXME: allow this to just be a `Ref`.
-    // // FIXME: Remove `tokio::runtime::Handle`.
-    // pub fn multi_insert<T>(
-    //     &self,
-    //     data: Arc<rowmajor::Owned<T>>,
-    //     ids: Arc<[M]>,
-    // ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ANNResult<()>> + '_>>
-    // where
-    //     R: for<'a> repr::Insert<Query<'a> = &'a [T]>,
-    //     T: Send + Sync + 'static, // FIXME: simplify bounds
-    // {
-    //     Box::pin(async move {
-    //         self.index
-    //             .clone()
-    //             .multi_insert(Strategy, &Context, data, ids)
-    //             .await
-    //     })
-    // }
+    /// Construct an [`algorithms::Insert`] with `vector`.
+    ///
+    /// This function does *not* any persistent data.
+    fn insert_access<'q>(&self, vector: R::Query<'q>) -> ANNResult<algorithms::Insert<'q>>
+    where
+        R: repr::Insert,
+        'a: 'q,
+    {
+        Ok(algorithms::Insert::new(
+            repr::Insert::insert_search_accessor(
+                &self.index.representation,
+                vector,
+                Some(self.guard.as_read_guard()),
+                self.index.local_counters(),
+            )?,
+            self.prune_accessor()?,
+        ))
+    }
+
+    /// Construct an [`accessors::PruneAccessor`].
+    ///
+    /// This function does *not* any persistent data.
+    fn prune_accessor(&self) -> ANNResult<accessors::Prune<'a>>
+    where
+        R: repr::Insert,
+    {
+        repr::Insert::prune_accessor(&self.index.representation, self.index.local_counters())
+    }
 }

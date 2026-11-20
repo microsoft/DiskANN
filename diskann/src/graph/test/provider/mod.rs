@@ -877,14 +877,8 @@ struct BatchInsert {
 provider::has_id!(BatchInsert = u32);
 
 impl algorithms::batch::insert::Standard for BatchInsert {
-    type InsertAccessor<'a>
-        = Insert<'a>
-    where
-        Self: 'a;
-    type PruneAccessor<'a>
-        = PruneAccessor<'a>
-    where
-        Self: 'a;
+    type InsertAccessor<'a> = Insert<'a>;
+    type PruneAccessor<'a> = PruneAccessor<'a>;
 
     fn insert_accessor(
         &mut self,
@@ -901,9 +895,12 @@ impl algorithms::batch::insert::Standard for BatchInsert {
             .insert_accessor(vector, &self.options, Some(&self.overlay))?)
     }
 
-    fn prune_accessor(&mut self) -> impl std::borrow::BorrowMut<Self::PruneAccessor<'_>> + Send {
-        self.provider
-            .prune_accessor(&self.options, Some(&self.overlay))
+    fn prune_accessor(
+        &mut self,
+    ) -> ANNResult<impl std::borrow::BorrowMut<Self::PruneAccessor<'_>> + Send> {
+        Ok(self
+            .provider
+            .prune_accessor(&self.options, Some(&self.overlay)))
     }
 }
 

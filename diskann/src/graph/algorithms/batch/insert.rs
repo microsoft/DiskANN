@@ -391,20 +391,17 @@ impl<I> Candidates<I> {
 //----------//
 
 pub trait Standard: std::fmt::Debug + HasId + Send + Sync + 'static {
-    type InsertAccessor<'a>: algorithms::insert::Access<Id = Self::Id>
-    where
-        Self: 'a;
-
-    type PruneAccessor<'a>: PruneAccessor<Id = Self::Id>
-    where
-        Self: 'a;
+    type InsertAccessor<'a>: algorithms::insert::Access<Id = Self::Id>;
+    type PruneAccessor<'a>: PruneAccessor<Id = Self::Id>;
 
     fn insert_accessor(
         &mut self,
         id: Self::Id,
     ) -> ANNResult<impl std::borrow::BorrowMut<Self::InsertAccessor<'_>> + Send>;
 
-    fn prune_accessor(&mut self) -> impl std::borrow::BorrowMut<Self::PruneAccessor<'_>> + Send;
+    fn prune_accessor(
+        &mut self,
+    ) -> ANNResult<impl std::borrow::BorrowMut<Self::PruneAccessor<'_>> + Send>;
 }
 
 pub async fn standard<S, F>(
@@ -685,7 +682,7 @@ where
     S: Standard,
 {
     let mut edges = ForwardEdges::new();
-    let mut accessor = standard.prune_accessor();
+    let mut accessor = standard.prune_accessor()?;
     while let Some(batch) = balancer.next() {
         workspace
             .bootstrap(&mut edges, accessor.borrow_mut(), batch, config)
@@ -703,7 +700,7 @@ where
 {
     use crate::provider::NeighborAccessorMut;
 
-    let mut accessor = standard.prune_accessor();
+    let mut accessor = standard.prune_accessor()?;
     while let Some(edge) = balancer.next() {
         let edge = edge.current();
         accessor
@@ -725,7 +722,7 @@ async fn apply_backward<S>(
 where
     S: Standard,
 {
-    let mut accessor = standard.prune_accessor();
+    let mut accessor = standard.prune_accessor()?;
     while let Some(edge) = balancer.next() {
         workspace
             .apply_back_edge(accessor.borrow_mut(), edge.current(), config)

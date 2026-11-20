@@ -17,7 +17,7 @@ use diskann::{
 
 use crate::{
     bitvector::BitVector,
-    counters::{LocalCounters},
+    counters::LocalCounters,
     neighbors::Neighbors,
     num::{IdLimit, Range},
     poll::ready,
@@ -40,12 +40,7 @@ pub(crate) struct Search<'a> {
     expand_beam: Box<dyn repr::ExpandBeam + 'a>,
     id_limit: IdLimit,
     buffer: Vec<Neighbor<u32>>,
-
-    // Post-process
     post_process: Option<Box<dyn repr::PostProcess + 'a>>,
-
-    // The parent provider for the accessor.
-    provider: &'a (dyn std::any::Any + Send + Sync),
     start_points: Range,
     counters: LocalCounters<'a>,
 }
@@ -55,7 +50,6 @@ impl<'a> Search<'a> {
         neighbors: &'a Neighbors,
         expand_beam: Box<dyn repr::ExpandBeam + 'a>,
         post_process: Option<Box<dyn repr::PostProcess + 'a>>,
-        provider: &'a (dyn std::any::Any + Send + Sync),
         start_points: Range,
         counters: LocalCounters<'a>,
     ) -> Self {
@@ -67,7 +61,6 @@ impl<'a> Search<'a> {
             id_limit,
             buffer: vec![Default::default(); neighbors.max_degree().value()],
             post_process,
-            provider,
             start_points,
             counters,
         }
@@ -289,8 +282,7 @@ impl glue::FilteredAccessor for Filtered<'_> {
         F: FnMut(glue::Decision<Self::Id>, f32) + Send,
     {
         let work = move || {
-            self
-                .search
+            self.search
                 .distances_to(self.search.start_points, |id, distance| {
                     f(glue::Decision::new(self.filter.get(id), id), distance)
                 })
@@ -314,9 +306,7 @@ impl glue::FilteredAccessor for Filtered<'_> {
             self.search.expand_beam(
                 ids,
                 |i| pred.eval_mut(i),
-                |id, distance| {
-                    on_neighbors(glue::Decision::new(self.filter.get(id), id), distance)
-                },
+                |id, distance| on_neighbors(glue::Decision::new(self.filter.get(id), id), distance),
             )
         };
 
@@ -371,6 +361,22 @@ impl<'a> Prune<'a> {
             neighbors,
             counters,
         }
+    }
+
+    // FIXME: Can we move this behind a bulk method?
+    pub(crate) fn partition_live(
+        &mut self,
+        ids: &mut AdjacencyList<u32>,
+        deleted: Option<Empty<'_, u32>>,
+    ) {
+        let mut deleted = deleted.map(Empty::take);
+        ids.retain(|i| {
+            let keep = self.prune.get(*i).is_some();
+            if keep && let Some(deleted) = deleted.as_mut() {
+                deleted.push(*i);
+            }
+            keep
+        });
     }
 
     #[cfg(test)]
@@ -518,4 +524,3 @@ impl workingset::View<u32> for &Prune<'_> {
         self.prune.get(id).map(ElementRef)
     }
 }
-

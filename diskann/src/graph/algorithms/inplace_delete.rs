@@ -243,7 +243,11 @@ impl OneHop {
         keep_items_referencing(
             &mut scratch.in_neighbors,
             id,
-            accessor.prune_accessor().borrow_mut().neighbors().borrow_mut(),
+            accessor
+                .prune_accessor()
+                .borrow_mut()
+                .neighbors()
+                .borrow_mut(),
             temp,
         )
         .await?;
@@ -320,7 +324,10 @@ impl TwoHopAndOneHop {
             let mut neighbors = prune.borrow_mut().neighbors();
             for neighbor in scratch.out_neighbors.iter() {
                 set.insert(*neighbor);
-                neighbors.borrow_mut().get_neighbors(*neighbor, temp.as_empty()).await?;
+                neighbors
+                    .borrow_mut()
+                    .get_neighbors(*neighbor, temp.as_empty())
+                    .await?;
                 set.extend(temp.iter().copied());
 
                 if temp.contains(id) {

@@ -301,7 +301,11 @@ where
                     .set_neighbors(source, &adj_list)
                     .await?;
             } else if let Some(edges) = adj_list.last(num_new_edges) {
-                accessor.neighbors().borrow_mut().append_vector(source, edges).await?;
+                accessor
+                    .neighbors()
+                    .borrow_mut()
+                    .append_vector(source, edges)
+                    .await?;
             }
         } else {
             // During back-edge insertion, we are working with a limited number

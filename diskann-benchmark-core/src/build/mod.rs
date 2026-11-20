@@ -98,7 +98,6 @@ pub use api::{
     AsProgress, BatchResult, Build, BuildResults, Parallelism, Progress, build, build_tracked,
 };
 
-pub mod graph;
 pub mod ids;
 
 #[cfg(feature = "sync")]

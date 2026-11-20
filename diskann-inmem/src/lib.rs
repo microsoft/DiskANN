@@ -26,6 +26,8 @@ pub mod index;
 pub mod repr;
 pub mod store;
 
+pub use index::Index;
+
 // pub use provider::{Context, Provider, Strategy};
 
 #[cfg(test)]
