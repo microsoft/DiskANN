@@ -84,7 +84,7 @@ impl Full<f32> {
         let mut neighbors = Vec::new();
         for id in 0..saved_count {
             let mut slot = store
-                .slot(id)
+                .acquire()
                 .ok_or_else(|| load::Error::message("could not acquire a restored slot"))?;
             let data = slot.data().as_mut_slice();
             vectors.read_exact(data).map_err(load::Error::new)?;

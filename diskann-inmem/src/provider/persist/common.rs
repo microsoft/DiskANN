@@ -8,13 +8,17 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use diskann_record::{load, save};
 
 use super::super::{Id, Provider};
-use crate::{ids::IdMap, num::IdLimit, repr::Representation};
+use crate::{
+    ids::IdMap,
+    num::{IdLimit, Range},
+    repr::Representation,
+};
 
-// Compacted representation: no 'holes' from deleted nodes, only contains live nodes
+// Compacted representation: live nodes and frozen points, without deleted-node holes.
 pub(super) struct Compact {
     frozen_count: u32,
     id_limit: u32,
-    // Map from old ID -> new ID for live nodes
+    // Map from old ID -> new ID for saved nodes.
     renaming: Vec<u32>,
     live_count: u32,
 }
@@ -37,8 +41,9 @@ impl Compact {
         R: Representation,
     {
         let mut external_ids = context.write(Some("external_ids"))?;
-        for old in self.frozen_count..self.id_limit {
-            if self.renaming[old as usize] == u32::MAX {
+        for old in 0..self.id_limit {
+            let new = self.renaming[old as usize];
+            if new < self.frozen_count || new == u32::MAX {
                 continue;
             }
             let external = provider
@@ -53,15 +58,16 @@ impl Compact {
     }
 }
 
-pub(super) fn compact<R, M>(provider: &Provider<R, M>, frozen_count: u32) -> save::Result<Compact>
+pub(super) fn compact<R, M>(provider: &Provider<R, M>, frozen_ids: Range) -> save::Result<Compact>
 where
     R: Representation,
     M: Id,
 {
     let id_limit = provider.representation.id_limit().value();
-    if frozen_count > id_limit {
-        return Err(save::Error::message("invalid frozen-point count"));
+    if frozen_ids.end() > id_limit {
+        return Err(save::Error::message("invalid frozen-point range"));
     }
+    let frozen_count = frozen_ids.end() - frozen_ids.start();
     let mut renaming = Vec::new();
     renaming
         .try_reserve_exact(id_limit as usize)
@@ -71,13 +77,13 @@ where
     for old in 0..id_limit {
         let readable = provider.representation.is_readable(old) == Some(true);
         let external = provider.mapping.to_external(old);
-        if old < frozen_count {
+        if frozen_ids.iter().contains(&old) {
             if !readable || external.is_some() {
                 return Err(save::Error::message(
                     "invalid frozen-point state or mapping",
                 ));
             }
-            renaming[old as usize] = old;
+            renaming[old as usize] = old - frozen_ids.start();
         } else {
             match (readable, external) {
                 (true, Some(external)) => {

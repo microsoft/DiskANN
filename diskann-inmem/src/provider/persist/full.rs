@@ -82,12 +82,19 @@ impl<'a> load::Loadable<'a> for Provider<Full<f32>, u32> {
 impl save::Save for Provider<Full<f32>, u32> {
     const VERSION: Version = VERSION;
 
+    /// Save a "compacted" snapshot (does not modify the provider)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any edge from live or frozen node references an omitted slot.
+    /// Expectation: after deletions, use [`diskann::graph::DiskANNIndex::consolidate_vector`]
+    /// on live nodes and frozen start points before saving.
     fn save(&self, context: save::Context<'_>) -> save::Result<save::Record<'_>> {
         let representation = &self.representation;
         let _writers = representation
             .try_exclude_writers()
             .ok_or_else(|| save::Error::message("could not exclude writers while saving"))?;
-        let compact = common::compact(self, representation.frozen_count())?;
+        let compact = common::compact(self, representation.frozen_ids())?;
         let mut record =
             representation.save(context.clone(), compact.renaming(), compact.live_count())?;
         record.insert("external_ids", compact.save_external_ids(self, context)?)?;
@@ -100,15 +107,18 @@ mod tests {
     use std::{io::Write, path::Path};
 
     use diskann::{
-        graph::AdjacencyList,
+        graph::{AdjacencyList, DiskANNIndex, search::Knn},
+        neighbor::Neighbor,
         provider::{Delete, SetElement},
     };
     use diskann_record::save;
+    use diskann_utils::views::rowmajor::{self, MatrixMut};
     use diskann_vector::distance::Metric;
 
     use super::*;
     use crate::{
-        num::{IdLimit, MaxDegree},
+        num::{IdLimit, MaxDegree, Range},
+        provider::{Context, Strategy},
         repr::{Insert, Search},
     };
 
@@ -186,6 +196,18 @@ mod tests {
         let metadata = dir.path().join("metadata.json");
         save::save_to_disk(provider, dir.path(), &metadata).unwrap();
         load::load_from_disk(&metadata, dir.path()).unwrap()
+    }
+
+    fn make_index(provider: Provider<Full<f32>, u32>) -> DiskANNIndex<Provider<Full<f32>, u32>> {
+        let config = diskann::graph::config::Builder::new(
+            provider.max_degree().value(),
+            diskann::graph::config::MaxDegree::new(provider.max_degree().value()),
+            10,
+            provider.representation.metric().into(),
+        )
+        .build()
+        .unwrap();
+        DiskANNIndex::new(config, provider, None)
     }
 
     #[test]
@@ -365,14 +387,14 @@ mod tests {
         }
         provider.delete(&context, &10).await.unwrap();
         provider.delete(&context, &40).await.unwrap();
-        let source_graph = [(0, [4, 5]), (2, [4, 5]), (3, [5, 2]), (5, [3, 0])];
+        let source_graph: &[(u32, &[u32])] = &[(0, &[5]), (2, &[5]), (3, &[5, 2]), (5, &[3, 0])];
         {
             let accessor = provider
                 .representation
                 .prune_accessor(provider.local_counters())
                 .unwrap();
-            for (id, neighbors) in source_graph {
-                accessor.neighbors.set(id, &neighbors).unwrap();
+            for &(id, neighbors) in source_graph {
+                accessor.neighbors.set(id, neighbors).unwrap();
             }
         }
 
@@ -430,9 +452,70 @@ mod tests {
             .prune_accessor(provider.local_counters())
             .unwrap();
         let mut neighbors = AdjacencyList::new();
-        for (id, expected) in source_graph {
+        for &(id, expected) in source_graph {
             accessor.neighbors.get(id, &mut neighbors).unwrap();
-            assert_eq!(&neighbors[..], &expected);
+            assert_eq!(&neighbors[..], expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn save_compacts_relocated_frozen_points() {
+        for live_count in [0, 1, 4] {
+            let mut start_points = rowmajor::Owned::from_element(2, 1, 2.0f32);
+            start_points.row_mut(1).fill(3.0);
+            let config = Full::config(
+                Capacity::new(4),
+                MaxDegree::new(2),
+                Metric::L2,
+                start_points,
+            )
+            .unwrap()
+            .locate_start_point_ids_at(Range::new(2, 4).unwrap())
+            .unwrap();
+            let provider: Provider<Full<f32>, u32> = Provider::new(config).unwrap();
+            let old_ids = &[2u32, 3, 0, 1, 4, 5][..live_count + 2];
+            for &old in &old_ids[2..] {
+                provider
+                    .set_element(&Context, &(old + 10), &[old as f32][..])
+                    .await
+                    .unwrap();
+                assert_eq!(provider.mapping.to_internal(&(old + 10)), Some(old));
+            }
+            {
+                let accessor = provider
+                    .representation
+                    .prune_accessor(provider.local_counters())
+                    .unwrap();
+                for (new, &old) in old_ids.iter().enumerate() {
+                    let next = old_ids[(new + 1) % old_ids.len()];
+                    accessor.neighbors.set(old, &[next]).unwrap();
+                }
+            }
+
+            let restored = round_trip(&provider);
+            assert_eq!(
+                restored.representation.capacity(),
+                Capacity::new(live_count)
+            );
+            assert_eq!(restored.mapping.len(), live_count);
+            let accessor = restored
+                .representation
+                .prune_accessor(restored.local_counters())
+                .unwrap();
+            let mut neighbors = AdjacencyList::new();
+            for (new, &old) in old_ids.iter().enumerate() {
+                let id = new as u32;
+                assert_eq!(&*restored.representation.get(id).unwrap(), &[old as f32]);
+                accessor.neighbors.get(id, &mut neighbors).unwrap();
+                assert_eq!(&neighbors[..], &[((new + 1) % old_ids.len()) as u32]);
+                let external = (new >= 2).then_some(old + 10);
+                assert_eq!(restored.mapping.to_external(id), external);
+                if let Some(external) = external {
+                    assert_eq!(restored.mapping.to_internal(&external), Some(id));
+                } else {
+                    assert!(restored.representation.retire(id).is_err());
+                }
+            }
         }
     }
 
@@ -474,6 +557,66 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn save_rejects_unconsolidated_deleted_neighbors() {
+        for source in [0, 2] {
+            let provider = Fixture::default()
+                .load(FullProviderLoader::default())
+                .unwrap();
+            if source == 2 {
+                provider
+                    .representation
+                    .prune_accessor(provider.local_counters())
+                    .unwrap()
+                    .neighbors
+                    .set(0, &[2])
+                    .unwrap();
+            }
+            provider.delete(&Context, &10).await.unwrap();
+            let dir = tempfile::tempdir().unwrap();
+            let metadata = dir.path().join("metadata.json");
+            let error = save::save_to_disk(&provider, dir.path(), &metadata).unwrap_err();
+            assert!(error.to_string().contains("consolidate"));
+            assert!(!metadata.exists());
+            assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+
+            let accessor = provider
+                .representation
+                .prune_accessor(provider.local_counters())
+                .unwrap();
+            let mut neighbors = AdjacencyList::new();
+            for (id, expected) in [(source, &[1][..]), (1, &[0, 2][..])] {
+                accessor.neighbors.get(id, &mut neighbors).unwrap();
+                assert_eq!(&neighbors[..], expected);
+            }
+            drop(accessor);
+
+            let index = make_index(provider);
+            for id in [0, 2] {
+                index
+                    .consolidate_vector(&Strategy, &Context, id)
+                    .await
+                    .unwrap();
+            }
+            save::save_to_disk(index.provider(), dir.path(), &metadata).unwrap();
+            let restored = load::load_from_disk(&metadata, dir.path()).unwrap();
+            let restored = make_index(restored);
+            let mut results = Vec::<Neighbor<u32>>::new();
+            restored
+                .search(
+                    Knn::new(1, None).unwrap(),
+                    &Strategy,
+                    &Context,
+                    &[3.0f32, 4.0],
+                    &mut results,
+                )
+                .await
+                .unwrap();
+            assert_eq!(results.len(), 1);
+            assert_eq!(results[0].as_tuple(), (20, 0.0));
+        }
+    }
+
+    #[tokio::test]
     async fn save_omits_all_deleted_live_nodes_and_their_edges() {
         let provider = Fixture::default()
             .load(FullProviderLoader::default())
@@ -482,7 +625,12 @@ mod tests {
         for external in [10, 20] {
             provider.delete(&context, &external).await.unwrap();
         }
-        let restored = round_trip(&provider);
+        let index = make_index(provider);
+        index
+            .consolidate_vector(&Strategy, &context, 0)
+            .await
+            .unwrap();
+        let restored = round_trip(index.provider());
         assert_eq!(restored.representation.capacity(), Capacity::new(0));
         assert_eq!(restored.representation.id_limit(), IdLimit::new(1));
         assert_eq!(restored.mapping.len(), 0);
@@ -518,6 +666,39 @@ mod tests {
         assert_eq!(provider.mapping.to_internal(&10), None);
         assert_eq!(provider.representation.is_readable(1), Some(false));
         assert_eq!(provider.mapping.to_internal(&20), Some(2));
+    }
+
+    #[tokio::test]
+    async fn restored_provider_inserts_after_occupied_prefix() {
+        for (live_count, frozen_count) in [(20u32, 0u32), (24, 1), (0, 21)] {
+            let saved_count = live_count + frozen_count;
+            let fixture = Fixture {
+                live_count,
+                frozen_count,
+                dim: 1,
+                vectors: vec![0; saved_count as usize * size_of::<f32>()],
+                graph: vec![0; saved_count as usize * size_of::<u32>()],
+                external_ids: (0..live_count).flat_map(u32::to_le_bytes).collect(),
+                ..Fixture::default()
+            };
+            let provider = fixture
+                .load(FullProviderLoader::new().capacity(Capacity::new(live_count as usize + 3)))
+                .unwrap();
+            for offset in 0..3 {
+                let external = live_count + offset;
+                let internal = saved_count + offset;
+                let vector = [external as f32 + 1.0];
+                provider
+                    .set_element(&Context, &external, &vector[..])
+                    .await
+                    .unwrap();
+                assert_eq!(provider.mapping.to_internal(&external), Some(internal));
+                assert_eq!(&*provider.representation.get(internal).unwrap(), &vector);
+            }
+            for id in 0..saved_count {
+                assert_eq!(&*provider.representation.get(id).unwrap(), &[0.0]);
+            }
+        }
     }
 
     #[test]

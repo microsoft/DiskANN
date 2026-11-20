@@ -125,7 +125,7 @@ In this sketch, `load_object` is an internal loader method that dispatches on th
 
 ### Saved ID Layout
 
-Let `F` be the frozen-point count, `N` the live-node count, and `C` the requested writable capacity, with `C >= N`. As in the current `Full` layout, frozen points come first:
+Let `F` be the frozen-point range length, `N` the live-node count, and `C` the requested writable capacity, with `C >= N`. The in-memory frozen range may be relocated with `locate_start_point_ids_at`; saving remaps it to the prefix `[0, F)`:
 
 | Kind | Saved IDs | Restored IDs |
 |---|---|---|
@@ -139,7 +139,9 @@ Increasing capacity only adds empty slots, so we don't need to move any graph ID
 
 The save path for in-mem 2.0 is a little more involved because the live ID space can contain 'holes' from deletions. So, on `Save`, live nodes must be compacted (**writes must be paused here**): 
 
-1. Check that live slots and the ID map agree, keep frozen IDs and assign live nodes, in their current ID order, to `[F, F + N)`. This creates a temporary map from `old ID -> new ID`.
-2. Write IDs, vectors, and graph rows using that same mapping, including frozen neighbor lists. Process the nbr list in a streaming manner, and update edge targets to use new IDs.
+After deletions, run `DiskANNIndex::consolidate_vector` on live nodes and frozen start points before saving. Saving rejects any edge from a retained row to an omitted slot instead of silently dropping it: deleted rows can contain the replacement neighbors needed to preserve paths to live nodes, and cannot be recovered after loading.
+
+1. Check that live slots and the ID map agree and that every retained edge targets a saved node. Remap the actual frozen range, in its current ID order, to `[0, F)`, then assign live nodes outside that range, in their current ID order, to `[F, F + N)`. This creates a temporary map from `old ID -> new ID`.
+2. Write vectors and graph rows in saved-ID order, frozen points first, and external IDs in the same order as the live rows. Include frozen neighbor lists, process the nbr list in a streaming manner, and update all edge targets using the same mapping.
 
 `Save` will not persist capacity.
