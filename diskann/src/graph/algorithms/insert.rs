@@ -96,6 +96,7 @@ where
         prune
             .borrow_mut()
             .neighbors()
+            .borrow_mut()
             .set_neighbors(id, &new_neighbors)
             .await?;
 
@@ -267,6 +268,7 @@ where
         let mut adj_list = AdjacencyList::with_capacity(config.max_degree().get());
         accessor
             .neighbors()
+            .borrow_mut()
             .get_neighbors(source, adj_list.as_empty())
             .await?;
 
@@ -295,10 +297,11 @@ where
             if did_remove {
                 accessor
                     .neighbors()
+                    .borrow_mut()
                     .set_neighbors(source, &adj_list)
                     .await?;
             } else if let Some(edges) = adj_list.last(num_new_edges) {
-                accessor.neighbors().append_vector(source, edges).await?;
+                accessor.neighbors().borrow_mut().append_vector(source, edges).await?;
             }
         } else {
             // During back-edge insertion, we are working with a limited number
@@ -321,6 +324,7 @@ where
 
             accessor
                 .neighbors()
+                .borrow_mut()
                 .set_neighbors(source, &scratch.neighbors)
                 .await?;
         }

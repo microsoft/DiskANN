@@ -1470,7 +1470,7 @@ impl glue::PruneAccessor for PruneAccessor<'_> {
         Ok((view, self.distance))
     }
 
-    fn neighbors(&mut self) -> Self::Neighbors<'_> {
+    fn neighbors(&mut self) -> impl BorrowMut<Self::Neighbors<'_>> + Send {
         NeighborAccessor::new(self.provider)
     }
 }

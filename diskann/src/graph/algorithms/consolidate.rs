@@ -160,6 +160,7 @@ impl<I> Workspace<I> {
         prune_accessor
             .borrow_mut()
             .neighbors()
+            .borrow_mut()
             .set_neighbors(id, update)
             .await?;
         Ok(ConsolidateKind::Complete)

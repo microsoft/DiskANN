@@ -3,17 +3,11 @@
  * Licensed under the MIT license.
  */
 
-use std::{collections::VecDeque};
+use std::collections::VecDeque;
 
 use hashbrown::HashSet;
 
-use crate::{
-    ANNResult,
-    graph::{
-        AdjacencyList,
-    },
-    provider::NeighborAccessor,
-};
+use crate::{ANNResult, graph::AdjacencyList, provider::NeighborAccessor};
 
 pub async fn reachable_from<A>(accessor: &mut A, start: &[A::Id]) -> ANNResult<usize>
 where

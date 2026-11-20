@@ -20,15 +20,13 @@ mod poll;
 mod prefetch;
 mod tag;
 
-pub(crate) use poll::poll;
-
 pub mod index;
 
-pub mod provider;
+// pub mod provider;
 pub mod repr;
 pub mod store;
 
-pub use provider::{Context, Provider, Strategy};
+// pub use provider::{Context, Provider, Strategy};
 
 #[cfg(test)]
 mod test;

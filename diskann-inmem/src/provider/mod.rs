@@ -271,106 +271,87 @@ where
 //     }
 // }
 
-///////////////////
-// Data Provider //
-///////////////////
-
-/// A zero-sized [`diskann::provider::ExecutionContext`] for [`Provider`].
-#[derive(Debug, Clone, Default)]
-pub struct Context;
-
-impl diskann::provider::ExecutionContext for Context {}
-
-impl<T, M> diskann::provider::DataProvider for Provider<T, M>
-where
-    T: Send + Sync + 'static,
-    M: Id,
-{
-    type Context = Context;
-    type InternalId = u32;
-    type ExternalId = M;
-    type Error = ANNError;
-    type Guard = diskann::provider::NoopGuard<u32>;
-
-    fn to_internal_id(
-        &self,
-        _context: &Self::Context,
-        gid: &M,
-    ) -> Result<Self::InternalId, Self::Error> {
-        match self.mapping.to_internal(gid) {
-            Some(id) => Ok(id),
-            None => Err(ANNError::message("no mapping")),
-        }
-    }
-}
-
-// TODO: The element-status checks here are profoundly approximate because we try to avoid
-// any kind of EBR registration.
+// ///////////////////
+// // Data Provider //
+// ///////////////////
 //
-// `diskann` has plans to move deletion checks behind an accessor trait, which will help
-// with this situation.
-impl<R, M> diskann::provider::Delete for Provider<R, M>
-where
-    R: repr::Representation,
-    M: Id,
-{
-    async fn delete(&self, _context: &Context, gid: &M) -> ANNResult<()> {
-        // This guarantees that we have a valid mapping, but defers the actual deletion until
-        // we know it's also safe to retire the internal slot.
-        //
-        // This ensures both either succeed or are aborted.
-        let entry = match self.mapping.occupied_entry(gid.clone()) {
-            None => {
-                return Err(ANNError::message("id already deleted"));
-            }
-            Some(e) => e,
-        };
+// /// A zero-sized [`diskann::provider::ExecutionContext`] for [`Provider`].
+// #[derive(Debug, Clone, Default)]
+// pub struct Context;
+//
+// impl diskann::provider::ExecutionContext for Context {}
+//
+// impl<T, M> diskann::provider::DataProvider for Provider<T, M>
+// where
+//     T: Send + Sync + 'static,
+//     M: Id,
+// {
+//     type Context = Context;
+//     type InternalId = u32;
+//     type ExternalId = M;
+//     type Error = ANNError;
+//     type Guard = diskann::provider::NoopGuard<u32>;
+//
+//     fn to_internal_id(
+//         &self,
+//         _context: &Self::Context,
+//         gid: &M,
+//     ) -> Result<Self::InternalId, Self::Error> {
+//         match self.mapping.to_internal(gid) {
+//             Some(id) => Ok(id),
+//             None => Err(ANNError::message("no mapping")),
+//         }
+//     }
+// }
 
-        // An early return here will cause `entry` to be dropped, which will *not* cause
-        // the delete to commit.
-        <R as repr::Representation>::retire(&self.representation, entry.internal())?;
+// // TODO: The element-status checks here are profoundly approximate because we try to avoid
+// // any kind of EBR registration.
+// //
+// // `diskann` has plans to move deletion checks behind an accessor trait, which will help
+// // with this situation.
+// impl<R, M> diskann::provider::Delete for Provider<R, M>
+// where
+//     R: repr::Representation,
+//     M: Id,
+// {
+//     async fn delete(&self, _context: &Context, gid: &M) -> ANNResult<()> {
+//     }
+//
+//     async fn release(&self, _context: &Context, _id: Self::InternalId) -> ANNResult<()> {
+//         Ok(())
+//     }
+//
+//     async fn status_by_internal_id(
+//         &self,
+//         _context: &Context,
+//         id: u32,
+//     ) -> ANNResult<diskann::provider::ElementStatus> {
+//         match <R as repr::Representation>::is_readable(&self.representation, id) {
+//             Some(true) => Ok(diskann::provider::ElementStatus::Valid),
+//             Some(false) => Ok(diskann::provider::ElementStatus::Deleted),
+//             None => Err(ANNError::message("accessed invalid internal ID")),
+//         }
+//     }
+//
+//     async fn status_by_external_id(
+//         &self,
+//         _context: &Context,
+//         gid: &M,
+//     ) -> ANNResult<diskann::provider::ElementStatus> {
+//         if self.mapping.contains_external(gid) {
+//             Ok(diskann::provider::ElementStatus::Valid)
+//         } else {
+//             Ok(diskann::provider::ElementStatus::Deleted)
+//         }
+//     }
+// }
 
-        // Successfully retired the internal slot. We can safely release the ID mapping.
-        entry.delete();
-
-        Ok(())
-    }
-
-    async fn release(&self, _context: &Context, _id: Self::InternalId) -> ANNResult<()> {
-        Ok(())
-    }
-
-    async fn status_by_internal_id(
-        &self,
-        _context: &Context,
-        id: u32,
-    ) -> ANNResult<diskann::provider::ElementStatus> {
-        match <R as repr::Representation>::is_readable(&self.representation, id) {
-            Some(true) => Ok(diskann::provider::ElementStatus::Valid),
-            Some(false) => Ok(diskann::provider::ElementStatus::Deleted),
-            None => Err(ANNError::message("accessed invalid internal ID")),
-        }
-    }
-
-    async fn status_by_external_id(
-        &self,
-        _context: &Context,
-        gid: &M,
-    ) -> ANNResult<diskann::provider::ElementStatus> {
-        if self.mapping.contains_external(gid) {
-            Ok(diskann::provider::ElementStatus::Valid)
-        } else {
-            Ok(diskann::provider::ElementStatus::Deleted)
-        }
-    }
-}
-
-fn ready<F, R>(f: F) -> std::future::Ready<R>
-where
-    F: FnOnce() -> R,
-{
-    std::future::ready(f())
-}
+// fn ready<F, R>(f: F) -> std::future::Ready<R>
+// where
+//     F: FnOnce() -> R,
+// {
+//     std::future::ready(f())
+// }
 
 impl<T, R, M> diskann::provider::SetElement<T> for Provider<R, M>
 where

@@ -825,7 +825,7 @@ pub trait PruneAccessor: HasId + Send + Sync {
     ///
     /// If `Self` implements [`provider::NeighborAccessorMut`], then [`provider::Neighbors`] can be
     /// used to wrap `&mut self`.
-    fn neighbors(&mut self) -> Self::Neighbors<'_>;
+    fn neighbors(&mut self) -> impl std::borrow::BorrowMut<Self::Neighbors<'_>> + Send;
 
     /// Make the data elements for items in `itr` available in the returned [`Self::View`] and
     /// provide a means of computing distance between elements in the view.
