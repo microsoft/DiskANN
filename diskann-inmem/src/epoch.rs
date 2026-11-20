@@ -418,10 +418,6 @@ impl GuardSlot {
     /// We abort if we overflow this reference count, which can only happen if a thread is
     /// creating shared references and [`std::mem::forget`]ting them. In the words of the
     /// standard library, we don't care to support such degenerate programs.
-    #[cfg_attr(
-        not(any(feature = "quantization", test)),
-        expect(dead_code, reason = "this is used when features are enabled")
-    )]
     const MAX_REFCOUNT: usize = (isize::MAX) as usize;
 }
 
@@ -1499,7 +1495,6 @@ impl<'a> WriteGuard<'a> {
     ///
     /// The returned [`ReadGuard`] will still be classified internally as a writer and will
     /// thus delay acquisition of a [`WriterExclusionGuard`] while alive.
-    #[cfg(test)]
     pub(crate) fn read_guard(&self) -> &ReadGuard<'a> {
         &self.inner
     }

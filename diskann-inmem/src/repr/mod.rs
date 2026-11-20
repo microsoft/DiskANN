@@ -144,6 +144,10 @@ impl<'a> WriteGuard<'a> {
         Self { guard }
     }
 
+    pub(crate) fn as_read_guard(&self) -> ReadGuard<'a> {
+        ReadGuard::new(self.guard.read_guard().share())
+    }
+
     pub(crate) fn into_inner(self) -> epoch::WriteGuard<'a> {
         self.guard
     }
@@ -200,7 +204,7 @@ pub trait Search: Representation {
         provider: &'a (dyn std::any::Any + Send + Sync),
         guard: Option<ReadGuard<'a>>,
         counters: LocalCounters<'a>,
-    ) -> ANNResult<crate::provider::SearchAccessor<'a>>;
+    ) -> ANNResult<crate::index::accessors::Search<'a>>;
 }
 
 /// An insert-specific specialization of [`Search`].
@@ -218,7 +222,7 @@ pub trait Insert: Search + for<'a> Set<Self::Query<'a>> {
         provider: &'a (dyn std::any::Any + Send + Sync),
         guard: Option<ReadGuard<'a>>,
         counters: LocalCounters<'a>,
-    ) -> ANNResult<crate::provider::SearchAccessor<'a>> {
+    ) -> ANNResult<crate::index::accessors::Search<'a>> {
         self.search_accessor(query, provider, guard, counters)
     }
 
@@ -226,7 +230,7 @@ pub trait Insert: Search + for<'a> Set<Self::Query<'a>> {
     fn prune_accessor<'a>(
         &'a self,
         counters: LocalCounters<'a>,
-    ) -> ANNResult<crate::provider::PruneAccessor<'a>>;
+    ) -> ANNResult<crate::index::accessors::Prune<'a>>;
 }
 
 //------------------//

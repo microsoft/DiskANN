@@ -228,6 +228,7 @@ impl OneHop {
             .prune_accessor()
             .borrow_mut()
             .neighbors()
+            .borrow_mut()
             .get_neighbors(id, scratch.out_neighbors.as_empty())
             .await?;
 
@@ -242,7 +243,7 @@ impl OneHop {
         keep_items_referencing(
             &mut scratch.in_neighbors,
             id,
-            &mut accessor.prune_accessor().borrow_mut().neighbors(),
+            accessor.prune_accessor().borrow_mut().neighbors().borrow_mut(),
             temp,
         )
         .await?;
@@ -301,6 +302,7 @@ impl TwoHopAndOneHop {
             .prune_accessor()
             .borrow_mut()
             .neighbors()
+            .borrow_mut()
             .get_neighbors(id, scratch.out_neighbors.as_empty())
             .await?;
 
@@ -318,7 +320,7 @@ impl TwoHopAndOneHop {
             let mut neighbors = prune.borrow_mut().neighbors();
             for neighbor in scratch.out_neighbors.iter() {
                 set.insert(*neighbor);
-                neighbors.get_neighbors(*neighbor, temp.as_empty()).await?;
+                neighbors.borrow_mut().get_neighbors(*neighbor, temp.as_empty()).await?;
                 set.extend(temp.iter().copied());
 
                 if temp.contains(id) {
@@ -401,6 +403,7 @@ impl VisitedAndTopK {
             .prune_accessor()
             .borrow_mut()
             .neighbors()
+            .borrow_mut()
             .get_neighbors(id, scratch.out_neighbors.as_empty())
             .await?;
 
@@ -419,7 +422,7 @@ impl VisitedAndTopK {
         keep_items_referencing(
             &mut scratch.in_neighbors,
             id,
-            &mut prune.borrow_mut().neighbors(),
+            prune.borrow_mut().neighbors().borrow_mut(),
             &mut AdjacencyList::with_capacity(config.max_degree().get()),
         )
         .await?;
@@ -582,7 +585,7 @@ where
         .await?;
     }
 
-    prune.neighbors().clear(id).await?;
+    prune.neighbors().borrow_mut().clear(id).await?;
     Ok(())
 }
 

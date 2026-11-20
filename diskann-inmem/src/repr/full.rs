@@ -101,13 +101,13 @@ pub trait FullPrecision: bytemuck::Pod + std::fmt::Debug + Send + Sync {
         provider: &'a (dyn std::any::Any + Send + Sync),
         guard: Option<repr::ReadGuard<'a>>,
         counters: LocalCounters<'a>,
-    ) -> ANNResult<crate::provider::SearchAccessor<'a>>;
+    ) -> ANNResult<crate::index::accessors::Search<'a>>;
 
     #[doc(hidden)]
     fn __prune_accessor<'a>(
         representation: &'a Full<Self>,
         counters: LocalCounters<'a>,
-    ) -> ANNResult<crate::provider::PruneAccessor<'a>>;
+    ) -> ANNResult<crate::index::accessors::Prune<'a>>;
 }
 
 /// A configuration struct for [`Full`].
@@ -510,7 +510,7 @@ where
         provider: &'a (dyn std::any::Any + Send + Sync),
         guard: Option<repr::ReadGuard<'a>>,
         counters: LocalCounters<'a>,
-    ) -> ANNResult<crate::provider::SearchAccessor<'a>> {
+    ) -> ANNResult<crate::index::accessors::Search<'a>> {
         T::__search_accessor(self, query, provider, guard, counters)
     }
 }
@@ -522,7 +522,7 @@ where
     fn prune_accessor<'a>(
         &'a self,
         counters: LocalCounters<'a>,
-    ) -> ANNResult<crate::provider::PruneAccessor<'a>> {
+    ) -> ANNResult<crate::index::accessors::Prune<'a>> {
         T::__prune_accessor(self, counters)
     }
 }
@@ -924,13 +924,13 @@ macro_rules! impl_full_precision {
                 provider: &'a (dyn std::any::Any + Send + Sync),
                 guard: Option<repr::ReadGuard<'a>>,
                 counters: LocalCounters<'a>,
-            ) -> ANNResult<crate::provider::SearchAccessor<'a>> {
+            ) -> ANNResult<crate::index::accessors::Search<'a>> {
                 let expand_beam = <$T>::make_expand_beam(
                     representation,
                     query,
                     guard.map(repr::ReadGuard::into_inner),
                 )?;
-                Ok(crate::provider::SearchAccessor::new(
+                Ok(crate::index::accessors::Search::new(
                     representation.store.neighbors(),
                     expand_beam,
                     None,
@@ -943,9 +943,9 @@ macro_rules! impl_full_precision {
             fn __prune_accessor<'a>(
                 representation: &'a Full<Self>,
                 counters: LocalCounters<'a>,
-            ) -> ANNResult<crate::provider::PruneAccessor<'a>> {
+            ) -> ANNResult<crate::index::accessors::Prune<'a>> {
                 let prune = <$T>::make_prune(representation)?;
-                Ok(crate::provider::PruneAccessor::new(
+                Ok(crate::index::accessors::Prune::new(
                     prune,
                     representation.store.neighbors(),
                     counters,

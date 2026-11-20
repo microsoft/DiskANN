@@ -709,6 +709,7 @@ where
         accessor
             .borrow_mut()
             .neighbors()
+            .borrow_mut()
             .set_neighbors(*edge.source(), edge.destinations())
             .await?;
     }

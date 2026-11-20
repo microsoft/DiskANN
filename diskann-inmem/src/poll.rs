@@ -18,6 +18,14 @@ where
     Poll::new(future).poll()
 }
 
+/// Create a [`std::future::Ready`] with the results of `f`.
+pub(crate) fn ready<F, R>(f: F) -> std::future::Ready<R>
+where
+    F: FnOnce() -> R,
+{
+    std::future::ready(f())
+}
+
 /// A wrapper for running a synchronous [`std::future::Future`].
 #[derive(Debug)]
 struct Poll<F>(F);
