@@ -197,6 +197,11 @@ where
         ResizeGuard(self)
     }
 
+    /// Clear the adjacency list and return a proof that the adjacency list is empty.
+    pub fn as_empty(&mut self) -> Empty<'_, I> {
+        Empty::new(self)
+    }
+
     //-----------//
     // Untrusted //
     //-----------//
@@ -427,6 +432,33 @@ where
 {
     fn drop(&mut self) {
         self.0.clear()
+    }
+}
+
+///////////
+// Empty //
+///////////
+
+/// A marker for API boundaries that expect an empty [`AdjacencyList`].
+///
+/// Lists retrieved from [`Self::take`] are guaranteed to have length 0.
+///
+/// Clearing happens upon construction, so simply creating and discarding an `Empty` is
+/// sufficient to clear an adjacency list.
+#[derive(Debug)]
+#[repr(transparent)]
+pub struct Empty<'a, I>(&'a mut AdjacencyList<I>);
+
+impl<'a, I> Empty<'a, I> {
+    /// Construct a new [`Empty`] after first clearing `list`.
+    pub fn new(list: &'a mut AdjacencyList<I>) -> Self {
+        list.clear();
+        Self(list)
+    }
+
+    /// Retrieve the empty [`AdjacencyList`].
+    pub fn take(self) -> &'a mut AdjacencyList<I> {
+        self.0
     }
 }
 

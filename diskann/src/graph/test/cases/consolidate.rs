@@ -17,8 +17,8 @@ use diskann_vector::distance::Metric;
 use crate::{
     graph::{
         self, AdjacencyList,
-        test::provider::{self as test_provider, Provider, Strategy},
         algorithms::consolidate::ConsolidateKind,
+        test::provider::{self as test_provider, Provider, Strategy},
     },
     provider::Delete,
     provider::NeighborAccessor,
@@ -119,9 +119,7 @@ fn flaky_consolidate_returns_failed_retrieval() {
         [0],  // transient ids
     );
 
-    let result = rt
-        .block_on(index.consolidate(0, &flaky_strategy))
-        .unwrap();
+    let result = rt.block_on(index.consolidate(0, &flaky_strategy)).unwrap();
 
     assert_eq!(
         result,
@@ -144,9 +142,7 @@ fn consolidate_deleted_vertex_returns_deleted() {
     // Delete vertex 3, then try to consolidate it.
     index.soft_delete(3).unwrap();
 
-    let result = rt
-        .block_on(index.consolidate(3, &strategy))
-        .unwrap();
+    let result = rt.block_on(index.consolidate(3, &strategy)).unwrap();
 
     assert_eq!(result, ConsolidateKind::Deleted);
 }
@@ -163,9 +159,7 @@ fn consolidate_nothing_to_do_returns_complete() {
     let strategy = Strategy::new();
 
     // No deletions, all degrees within limit → nothing to do.
-    let result = rt
-        .block_on(index.consolidate(0, &strategy))
-        .unwrap();
+    let result = rt.block_on(index.consolidate(0, &strategy)).unwrap();
 
     assert_eq!(result, ConsolidateKind::Complete);
 }
@@ -193,9 +187,7 @@ fn consolidate_repairs_after_deletion() {
 
     // Consolidate all vertices.
     for id in 0..5u32 {
-        let result = rt
-            .block_on(index.consolidate(id, &strategy))
-            .unwrap();
+        let result = rt.block_on(index.consolidate(id, &strategy)).unwrap();
 
         if id == 3 {
             assert_eq!(result, ConsolidateKind::Deleted);
@@ -230,14 +222,12 @@ fn consolidate_prune_only_no_deleted_neighbors() {
     // Verify start node exceeds pruned_degree before consolidation.
     assert_neighbors(&index, 4, &[0, 1, 2, 3]);
 
-    let result = rt
-        .block_on(index.consolidate(4, &strategy))
-        .unwrap();
+    let result = rt.block_on(index.consolidate(4, &strategy)).unwrap();
     assert_eq!(result, ConsolidateKind::Complete);
 
     // After consolidation, start node should have degree <= 2.
     let mut list = AdjacencyList::new();
-    rt.block_on(index.neighbors().get_neighbors(4, &mut list))
+    rt.block_on(index.neighbors().get_neighbors(4, list.as_empty()))
         .unwrap();
     assert!(
         list.len() <= 2,

@@ -10,7 +10,9 @@ use diskann_vector::DistanceFunction;
 use hashbrown::{HashMap, HashSet};
 
 use crate::graph::{
-    AdjacencyList, Config, algorithms,
+    AdjacencyList, Config,
+    adjacencylist::Empty,
+    algorithms,
     glue::{PruneAccessor, SearchAccessor},
     internal::{BackedgeBuffer, prune},
     search::record::NoopSearchRecord,
@@ -203,7 +205,7 @@ impl OneHop {
             .prune_accessor()
             .borrow_mut()
             .neighbors()
-            .get_neighbors(id, &mut scratch.out_neighbors)
+            .get_neighbors(id, scratch.out_neighbors.as_empty())
             .await?;
 
         accessor.keep_live(&mut scratch.out_neighbors);
@@ -277,7 +279,7 @@ impl TwoHop {
             .prune_accessor()
             .borrow_mut()
             .neighbors()
-            .get_neighbors(id, &mut scratch.out_neighbors)
+            .get_neighbors(id, scratch.out_neighbors.as_empty())
             .await?;
 
         accessor.keep_live(&mut scratch.out_neighbors);
@@ -294,7 +296,7 @@ impl TwoHop {
             let mut neighbors = prune.borrow_mut().neighbors();
             for neighbor in scratch.out_neighbors.iter() {
                 set.insert(*neighbor);
-                neighbors.get_neighbors(*neighbor, &mut temp).await?;
+                neighbors.get_neighbors(*neighbor, temp.as_empty()).await?;
                 set.extend(temp.iter().copied());
 
                 if temp.contains(id) {
@@ -384,7 +386,7 @@ impl VisitedAndTopK {
             .prune_accessor()
             .borrow_mut()
             .neighbors()
-            .get_neighbors(id, &mut scratch.out_neighbors)
+            .get_neighbors(id, scratch.out_neighbors.as_empty())
             .await?;
 
         if !accessor.hint_deleted_already_excluded() {
@@ -574,7 +576,7 @@ where
 {
     let mut i = 0;
     while let Some(candidate) = candidates.get(i).copied() {
-        accessor.get_neighbors(candidate, buf).await?;
+        accessor.get_neighbors(candidate, buf.as_empty()).await?;
 
         if buf.contains(id) {
             // Keep this item, move the index.
