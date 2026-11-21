@@ -10,8 +10,8 @@ mod tests {
     use diskann_vector::distance::{Cosine, Metric, SquaredL2};
 
     use crate::{
-        Overflow, VectorQuantType, create_index, drop_index, garnet::Context, insert,
-        provider::DEFAULT_START_POINT_ID, search_vector, test_utils::Store,
+        Overflow, VectorQuantType, create_index_with_adjacency_codec, drop_index, garnet::Context,
+        insert, provider::DEFAULT_START_POINT_ID, search_vector, test_utils::Store,
     };
 
     /// Helper to insert a vector with a string external ID and FP32 data.
@@ -162,7 +162,7 @@ mod tests {
         let l_build = 100;
         let max_degree = 32;
         let index_ptr = unsafe {
-            create_index(
+            create_index_with_adjacency_codec(
                 ctx.get(),
                 dimensions,
                 reduce_dimensions,
@@ -177,6 +177,7 @@ mod tests {
                 callbacks.rmw_callback(),
                 callbacks.filter_callback(),
                 callbacks.log_callback(),
+                0,
                 &mut quant_needed,
             )
         };

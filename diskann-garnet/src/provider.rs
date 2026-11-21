@@ -54,9 +54,10 @@ use tokio::sync::watch;
 
 use crate::{
     SearchResults, VectorQuantType,
+    adjacency::AdjacencyCodec,
     alloc::AlignToEight,
     fsm::{FreeSpaceMap, FsmError},
-    garnet::{Callbacks, Context, GarnetError, GarnetId, LengthPrefixedId, Term},
+    garnet::{Callbacks, Context, GarnetError, GarnetId, LengthPrefixedId, SizedRmw, Term},
     quantization::{
         self, DynDistanceComputer, DynQueryComputer, GarnetQuantizer, GarnetQuantizerError,
     },
@@ -155,6 +156,45 @@ impl AsPooled<Undef> for AdjList {
     fn modify(&mut self, _args: Undef) {
         // AdjList is already automatically resizable, no need to do anything here.
     }
+}
+
+#[derive(Clone, Copy)]
+struct AdjacencyScratchSize {
+    degree: usize,
+    encoded: usize,
+}
+
+struct AdjacencyScratch {
+    ids: Vec<u64>,
+    encoded: Vec<u8>,
+    widths: Vec<u8>,
+}
+
+impl AsPooled<AdjacencyScratchSize> for AdjacencyScratch {
+    fn create(size: AdjacencyScratchSize) -> Self {
+        Self {
+            ids: vec![0; size.degree],
+            encoded: vec![0; size.encoded],
+            widths: vec![0; size.degree],
+        }
+    }
+
+    fn modify(&mut self, _: AdjacencyScratchSize) {}
+}
+
+fn read_neighbors(
+    callbacks: &Callbacks,
+    context: &Context,
+    iid: u64,
+    max_degree: usize,
+    hint: usize,
+    output: &mut [u64],
+) -> Option<usize> {
+    let mut count = None;
+    callbacks.read_bytes_iid(&context.term(Term::Neighbors), iid, hint, |bytes| {
+        count = AdjacencyCodec::decode(bytes, max_degree, output).ok();
+    });
+    count
 }
 
 #[derive(Debug, Error)]
@@ -303,6 +343,10 @@ pub(crate) struct GarnetProvider<T: VectorRepr> {
     /// Note: Unlike DiskANN, this is the true maximum. Neighbors can never
     /// exceed this degree.
     max_degree: usize,
+    adjacency_codec: AdjacencyCodec,
+    adjacency_scratch: ObjectPool<AdjacencyScratch>,
+    adjacency_scratch_size: AdjacencyScratchSize,
+    start_point_neighbors_lock: Mutex<()>,
     /// The internal ID the start point will use
     start_point_id: u64,
     /// Garnet storage engine callbacks
@@ -349,6 +393,7 @@ pub(crate) struct GarnetProvider<T: VectorRepr> {
 }
 
 impl<T: VectorRepr> GarnetProvider<T> {
+    #[cfg(test)]
     pub(crate) fn new(
         dim: usize,
         quant_type: VectorQuantType,
@@ -358,6 +403,36 @@ impl<T: VectorRepr> GarnetProvider<T> {
         callbacks: Callbacks,
         context: &Context,
     ) -> Result<Self, GarnetProviderError> {
+        Self::new_with_codec(
+            dim,
+            quant_type,
+            metric_type,
+            max_degree,
+            start_point_id,
+            callbacks,
+            context,
+            AdjacencyCodec::Identity,
+        )
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Mirrors native index configuration"
+    )]
+    pub(crate) fn new_with_codec(
+        dim: usize,
+        quant_type: VectorQuantType,
+        metric_type: Metric,
+        max_degree: usize,
+        start_point_id: u64,
+        callbacks: Callbacks,
+        context: &Context,
+        adjacency_codec: AdjacencyCodec,
+    ) -> Result<Self, GarnetProviderError> {
+        let adjacency_scratch_size = AdjacencyScratchSize {
+            degree: max_degree,
+            encoded: adjacency_codec.max_encoded_len(max_degree),
+        };
         let parallelism = std::thread::available_parallelism().unwrap().get() * 2;
         let id_buffer_pool =
             ObjectPool::new(Undef::new(max_degree + 1), parallelism, Some(parallelism));
@@ -400,22 +475,18 @@ impl<T: VectorRepr> GarnetProvider<T> {
         if matches!(saved_import_status, None | Some(ImportStatus::Disabled))
             && callbacks.read_single_iid(&context.term(Term::Vector), start_point_id, &mut v)
         {
-            let mut neighbors = vec![0u64; max_degree + 1];
-            if !callbacks.read_single_iid(
-                &context.term(Term::Neighbors),
+            let mut neighbors = vec![0u64; max_degree];
+            let len = read_neighbors(
+                &callbacks,
+                context,
                 start_point_id,
+                max_degree,
+                adjacency_scratch_size.encoded,
                 &mut neighbors,
-            ) {
-                return Err(GarnetError::Read.into());
-            }
-
+            )
+            .ok_or(GarnetError::Read)?;
             start_point_cache.insert(start_point_id, v);
-
-            let len = neighbors[max_degree];
-            if len > max_degree as u64 {
-                return Err(GarnetProviderError::StartPoint);
-            }
-            neighbors.truncate(len as usize);
+            neighbors.truncate(len);
             neighbor_cache.insert(start_point_id, neighbors);
         }
 
@@ -583,6 +654,14 @@ impl<T: VectorRepr> GarnetProvider<T> {
             dim,
             metric_type,
             max_degree,
+            adjacency_codec,
+            adjacency_scratch: ObjectPool::new(
+                adjacency_scratch_size,
+                parallelism,
+                Some(parallelism),
+            ),
+            adjacency_scratch_size,
+            start_point_neighbors_lock: Mutex::new(()),
             start_point_id,
             callbacks,
             pending_external_ids: DashMap::with_hasher(foldhash::fast::RandomState::default()),
@@ -667,20 +746,17 @@ impl<T: VectorRepr> GarnetProvider<T> {
         point: &[T],
     ) -> Result<(), GarnetProviderError> {
         let _guard = self.fsm.existing_id(self.start_point_id);
+        let _neighbors_lock = self.start_point_neighbors_lock.lock();
         let mut v = Poly::broadcast(0u8, self.dim * mem::size_of::<T>(), AlignToEight)?;
         if self
             .callbacks
             .read_single_iid(&context.term(Term::Vector), self.start_point_id, &mut v)
         {
             // Garnet already has a start point, so use that instead of `point`
-            let mut neighbors = vec![0u64; self.max_degree + 1];
-            if !self.callbacks.read_single_iid(
-                &context.term(Term::Neighbors),
-                self.start_point_id,
-                &mut neighbors,
-            ) {
-                return Err(GarnetError::Read.into());
-            }
+            let mut neighbors = vec![0u64; self.max_degree];
+            let len = self
+                .read_stored_neighbors(context, self.start_point_id, &mut neighbors)
+                .ok_or(GarnetError::Read)?;
 
             if self.is_quantized()
                 && let Some(quantizer) = self.quantizer()
@@ -701,15 +777,9 @@ impl<T: VectorRepr> GarnetProvider<T> {
             }
 
             self.start_point_cache.insert(self.start_point_id, v);
-            let len = neighbors[self.max_degree];
-            if len > self.max_degree as u64 {
-                return Err(GarnetProviderError::StartPoint);
-            }
-            neighbors.truncate(len as usize);
+            neighbors.truncate(len);
             self.neighbor_cache.insert(self.start_point_id, neighbors);
         } else {
-            let neighbors = vec![0u64; self.max_degree + 1];
-
             if !self
                 .callbacks
                 .write_iid(&context.term(Term::Vector), self.start_point_id, point)
@@ -741,10 +811,18 @@ impl<T: VectorRepr> GarnetProvider<T> {
                 );
             }
 
+            let mut scratch = self.adjacency_scratch.get_ref(self.adjacency_scratch_size);
+            let AdjacencyScratch {
+                encoded, widths, ..
+            } = &mut *scratch;
+            let count = self
+                .adjacency_codec
+                .encode(&mut [], self.max_degree, encoded, widths)
+                .map_err(|_| GarnetError::Write)?;
             if !self.callbacks.write_iid(
                 &context.term(Term::Neighbors),
                 self.start_point_id,
-                &neighbors,
+                &encoded[..count],
             ) {
                 return Err(GarnetError::Write.into());
             }
@@ -1176,10 +1254,7 @@ impl<T: VectorRepr> GarnetProvider<T> {
             if self.fsm.total_used() != 0
                 || [
                     (Term::Vector, self.dim * mem::size_of::<T>()),
-                    (
-                        Term::Neighbors,
-                        (self.max_degree + 1) * mem::size_of::<u64>(),
-                    ),
+                    (Term::Neighbors, 0),
                     (Term::Quantized, quantizer.bytes()),
                 ]
                 .into_iter()
@@ -1306,6 +1381,8 @@ impl<T: VectorRepr> GarnetProvider<T> {
                         return false;
                     }
 
+                    let mut scratch = None;
+                    let mut stored_value = value;
                     let value_ok = match term {
                         Term::Vector => value.len() == self.dim * mem::size_of::<T>(),
                         Term::Quantized => match &self.quantizer {
@@ -1313,10 +1390,28 @@ impl<T: VectorRepr> GarnetProvider<T> {
                             None => false,
                         },
                         Term::Neighbors => {
-                            let count_offset = self.max_degree * mem::size_of::<u64>();
-                            value.len() == count_offset + mem::size_of::<u64>()
-                                && bytemuck::pod_read_unaligned::<u64>(&value[count_offset..])
-                                    <= self.max_degree as u64
+                            let scratch = scratch.insert(
+                                self.adjacency_scratch.get_ref(self.adjacency_scratch_size),
+                            );
+                            let AdjacencyScratch {
+                                ids,
+                                encoded,
+                                widths,
+                            } = &mut **scratch;
+                            let Ok(count) = AdjacencyCodec::decode(value, self.max_degree, ids)
+                            else {
+                                return false;
+                            };
+                            let Ok(len) = self.adjacency_codec.encode(
+                                &mut ids[..count],
+                                self.max_degree,
+                                encoded,
+                                widths,
+                            ) else {
+                                return false;
+                            };
+                            stored_value = &encoded[..len];
+                            true
                         }
                         Term::ExtMap => true,
                         Term::Attributes => !value.is_empty(),
@@ -1336,7 +1431,10 @@ impl<T: VectorRepr> GarnetProvider<T> {
                         return false;
                     }
 
-                    if !self.callbacks.write_iid(&context.term(term), iid, value) {
+                    if !self
+                        .callbacks
+                        .write_iid(&context.term(term), iid, stored_value)
+                    {
                         return false;
                     }
 
@@ -1398,6 +1496,7 @@ impl<T: VectorRepr> GarnetProvider<T> {
                 return false;
             };
 
+        let mut neighbors = self.adjacency_scratch.get_ref(self.adjacency_scratch_size);
         let ids = if empty_import { 0..0 } else { start_id..end_id };
         for id in ids {
             if id == self.start_point_id {
@@ -1431,12 +1530,11 @@ impl<T: VectorRepr> GarnetProvider<T> {
                 log_failure(format_args!("missing quantized vector: id={id}"));
                 return false;
             }
-            if !self.callbacks.exists_iid(
-                &context.term(Term::Neighbors),
-                id,
-                (self.max_degree + 1) * mem::size_of::<u64>(),
-            ) {
-                log_failure(format_args!("missing neighbors: id={id}"));
+            if self
+                .read_stored_neighbors(context, id, &mut neighbors.ids)
+                .is_none()
+            {
+                log_failure(format_args!("missing or invalid neighbors: id={id}"));
                 return false;
             }
             let eid = match self
@@ -1458,12 +1556,15 @@ impl<T: VectorRepr> GarnetProvider<T> {
         }
 
         if task_idx == 0 {
+            if self
+                .read_stored_neighbors(context, self.start_point_id, &mut neighbors.ids)
+                .is_none()
+            {
+                log_failure(format_args!("missing or invalid start point neighbors"));
+                return false;
+            }
             for (term, bytes) in [
                 (Term::Vector, self.dim * mem::size_of::<T>()),
-                (
-                    Term::Neighbors,
-                    (self.max_degree + 1) * mem::size_of::<u64>(),
-                ),
                 (Term::Quantized, self.quantizer().map_or(0, |q| q.bytes())),
             ] {
                 if matches!(term, Term::Quantized) && self.quantizer.is_none() {
@@ -1475,11 +1576,7 @@ impl<T: VectorRepr> GarnetProvider<T> {
                     &[LengthPrefixedId::new(self.start_point_id)],
                     bytes,
                     |_, data| {
-                        valid = data.len() == bytes
-                            && (!matches!(term, Term::Neighbors)
-                                || bytemuck::pod_read_unaligned::<u64>(
-                                    &data[bytes - mem::size_of::<u64>()..],
-                                ) <= self.max_degree as u64);
+                        valid = data.len() == bytes;
                     },
                 );
                 if !valid {
@@ -1564,24 +1661,16 @@ impl<T: VectorRepr> GarnetProvider<T> {
         } else {
             None
         };
-        let mut ns = vec![0u64; self.max_degree + 1];
-        if !self.callbacks.read_single_iid(
-            &context.term(Term::Neighbors),
-            self.start_point_id,
-            &mut ns,
-        ) {
+        let _neighbors_lock = self.start_point_neighbors_lock.lock();
+        let mut ns = vec![0u64; self.max_degree];
+        let Some(ns_len) = self.read_stored_neighbors(context, self.start_point_id, &mut ns) else {
             log_failure(format_args!(
                 "start point neighbors read failed: id={}",
                 self.start_point_id
             ));
             return false;
-        }
-        let ns_len = ns[self.max_degree];
-        if ns_len > self.max_degree as u64 {
-            log_failure(format_args!("start point neighbor count exceeds degree"));
-            return false;
-        }
-        ns.truncate(ns_len as usize);
+        };
+        ns.truncate(ns_len);
 
         self.start_point_cache.insert(self.start_point_id, v);
         if let Some(qv) = qv {
@@ -1647,38 +1736,40 @@ impl<T: VectorRepr> GarnetProvider<T> {
         Ok(v)
     }
 
+    fn read_stored_neighbors(
+        &self,
+        context: &Context,
+        iid: u64,
+        output: &mut [u64],
+    ) -> Option<usize> {
+        read_neighbors(
+            &self.callbacks,
+            context,
+            iid,
+            self.max_degree,
+            self.adjacency_scratch_size.encoded,
+            output,
+        )
+    }
+
     fn get_neighbors(
         &self,
         context: &Context,
         iid: u64,
         neighbors: &mut AdjacencyList<u64>,
     ) -> bool {
-        let mut guard = neighbors.resize(self.max_degree + 1);
-
+        let mut guard = neighbors.resize(self.max_degree);
+        let _lock = (iid == self.start_point_id).then(|| self.start_point_neighbors_lock.lock());
         if iid == self.start_point_id
             && let Some(cached) = self.neighbor_cache.get(&iid)
         {
-            guard[0..cached.len()].copy_from_slice(&cached);
+            guard[..cached.len()].copy_from_slice(&cached);
             guard.finish(cached.len());
             return true;
         }
-
-        if !self
-            .callbacks
-            .read_single_iid(&context.term(Term::Neighbors), iid, &mut guard)
-        {
-            guard.finish(0);
-            return false;
-        }
-
-        let len = guard[self.max_degree];
-        if len > self.max_degree as u64 {
-            guard.finish(0);
-            return false;
-        }
-        guard.finish(len as usize);
-
-        true
+        let count = self.read_stored_neighbors(context, iid, &mut guard);
+        guard.finish(count.unwrap_or(0));
+        count.is_some()
     }
 
     fn set_neighbors(
@@ -1686,30 +1777,8 @@ impl<T: VectorRepr> GarnetProvider<T> {
         context: &Context,
         iid: u64,
         neighbors: &[u64],
-        scratch: &mut AdjacencyList<u64>,
     ) -> Result<(), GarnetProviderError> {
-        let mut guard = scratch.resize(self.max_degree + 1);
-        guard[0..neighbors.len()].copy_from_slice(neighbors);
-        guard[self.max_degree] = neighbors.len() as u64;
-
-        // NOTE: We use `rmw_iid` here instead of `write_iid` to guarantee cache coherence.
-        if !self.callbacks.rmw_iid(
-            &context.term(Term::Neighbors),
-            iid,
-            (self.max_degree + 1) * mem::size_of::<u64>(),
-            |data| {
-                data.copy_from_slice(bytemuck::must_cast_slice(&guard));
-                if iid == self.start_point_id {
-                    self.neighbor_cache.insert(iid, neighbors.to_vec());
-                }
-            },
-        ) {
-            return Err(GarnetError::Write.into());
-        }
-
-        guard.finish(0);
-
-        Ok(())
+        self.update_neighbors(context, iid, neighbors, false)
     }
 
     fn append_vector(
@@ -1718,46 +1787,87 @@ impl<T: VectorRepr> GarnetProvider<T> {
         iid: u64,
         neighbors: &[u64],
     ) -> Result<(), GarnetProviderError> {
-        let max_degree = self.max_degree;
-        if !self.callbacks.rmw_iid(
-            &context.term(Term::Neighbors),
-            iid,
-            (max_degree + 1) * mem::size_of::<u64>(),
-            |data| {
-                // Extended Garnet namespaces can leave u64 slots only four-byte aligned.
-                let data: &mut [[u8; 8]] = bytemuck::cast_slice_mut(data);
-                let mut len = u64::from_ne_bytes(data[max_degree]).min(max_degree as u64) as usize;
+        self.update_neighbors(context, iid, neighbors, true)
+    }
 
-                for &nbr in neighbors {
-                    if len == max_degree {
-                        return;
-                    }
-
-                    let bytes = nbr.to_ne_bytes();
-                    let present = match bytemuck::try_cast_slice::<_, u64>(&data[..len]) {
-                        Ok(ids) => u64::contains_simd(ids, nbr),
-                        Err(_) => data[..len].contains(&bytes),
-                    };
-                    if present {
-                        continue;
-                    }
-
-                    data[len] = bytes;
-                    len += 1;
-                    data[max_degree] = (len as u64).to_ne_bytes();
-                }
-
-                if iid == self.start_point_id
-                    && let Some(mut ns) = self.neighbor_cache.get_mut(&iid)
-                {
-                    ns.clear();
-                    ns.extend(data.iter().take(len).map(|id| u64::from_ne_bytes(*id)));
-                }
-            },
-        ) {
-            return Err(GarnetError::Write.into());
+    fn update_neighbors(
+        &self,
+        context: &Context,
+        iid: u64,
+        neighbors: &[u64],
+        append: bool,
+    ) -> Result<(), GarnetProviderError> {
+        let degree = self.max_degree;
+        let mut scratch = self.adjacency_scratch.get_ref(self.adjacency_scratch_size);
+        let AdjacencyScratch {
+            ids,
+            encoded,
+            widths,
+        } = &mut *scratch;
+        let mut count = 0;
+        let mut prepared = 0;
+        let mut changed = true;
+        if !append {
+            count = neighbors.len();
+            ids.get_mut(..count)
+                .ok_or(GarnetError::Write)?
+                .copy_from_slice(neighbors);
+            prepared = self
+                .adjacency_codec
+                .encode(&mut ids[..count], degree, encoded, widths)
+                .map_err(|_| GarnetError::Write)?;
         }
 
+        // Tsavorite may retry after writing to an unpublished destination. Only
+        // publish the cache after successful RMW completion, in writer order.
+        let _lock = (iid == self.start_point_id).then(|| self.start_point_neighbors_lock.lock());
+        if !self
+            .callbacks
+            .rmw_sized_iid(&context.term(Term::Neighbors), iid, |phase| match phase {
+                SizedRmw::Prepare(current) => {
+                    if append {
+                        count = match current {
+                            Some(bytes) => AdjacencyCodec::decode(bytes, degree, ids)
+                                .map_err(|_| GarnetError::Read)?,
+                            None => 0,
+                        };
+                        let previous = count;
+                        for &id in neighbors {
+                            if count == degree {
+                                break;
+                            }
+                            if !u64::contains_simd(&ids[..count], id) {
+                                ids[count] = id;
+                                count += 1;
+                            }
+                        }
+                        changed = current.is_none() || count != previous;
+                        if !changed {
+                            return Ok(None);
+                        }
+                        prepared = self
+                            .adjacency_codec
+                            .encode(&mut ids[..count], degree, encoded, widths)
+                            .map_err(|_| GarnetError::Write)?;
+                    }
+                    Ok(Some(prepared))
+                }
+                SizedRmw::Write(output) => {
+                    output.copy_from_slice(&encoded[..prepared]);
+                    Ok(None)
+                }
+            })
+        {
+            return Err(GarnetError::Write.into());
+        }
+        if changed && iid == self.start_point_id {
+            let mut cached = self
+                .neighbor_cache
+                .entry(iid)
+                .or_insert_with(|| Vec::with_capacity(degree));
+            cached.clear();
+            cached.extend_from_slice(&ids[..count]);
+        }
         Ok(())
     }
 
@@ -2606,7 +2716,6 @@ where
     provider: &'a GarnetProvider<T>,
     context: &'a Context,
     quantized: bool,
-    id_buffer: PooledRef<'a, AdjList>,
     filtered_ids: PooledRef<'a, Vec<LengthPrefixedId>>,
     distance: GarnetDistanceComputer,
     set: workingset::Map<u64, Box<[u8]>>,
@@ -2631,10 +2740,6 @@ where
             )))
         };
 
-        let id_buffer = provider
-            .id_buffer_pool
-            .get_ref(Undef::new(provider.max_degree + 1));
-
         let filtered_ids = provider
             .filtered_ids_pool
             .get_ref(Undef::new(MAX_OCCLUSION_SIZE.get() as usize));
@@ -2649,7 +2754,6 @@ where
             provider,
             context,
             quantized,
-            id_buffer,
             filtered_ids,
             distance,
             set,
@@ -2747,7 +2851,6 @@ where
         DelegateNeighborAccessor {
             provider: self.provider,
             context: self.context,
-            scratch: &mut self.id_buffer,
         }
     }
 }
@@ -2758,7 +2861,6 @@ where
 {
     provider: &'a GarnetProvider<T>,
     context: &'a Context,
-    scratch: &'a mut AdjacencyList<u64>,
 }
 
 impl<T: VectorRepr> HasId for DelegateNeighborAccessor<'_, T> {
@@ -2791,7 +2893,7 @@ impl<T: VectorRepr> NeighborAccessorMut for DelegateNeighborAccessor<'_, T> {
     ) -> impl Future<Output = ANNResult<()>> + Send {
         let result = self
             .provider
-            .set_neighbors(self.context, id, neighbors, self.scratch)
+            .set_neighbors(self.context, id, neighbors)
             .map_err(ANNError::from);
 
         std::future::ready(result)
@@ -3073,10 +3175,7 @@ mod tests {
                 .is_none()
         );
 
-        let mut scratch = AdjacencyList::with_capacity(11);
-        provider
-            .set_neighbors(&ctx, start, &[high, low], &mut scratch)
-            .unwrap();
+        provider.set_neighbors(&ctx, start, &[high, low]).unwrap();
         provider
             .append_vector(&ctx, start, &[high, top, low])
             .unwrap();
@@ -3490,6 +3589,7 @@ mod tests {
         key: *const u8,
         key_len: usize,
         value_len: usize,
+        prepare: Option<crate::garnet::RmwPrepareCallback>,
         callback: RmwDataCallback,
         callback_context: *mut c_void,
     ) -> bool {
@@ -3498,10 +3598,23 @@ mod tests {
             return false;
         }
         let key = unsafe { std::slice::from_raw_parts(key, key_len) };
-        let mut value = state
-            .store
-            .entry(parallel_key(context, key))
-            .or_insert_with(|| vec![0; value_len]);
+        let mut entry = state.store.entry(parallel_key(context, key));
+        let (current, current_len) = match &mut entry {
+            dashmap::mapref::entry::Entry::Occupied(e) => (e.get().as_ptr(), e.get().len()),
+            dashmap::mapref::entry::Entry::Vacant(_) => (std::ptr::null(), 0),
+        };
+        let mut size = value_len;
+        if let Some(prepare) = prepare {
+            match unsafe { prepare(callback_context, current, current_len, &raw mut size) } {
+                0 => return true,
+                1 => {}
+                _ => return false,
+            }
+        }
+        let mut value = entry.or_insert_with(|| vec![0; size]);
+        if prepare.is_some() {
+            value.resize(size, 0);
+        }
         unsafe { callback(callback_context, value.as_mut_ptr(), value.len()) };
         true
     }

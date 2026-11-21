@@ -212,17 +212,29 @@ unsafe extern "C" fn test_rmw(
     id_bytes: *const u8,
     id_len: usize,
     write_len: usize,
+    prepare: Option<crate::garnet::RmwPrepareCallback>,
     cb: RmwDataCallback,
     cb_ctx: *mut c_void,
 ) -> bool {
     let id = unsafe { slice::from_raw_parts(id_bytes, id_len) };
 
     let store = Store::attach();
-    let mut val = if let Some(v) = store.get(ctx, id) {
-        v
-    } else {
-        vec![0u8; write_len]
-    };
+    let current = store.get(ctx, id);
+    let mut size = write_len;
+    if let Some(prepare) = prepare {
+        let (data, len) = current
+            .as_ref()
+            .map_or((std::ptr::null(), 0), |v| (v.as_ptr(), v.len()));
+        match unsafe { prepare(cb_ctx, data, len, &raw mut size) } {
+            0 => return true,
+            1 => {}
+            _ => return false,
+        }
+    }
+    let mut val = current.unwrap_or_default();
+    if prepare.is_some() || val.is_empty() {
+        val.resize(size, 0);
+    }
 
     unsafe {
         cb(cb_ctx, val.as_mut_ptr(), val.len());
@@ -298,13 +310,6 @@ mod tests {
         assert_eq!(results.get(&0), Some(b"0000".to_vec()).as_ref());
         assert_eq!(results.get(&1), Some(b"2222".to_vec()).as_ref());
         assert_eq!(results.get(&2), None);
-
-        // RMW should work.
-        assert!(callbacks.rmw_iid(&ctx.term(Term::Vector), 0, 4, |data| {
-            data.copy_from_slice(b"0rmw");
-        }));
-        assert!(callbacks.read_single_iid(&ctx.term(Term::Vector), 0, &mut val));
-        assert_eq!(val, b"0rmw");
     }
 
     #[test]
@@ -332,10 +337,21 @@ mod tests {
             results.push((index, value[0]));
         });
         assert_eq!(results, [(0, 2), (2, 1), (3, 3), (4, 0)]);
-        assert!(callbacks.rmw_iid(&ctx, ids[2], 1, |value| value[0] = 9));
+        assert!(callbacks.rmw_sized_iid(&ctx, ids[2], |phase| {
+            match phase {
+                crate::garnet::SizedRmw::Prepare(current) => {
+                    assert_eq!(current, Some(&[2][..]));
+                    Ok(Some(2))
+                }
+                crate::garnet::SizedRmw::Write(output) => {
+                    output.copy_from_slice(&[9, 8]);
+                    Ok(None)
+                }
+            }
+        }));
         assert_eq!(
             callbacks.read_varsize_iid::<u8>(&ctx, ids[2]),
-            Some(vec![9])
+            Some(vec![9, 8])
         );
         assert!(callbacks.delete_iid(&ctx, ids[2]));
         assert!(!callbacks.exists_iid(&ctx, ids[2], 1));

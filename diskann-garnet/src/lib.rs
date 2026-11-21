@@ -42,6 +42,7 @@ use crate::{
     },
 };
 
+mod adjacency;
 mod alloc;
 mod dyn_index;
 #[cfg(test)]
@@ -256,10 +257,11 @@ fn create_index_impl<T: VectorRepr>(
     metric_type: Metric,
     max_degree: usize,
     start_point_id: u64,
+    adjacency_codec: adjacency::AdjacencyCodec,
     callbacks: Callbacks,
     context: Context,
 ) -> Result<(Arc<Index>, bool), GarnetProviderError> {
-    let provider = GarnetProvider::<T>::new(
+    let provider = GarnetProvider::<T>::new_with_codec(
         dim,
         quant_type,
         metric_type,
@@ -267,6 +269,7 @@ fn create_index_impl<T: VectorRepr>(
         start_point_id,
         callbacks,
         &context,
+        adjacency_codec,
     )?;
     let state = if provider.start_points_exist() {
         AtomicUsize::new(IndexState::Ready as usize)
@@ -313,12 +316,15 @@ fn create_index_impl<T: VectorRepr>(
 ///
 /// The same immutable `start_point_id` must be supplied when reopening the index.
 ///
+/// `adjacency_codec` selects the format for new neighbor lists (0 identity, 1 StreamVByte64,
+/// 2 AdaptiveGap, 3 row Rice). Existing records are decoded independently of this setting.
+///
 /// # Safety
 ///
 /// Callbacks must remain valid for the index lifetime, and `quantization_needed`
 /// must point to writable memory for a bool.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn create_index(
+pub unsafe extern "C" fn create_index_with_adjacency_codec(
     ctx: u64,
     dim: u32,
     _reduce_dim: u32,
@@ -333,9 +339,13 @@ pub unsafe extern "C" fn create_index(
     rmw_callback: ReadModifyWriteCallback,
     filter_callback: FilterCallback,
     log_callback: LogCallback,
+    adjacency_codec: u8,
     quantization_needed: *mut bool,
 ) -> *const c_void {
     unsafe { *quantization_needed = false };
+    let Ok(adjacency_codec) = adjacency::AdjacencyCodec::try_from(adjacency_codec) else {
+        return ptr::null();
+    };
 
     let metric_type = match Metric::try_from(metric_type) {
         Ok(m) => m,
@@ -380,6 +390,7 @@ pub unsafe extern "C" fn create_index(
                 metric_type,
                 max_degree as usize,
                 start_point_id,
+                adjacency_codec,
                 callbacks,
                 context,
             ) {
@@ -400,6 +411,7 @@ pub unsafe extern "C" fn create_index(
                 metric_type,
                 max_degree as usize,
                 start_point_id,
+                adjacency_codec,
                 callbacks,
                 context,
             ) {
@@ -421,6 +433,7 @@ pub unsafe extern "C" fn create_index(
                 metric_type,
                 max_degree as usize,
                 start_point_id,
+                adjacency_codec,
                 callbacks,
                 context,
             ) {
@@ -435,14 +448,14 @@ pub unsafe extern "C" fn create_index(
 
 /// Drop an index.
 ///
-/// This is the only valid way to free an index pointer created with `create_index()`.
+/// This is the only valid way to free a pointer returned by `create_index_with_adjacency_codec`.
 ///
 /// # Safety
 ///
 /// FFI
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn drop_index(_ctx: u64, index_ptr: *const c_void) {
-    // SAFETY: Caller must pass in a valid pointer returned from `create_index`.
+    // SAFETY: Caller passes a live pointer returned by the index constructor.
     let _ = unsafe { Arc::from_raw(index_ptr.cast::<Index>()) };
 }
 
@@ -1358,7 +1371,7 @@ pub unsafe extern "C" fn set_quant_state(
 ///
 /// # Safety
 ///
-/// `index_ptr` must be a live index returned by `create_index`, and `ctx` must identify its storage.
+/// `index_ptr` must be a live index handle, and `ctx` must identify its storage.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn can_import(ctx: u64, index_ptr: *const c_void) -> bool {
     if index_ptr.is_null() {
@@ -1425,7 +1438,7 @@ pub unsafe extern "C" fn import_term(
 ///
 /// # Safety
 ///
-/// A non-null `index_ptr` must be a live index returned by `create_index`. The
+/// A non-null `index_ptr` must be a live index handle. The
 /// index and callbacks must outlive this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn verify_import(
@@ -1453,7 +1466,7 @@ pub unsafe extern "C" fn verify_import(
 ///
 /// # Safety
 ///
-/// A non-null `index_ptr` must be a live index returned by `create_index`.
+/// A non-null `index_ptr` must be a live index handle.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn finish_import(ctx: u64, index_ptr: *const c_void) -> bool {
     if index_ptr.is_null() {
@@ -1551,7 +1564,7 @@ mod tests {
         let store = Store::new();
         let mut quant_needed = false;
         let index_ptr = unsafe {
-            super::create_index(
+            super::create_index_with_adjacency_codec(
                 0,
                 2,
                 0,
@@ -1566,6 +1579,7 @@ mod tests {
                 store.callbacks().rmw_callback(),
                 store.callbacks().filter_callback(),
                 store.callbacks().log_callback(),
+                0,
                 &mut quant_needed,
             )
         };
@@ -1638,7 +1652,7 @@ mod tests {
         let store = Store::new();
         let mut quant_needed = false;
         let index_ptr = unsafe {
-            super::create_index(
+            super::create_index_with_adjacency_codec(
                 0,
                 2,
                 0,
@@ -1653,6 +1667,7 @@ mod tests {
                 store.callbacks().rmw_callback(),
                 store.callbacks().filter_callback(),
                 store.callbacks().log_callback(),
+                0,
                 &mut quant_needed,
             )
         };
@@ -1672,7 +1687,7 @@ mod tests {
         let mut quant_needed = false;
 
         let index_ptr = unsafe {
-            super::create_index(
+            super::create_index_with_adjacency_codec(
                 0,
                 2,
                 0,
@@ -1687,6 +1702,7 @@ mod tests {
                 store.callbacks().rmw_callback(),
                 store.callbacks().filter_callback(),
                 store.callbacks().log_callback(),
+                0,
                 &mut quant_needed,
             )
         };
@@ -1755,7 +1771,7 @@ mod tests {
         let mut quant_needed = false;
 
         let index_ptr = unsafe {
-            super::create_index(
+            super::create_index_with_adjacency_codec(
                 0,
                 2,
                 0,
@@ -1770,6 +1786,7 @@ mod tests {
                 store.callbacks().rmw_callback(),
                 store.callbacks().filter_callback(),
                 store.callbacks().log_callback(),
+                0,
                 &mut quant_needed,
             )
         };
@@ -1826,7 +1843,7 @@ mod tests {
         let mut quant_needed = false;
 
         let index_ptr = unsafe {
-            super::create_index(
+            super::create_index_with_adjacency_codec(
                 0,
                 2,
                 0,
@@ -1841,6 +1858,7 @@ mod tests {
                 store.callbacks().rmw_callback(),
                 store.callbacks().filter_callback(),
                 store.callbacks().log_callback(),
+                0,
                 &mut quant_needed,
             )
         };
@@ -2019,7 +2037,7 @@ mod tests {
         let mut quant_needed = false;
 
         let index_ptr = unsafe {
-            super::create_index(
+            super::create_index_with_adjacency_codec(
                 0,
                 2,
                 0,
@@ -2034,6 +2052,7 @@ mod tests {
                 store.callbacks().rmw_callback(),
                 store.callbacks().filter_callback(),
                 store.callbacks().log_callback(),
+                0,
                 &mut quant_needed,
             )
         };

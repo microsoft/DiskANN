@@ -88,19 +88,32 @@ type DeleteCallback = unsafe extern "C" fn(context: u64, key: *const u8, key_len
 
 /// Atomically read, modify, and write the value for a key.
 ///
-/// Garnet invokes `modify` with the opaque `modify_state` and a mutable view of the current
-/// value. If the key does not exist, a zero-initialized value of `write_len` bytes is created
-/// and passed instead. Returns true on success.
+/// Without `prepare`, Garnet invokes `modify` with a mutable view of the existing value, or
+/// a new zero-initialized value of `write_len` bytes. With `prepare`, `write_len` is ignored;
+/// Garnet supplies the current bytes to `prepare` before sizing the replacement.
+/// Returns true on successful write or no change, false on failure.
 type ReadModifyWriteCallback = unsafe extern "C" fn(
     context: u64,
     key: *const u8,
     key_len: usize,
     write_len: usize,
+    prepare: Option<RmwPrepareCallback>,
     modify: RmwDataCallback,
     modify_state: *mut c_void,
 ) -> bool;
 
-/// Mutates the value in place on behalf of `ReadModifyWriteCallback`.
+/// Return 0 for no change, 1 to write `replacement_len` bytes, or 2 for error.
+/// A null `current` denotes a missing key. Prepare may run again if storage retries.
+/// The replacement writer only fills the destination; it must not publish side effects
+/// because the storage engine can abandon the candidate record.
+type RmwPrepareCallback = unsafe extern "C" fn(
+    state: *mut c_void,
+    current: *const u8,
+    current_len: usize,
+    replacement_len: *mut usize,
+) -> u8;
+
+/// Mutates the existing value or writes exactly the prepared replacement bytes.
 type RmwDataCallback = unsafe extern "C" fn(state: *mut c_void, value: *mut u8, value_len: usize);
 
 /// Evaluate the filter of the in-flight search against a vector's attribute data.
@@ -125,6 +138,13 @@ type LogCallback = unsafe extern "C" fn(context: u64, message: *const u8, messag
 ///
 /// start_point_id is fixed for the index lifetime and must be supplied again on reopen.
 ///
+/// `adjacency_codec` selects the format for new neighbor lists: identity (0, default),
+/// StreamVByte64 (1), AdaptiveGap (2), or row Rice (3). The writer preserves the legacy
+/// fixed-size layout in identity mode; compressed lists store sorted IDs without
+/// changing their values. Reads detect the record format independently of the setting.
+/// Native package 11 changes the callback ABI and requires a matching Garnet build.
+/// Package 10 cannot read lists written with a compressed codec.
+///
 /// metric_type is passed as a raw i32. Valid values are:
 /// - 0: Cosine
 /// - 1: InnerProduct
@@ -138,7 +158,7 @@ type LogCallback = unsafe extern "C" fn(context: u64, message: *const u8, messag
 /// lifecycle via `build_quant_table` and `backfill_quant_vectors`. This can be false even when a
 /// quantizer is in use, since not every quantizer requires training and backfill.
 #[unsafe(no_mangle)]
-extern "C" fn create_index(
+extern "C" fn create_index_with_adjacency_codec(
     context: u64,
     dim: u32,
     reduce_dim: u32,
@@ -153,12 +173,13 @@ extern "C" fn create_index(
     rmw_callback: ReadModifyWriteCallback,
     filter_callback: FilterCallback,
     log_callback: LogCallback,
+    adjacency_codec: u8,
     quantization_needed: *mut bool,
 ) -> *const c_void;
 
 /// Drop a previously created index
 ///
-/// This is the only valid way to release a handle returned by `create_index`.
+/// This is the only valid way to release a handle returned by `create_index_with_adjacency_codec`.
 ///
 /// Not called if any other operation against the index may be in flight or started.
 #[unsafe(no_mangle)]
@@ -234,7 +255,7 @@ extern "C" fn set_attribute(
 ///
 /// Works with vector values.
 ///
-/// vector_data is unquantized, vector_len will always match dimensions from create_index. As
+/// vector_data is unquantized; vector_len always matches the index dimensions. As
 /// with `insert`, it is a count of elements whose type follows from the index's `quant_type`.
 ///
 /// delta is not implemented and is currently ignored.
@@ -248,7 +269,7 @@ extern "C" fn set_attribute(
 ///
 /// Passing a non-null `bitmap_data` with a non-zero `bitmap_len` selects filtered search, with
 /// `max_filtering_effort` bounding the extra work spent satisfying the filter. Attribute data
-/// is evaluated through the `filter_callback` supplied to `create_index`.
+/// is evaluated through the `filter_callback` supplied when creating the index.
 ///
 /// Returns the number of results, or -1 on error. If the supplied output buffers cannot hold all
 /// results, `overflow` is set to an opaque pointer that can be passed to `overflow_results`.

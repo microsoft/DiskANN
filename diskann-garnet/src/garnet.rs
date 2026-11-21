@@ -110,10 +110,21 @@ pub(crate) type ReadCallback =
 pub(crate) type WriteCallback =
     unsafe extern "C" fn(u64, *const u8, usize, *const u8, usize) -> bool;
 pub(crate) type DeleteCallback = unsafe extern "C" fn(u64, *const u8, usize) -> bool;
-pub(crate) type ReadModifyWriteCallback =
-    unsafe extern "C" fn(u64, *const u8, usize, usize, RmwDataCallback, *mut c_void) -> bool;
+pub(crate) type ReadModifyWriteCallback = unsafe extern "C" fn(
+    u64,
+    *const u8,
+    usize,
+    usize,
+    Option<RmwPrepareCallback>,
+    RmwDataCallback,
+    *mut c_void,
+) -> bool;
 pub(crate) type ReadDataCallback = unsafe extern "C" fn(u32, *mut c_void, *const u8, usize);
 pub(crate) type RmwDataCallback = unsafe extern "C" fn(*mut c_void, *mut u8, usize);
+/// Null current data denotes a missing key. Return 0 to leave unchanged,
+/// 1 to write the reported length, or 2 to fail the operation.
+pub(crate) type RmwPrepareCallback =
+    unsafe extern "C" fn(*mut c_void, *const u8, usize, *mut usize) -> u8;
 pub(crate) type FilterCallback = unsafe extern "C" fn(u64, *const u8, usize) -> bool;
 pub(crate) type LogCallback = unsafe extern "C" fn(u64, *const u8, usize);
 
@@ -401,6 +412,16 @@ impl Callbacks {
         }
     }
 
+    /// Decode borrowed stored bytes in the read callback without copying the record.
+    pub(crate) fn read_bytes_iid<F>(&self, ctx: &Context, id: u64, hint: usize, mut f: F)
+    where
+        F: FnMut(&[u8]),
+    {
+        self.read_multi_lpiid::<_, u8>(ctx, &[LengthPrefixedId::new(id)], hint, |_, bytes| {
+            f(bytes)
+        });
+    }
+
     /// Read a variable size value from Garnet.
     ///
     /// This function allocations inside the read callback since it can't know the size
@@ -539,20 +560,24 @@ impl Callbacks {
         unsafe { (self.delete_callback)(ctx.inner, id.as_ptr(), id.len()) }
     }
 
-    /// Modify a value in Garnet by internal ID.
-    ///
-    /// The provided function `f` will receive the current value, which it can then modify. If no
-    /// value exists, zero-initialized value of length `write_len` will be passed in.
-    ///
-    /// `f` should not panic.
+    /// Prepare under the storage writer lock, then write exactly the prepared length.
     #[must_use]
-    pub(crate) fn rmw_iid<'a, F>(&self, ctx: &Context, id: u64, write_len: usize, f: F) -> bool
+    pub(crate) fn rmw_sized_iid<F>(&self, ctx: &Context, id: u64, mut f: F) -> bool
     where
-        F: FnMut(&'a mut [u8]),
+        F: FnMut(SizedRmw<'_>) -> Result<Option<usize>, GarnetError>,
     {
         let key = LengthPrefixedId::new(id);
-        // SAFETY: The record provides four bytes of scratch space before the key.
-        unsafe { self.rmw_raw(ctx, key.key_bytes(), write_len, f) }
+        unsafe {
+            (self.rmw_callback)(
+                ctx.inner,
+                key.key_bytes().as_ptr(),
+                8,
+                0,
+                Some(sized_prepare::<F>),
+                sized_write::<F>,
+                (&raw mut f).cast(),
+            )
+        }
     }
 
     /// Atomically modify a value stored under a four-byte metadata tag.
@@ -606,6 +631,7 @@ impl Callbacks {
                 key.as_ptr(),
                 key.len(),
                 write_len,
+                None,
                 make_rmw_call(&f),
                 &mut f as *mut _ as *mut c_void,
             )
@@ -677,6 +703,40 @@ where
     F: FnMut(&'a mut [u8]),
 {
     rmw_call::<F>
+}
+
+/// Operation-local state shared by the two native trampolines.
+pub(crate) enum SizedRmw<'a> {
+    Prepare(Option<&'a [u8]>),
+    Write(&'a mut [u8]),
+}
+
+unsafe extern "C" fn sized_prepare<F>(
+    ptr: *mut c_void,
+    data: *const u8,
+    len: usize,
+    replacement_len: *mut usize,
+) -> u8
+where
+    F: FnMut(SizedRmw<'_>) -> Result<Option<usize>, GarnetError>,
+{
+    let current = (!data.is_null()).then(|| unsafe { slice::from_raw_parts(data, len) });
+    match unsafe { (&mut *ptr.cast::<F>())(SizedRmw::Prepare(current)) } {
+        Ok(Some(len)) => {
+            unsafe { *replacement_len = len };
+            1
+        }
+        Ok(None) => 0,
+        Err(_) => 2,
+    }
+}
+
+unsafe extern "C" fn sized_write<F>(ptr: *mut c_void, data: *mut u8, len: usize)
+where
+    F: FnMut(SizedRmw<'_>) -> Result<Option<usize>, GarnetError>,
+{
+    let output = unsafe { slice::from_raw_parts_mut(data, len) };
+    let _ = unsafe { (&mut *ptr.cast::<F>())(SizedRmw::Write(output)) };
 }
 
 #[derive(Debug, Error, PartialEq)]

@@ -61,11 +61,16 @@ precision only index, they are the most accessed term.
 ### Neighbor Lists
 
 *Key*: Internal ID as bytes; this key is always 8 bytes.
-*Value*: `[u64; M + 1]` stored as bytes, where `M` is the same `M` passed to VADD. Every value in the index will have this fixed size of `(M + 1) * 8` bytes.
 
-Neighbor lists are stored as a fixed size of `(M + 1) * mem::size_of::<u64>()`. The final entry is the true length of the neighbor list and must not exceed `M`.
+*Value*: Identity stores `(M + 1) * 8` bytes in native byte order. The first `M`
+slots hold the neighbor IDs; the final `u64` is the length and must not exceed
+`M`. Only the first `length` slots are meaningful.
 
-For example, in a graph where the `M` value is given as 16, the size of a neighbor list would be `(16 + 1) * 8 = 136` bytes long. Using fixed size lists this way means that all neighbor list allocations are the same size.
+Compressed lists store the codec tag (1 StreamVByte64, 2 AdaptiveGap, or 3 row
+Golomb–Rice), the degree as ULEB128, and the codec payload over sorted IDs. A
+single zero byte is appended when the encoded length would be at least
+`(M + 1) * 8`, reserving that exact length for identity. The reader detects the
+format from the record rather than the configured writer.
 
 In a typical index, these are accessed second most often after quantized vectors (in a quantized index) or full precision vectors (in a full precision only index).
 
@@ -190,7 +195,10 @@ Index operations are not atomic, but individual term accesses are. There is one 
 
 ### Neighbor List Updates
 
-The `append_vector()` function in the Data Provider API adds new neighbors to an existing vector's neighbor list. While most data providers do a read operation followed by a write of whole new neighbor list, Garnet's read-modify-write operation allows for atomics updates. Unlike many other data providers there is no chance that simultaneous updates to a neighbor list will cause neighbors to be discarded.
+`append_vector()` adds neighbors under Garnet's atomic RMW. The prepare callback
+decodes the current list, adds distinct IDs up to `M`, and provides the encoded
+replacement length. Garnet may update in place or write a new record. On retry,
+prepare runs against the current record again; a no-op does not rewrite it.
 
 ### Vector Terms vs. Other Terms
 

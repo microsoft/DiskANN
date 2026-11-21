@@ -50,7 +50,12 @@ Version 10.0.0 changes the native ABI and persisted internal-ID formats. Upgrade
 Garnet and its native package together, and rebuild or re-import legacy sets.
 Four-byte internal keys, mapping values, neighbor slots, and eight-byte FSM keys
 are incompatible with the new format; there is no dual-format reopen path.
-Neighbor IDs are still uncompressed; StreamVByte64 is not part of this cutover.
+
+Version 11.0.0 adds adjacency compression and changes the native RMW callback
+ABI. Upgrade Garnet and its native package together. Identity, the default,
+continues to read and write version 10 neighbor lists. StreamVByte64, AdaptiveGap,
+and row Golomb–Rice are optional write codecs; version 11 reads mixed formats
+without rebuilding an index. Version 10 cannot read compressed lists.
 
 The [uncompressed ID baseline](docs/id-compression-baseline.json) preserves component
 sizes, build/query samples, construction settings, and recall/target provenance for

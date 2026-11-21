@@ -21,7 +21,7 @@ mod tests {
     use crate::{
         Index, IndexState, InsertResult, Overflow, VectorQuantType, backfill_quant_vectors,
         build_quant_table, can_import, card, check_external_id_valid, check_internal_id_valid,
-        create_index, drop_index, finish_import,
+        create_index_with_adjacency_codec, drop_index, finish_import,
         garnet::{Context, Term, WriteCallback},
         import_term, insert,
         provider::DEFAULT_START_POINT_ID,
@@ -89,7 +89,7 @@ mod tests {
         let max_degree = 20;
 
         let index_ptr = unsafe {
-            create_index(
+            create_index_with_adjacency_codec(
                 ctx.get(),
                 dim,
                 reduce_dim,
@@ -104,6 +104,7 @@ mod tests {
                 callbacks.rmw_callback(),
                 callbacks.filter_callback(),
                 callbacks.log_callback(),
+                0,
                 &mut quant_needed,
             )
         };
