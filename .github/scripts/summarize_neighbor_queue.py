@@ -32,7 +32,8 @@ def main(paths):
         f"samples from {len(paths)} independent processes; the final columns "
         "show each process median. Methods share fixtures and rotate order. "
         "Runners are shared; these results do not measure end-to-end search "
-        "performance."
+        "performance. Zero samples are retained; N/A means a median is zero "
+        "and the timer cannot resolve the ratio."
     )
     print()
     print(
@@ -62,7 +63,7 @@ def main(paths):
                 ]
                 if not values:
                     raise ValueError(f"Case {index + 1} has no samples for {method}")
-                if any(not math.isfinite(value) or value <= 0 for value in values):
+                if any(not math.isfinite(value) or value < 0 for value in values):
                     raise ValueError(f"Case {index + 1} has invalid timings for {method}")
                 samples[method].extend(values)
                 medians[method].append(statistics.median(values))
@@ -77,7 +78,11 @@ def main(paths):
             case["order"],
             f'{total["insert"]:.3f}',
             f'{total["batch_insert"]:.3f}',
-            f'{total["batch_insert"] / total["insert"]:.2f}x',
+            (
+                f'{total["batch_insert"] / total["insert"]:.2f}x'
+                if total["insert"] > 0 and total["batch_insert"] > 0
+                else "N/A"
+            ),
             " / ".join(f"{value:.3f}" for value in medians["insert"]),
             " / ".join(f"{value:.3f}" for value in medians["batch_insert"]),
         ]

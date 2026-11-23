@@ -576,7 +576,10 @@ mod tests {
         assert_eq!(result.samples.len(), 3);
         for sample in result.samples {
             assert_eq!(sample.timings.len(), 2);
-            assert!(sample.timings.iter().all(|t| t.ns_per_update > 0.0));
+            assert!(sample
+                .timings
+                .iter()
+                .all(|t| t.ns_per_update.is_finite() && t.ns_per_update >= 0.0));
         }
     }
 }
