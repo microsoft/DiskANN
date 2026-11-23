@@ -228,7 +228,9 @@ impl<T: VectorRepr> DistancesUnordered for Visitor<'_, T> {
         H: DistanceHandler<Self::Id>,
     {
         async move {
-            if !handler.prefers_buffered_batches() {
+            let dim = self.data.ncols();
+            // Zero-width rows still represent candidates, but cannot form slice chunks.
+            if dim == 0 || !handler.prefers_buffered_batches() {
                 return self
                     .distances_unordered(|id, distance| handler.add(id, distance))
                     .await;
@@ -236,7 +238,6 @@ impl<T: VectorRepr> DistancesUnordered for Visitor<'_, T> {
             const BATCH: usize = 32;
             let mut ids = [0u32; BATCH];
             let mut distances = [0.0f32; BATCH];
-            let dim = self.data.ncols();
             for (block, vectors) in self.data.as_slice().chunks(BATCH * dim).enumerate() {
                 let len = vectors.len() / dim;
                 for (lane, vector) in vectors.chunks_exact(dim).enumerate() {
@@ -519,6 +520,45 @@ mod tests {
                     assert_eq!(recorder.values, expected);
                     assert_eq!(recorder.singles, if stage { 0 } else { 65 });
                     assert_eq!(recorder.batches, if stage { 3 } else { 0 });
+                }
+            });
+    }
+
+    #[test]
+    fn zero_dimensional_search_preserves_candidates() {
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap()
+            .block_on(async {
+                for nrows in [0, 3, 129] {
+                    let provider = InMemProvider {
+                        data: Arc::new(rowmajor::Owned::from_element(nrows, 0, 0.0f32)),
+                    };
+                    for k in [1, 2, 100] {
+                        let mut visitor = Visitor::new(&provider, &[], Metric::L2);
+                        let mut output = Vec::new();
+                        let stats = knn_search(
+                            &mut visitor,
+                            NonZeroUsize::new(k).unwrap(),
+                            CopyIds,
+                            (),
+                            &mut output,
+                        )
+                        .await
+                        .unwrap();
+                        let expected: Vec<_> = (0..nrows as u32)
+                            .rev()
+                            .take(k)
+                            .map(|id| (id, 0.0))
+                            .collect();
+                        assert_eq!(
+                            output.into_iter().map(|n| n.as_tuple()).collect::<Vec<_>>(),
+                            expected,
+                            "nrows={nrows}, k={k}"
+                        );
+                        assert_eq!(stats.cmps as usize, nrows);
+                        assert_eq!(stats.result_count as usize, nrows.min(k));
+                    }
                 }
             });
     }
