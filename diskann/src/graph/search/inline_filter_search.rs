@@ -8,7 +8,7 @@
 use diskann_utils::future::SendFuture;
 use thiserror::Error;
 
-use super::{Knn, Search, record::SearchRecord, scratch::SearchScratch};
+use super::{FilteredSearch, Knn, record::SearchRecord, scratch::SearchScratch};
 use crate::{
     ANNResult, convert_error,
     error::IntoANNResult,
@@ -101,19 +101,17 @@ impl InlineFilterSearch {
     }
 }
 
-impl<A> Search<A> for InlineFilterSearch
-where
-    A: FilteredAccessor,
-{
+impl FilteredSearch for InlineFilterSearch {
     type Output = SearchStats;
 
-    fn search<O, PP, OB>(
+    fn filtered_search<A, O, PP, OB>(
         self,
         accessor: &mut A,
         processor: PP,
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<Self::Output>>
     where
+        A: FilteredSearch,
         O: Send,
         PP: SearchPostProcess<A, O> + Send + Sync,
         OB: SearchOutputBuffer<O> + Send + ?Sized,

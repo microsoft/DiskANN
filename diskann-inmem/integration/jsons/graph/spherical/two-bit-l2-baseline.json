@@ -72,16 +72,19 @@
               {
                 "beam_width": 1,
                 "knn": 10,
+                "max_two_hop_candidates": 10,
                 "search_l": 50
               },
               {
                 "beam_width": 3,
                 "knn": 10,
+                "max_two_hop_candidates": 10,
                 "search_l": 50
               },
               {
                 "beam_width": 3,
                 "knn": 10,
+                "max_two_hop_candidates": 10,
                 "search_l": 100
               }
             ]

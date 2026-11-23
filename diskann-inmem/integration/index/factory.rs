@@ -71,46 +71,22 @@ fn create_full(
     let index_config = graph_config.clone();
 
     let index: Arc<dyn Index> = match start_points {
-        Dataset::F32(v) => Arc::new(
-            di::Index::new(Full::config(
-                capacity,
-                MaxDegree::new(max_degree),
-                metric,
-                v,
-            )?,
+        Dataset::F32(v) => Arc::new(di::Index::new(
+            Full::config(capacity, MaxDegree::new(max_degree), metric, v)?,
             index_config,
-            )?,
-        ),
-        Dataset::F16(v) => Arc::new(
-            di::Index::new(Full::config(
-                capacity,
-                MaxDegree::new(max_degree),
-                metric,
-                v,
-            )?,
+        )?),
+        Dataset::F16(v) => Arc::new(di::Index::new(
+            Full::config(capacity, MaxDegree::new(max_degree), metric, v)?,
             index_config,
-            )?,
-        ),
-        Dataset::U8(v) => Arc::new(
-            di::Index::new(Full::config(
-                capacity,
-                MaxDegree::new(max_degree),
-                metric,
-                v,
-            )?,
+        )?),
+        Dataset::U8(v) => Arc::new(di::Index::new(
+            Full::config(capacity, MaxDegree::new(max_degree), metric, v)?,
             index_config,
-            )?,
-        ),
-        Dataset::I8(v) => Arc::new(
-            di::Index::new(Full::config(
-                capacity,
-                MaxDegree::new(max_degree),
-                metric,
-                v,
-            )?,
+        )?),
+        Dataset::I8(v) => Arc::new(di::Index::new(
+            Full::config(capacity, MaxDegree::new(max_degree), metric, v)?,
             index_config,
-            )?,
-        ),
+        )?),
     };
 
     Ok(index)

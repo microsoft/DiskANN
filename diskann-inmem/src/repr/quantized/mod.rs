@@ -1652,8 +1652,8 @@ mod tests {
         let (quantized, _) = make_test_repr(Metric::SquaredL2, Rerank::None, false);
 
         let counters = Counters::new();
-        let err = repr::Search::search_accessor(&quantized, &[1.0], None, counters.local())
-            .unwrap_err();
+        let err =
+            repr::Search::search_accessor(&quantized, &[1.0], None, counters.local()).unwrap_err();
 
         assert_contains!(
             err.to_string(),

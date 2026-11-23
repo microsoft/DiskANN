@@ -321,6 +321,8 @@ mod dto {
             pub(in crate::index::parse) knn: usize,
             pub(in crate::index::parse) search_l: usize,
             #[serde(deserialize_with = "Deserialize::deserialize")]
+            pub(in crate::index::parse) max_two_hop_candidates: Option<NonZeroUsize>,
+            #[serde(deserialize_with = "Deserialize::deserialize")]
             pub(in crate::index::parse) beam_width: Option<usize>,
         }
 
@@ -334,21 +336,25 @@ mod dto {
 
         impl Search {
             pub(in crate::index::parse) fn example() -> Self {
+                const TEN: NonZeroUsize = NonZeroUsize::new(10).unwrap();
                 Self {
                     searches: vec![
                         Params {
                             knn: 10,
                             search_l: 50,
+                            max_two_hop_candidates: Some(TEN),
                             beam_width: None,
                         },
                         Params {
                             knn: 10,
                             search_l: 50,
+                            max_two_hop_candidates: Some(TEN),
                             beam_width: Some(3),
                         },
                         Params {
                             knn: 20,
                             search_l: 100,
+                            max_two_hop_candidates: Some(TEN),
                             beam_width: Some(3),
                         },
                     ],
@@ -905,10 +911,14 @@ impl MultihopFilter {
             let dto::multihop_filter::Params {
                 knn,
                 search_l,
+                max_two_hop_candidates,
                 beam_width,
             } = s;
 
-            let multihop = dgs::MultihopFilterSearch::new(dgs::Knn::new(search_l, beam_width)?);
+            let multihop = dgs::MultihopFilterSearch::new(
+                dgs::Knn::new(search_l, beam_width)?,
+                max_two_hop_candidates,
+            );
             Ok((knn, multihop))
         }
 
@@ -930,8 +940,9 @@ impl MultihopFilter {
             .iter()
             .map(|(knn, search)| dto::multihop_filter::Params {
                 knn: *knn,
-                search_l: search.inner.l_value().get(),
-                beam_width: Some(search.inner.beam_width().get()),
+                search_l: search.knn().l_value().get(),
+                max_two_hop_candidates: search.max_two_hop_candidates(),
+                beam_width: Some(search.knn().beam_width().get()),
             })
             .collect();
 

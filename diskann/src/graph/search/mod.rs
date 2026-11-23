@@ -36,7 +36,14 @@
 
 use diskann_utils::future::SendFuture;
 
-use crate::{ANNResult, graph, provider::HasId};
+use crate::{
+    ANNResult,
+    graph::{
+        self,
+        glue::{FilteredAccessor, SearchAccessor},
+    },
+    provider::HasId,
+};
 
 mod filtered_range_search;
 mod inline_filter_search;
@@ -58,6 +65,7 @@ pub(crate) mod scratch;
 /// # Implementations
 ///
 /// See the specific search types for detailed documentation:
+///
 /// - [`Knn`] - Standard k-nearest neighbor search
 /// - [`Range`] - Range-based search within a distance radius
 /// - [`FilteredRange`] - Filtered range search
@@ -65,10 +73,7 @@ pub(crate) mod scratch;
 /// - [`MultihopFilterSearch`] - Label-filtered search with multi-hop expansion
 /// - [`InlineFilterSearch`] - Inline filtered search with optional adaptive L sizing
 /// - [`RecordedKnn`] - K-NN search with path recording for debugging
-pub trait Search<A>
-where
-    A: HasId,
-{
+pub trait Search {
     /// The result type returned by this search.
     type Output;
 
@@ -94,13 +99,53 @@ where
     /// # Errors
     ///
     /// Returns an error if there is a failure accessing elements or computing distances.
-    fn search<O, PP, OB>(
+    fn search<A, O, PP, OB>(
         self,
         accessor: &mut A,
         processor: PP,
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<Self::Output>>
     where
+        A: SearchAccessor,
+        O: Send,
+        PP: graph::glue::SearchPostProcess<A, O> + Send + Sync,
+        OB: graph::search_output_buffer::SearchOutputBuffer<O> + Send + ?Sized;
+}
+
+pub trait FilteredSearch {
+    /// The result type returned by this search.
+    type Output;
+
+    /// Execute the search operation with full search logic.
+    ///
+    /// This method executes a search using the provided `strategy` to access and process elements.
+    /// It computes the similarity between the query vector and the elements in the index,
+    /// finding nearest neighbors according to the search parameters.
+    ///
+    /// # Arguments
+    ///
+    /// * `index` - The DiskANN index to search.
+    /// * `strategy` - The search strategy to use for accessing and processing elements.
+    /// * `context` - The context to pass through to providers.
+    /// * `query` - The query vector for which nearest neighbors are sought.
+    /// * `output` - A mutable buffer to store the search results. Must be pre-allocated by the caller.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Self::Output` which varies by search type (e.g., [`SearchStats`](super::index::SearchStats)
+    /// for k-NN and range search).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if there is a failure accessing elements or computing distances.
+    fn filtered_search<A, O, PP, OB>(
+        self,
+        accessor: &mut A,
+        processor: PP,
+        output: &mut OB,
+    ) -> impl SendFuture<ANNResult<Self::Output>>
+    where
+        A: FilteredAccessor,
         O: Send,
         PP: graph::glue::SearchPostProcess<A, O> + Send + Sync,
         OB: graph::search_output_buffer::SearchOutputBuffer<O> + Send + ?Sized;

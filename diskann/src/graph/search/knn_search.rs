@@ -118,10 +118,7 @@ impl Knn {
     }
 }
 
-impl<A> Search<A> for Knn
-where
-    A: SearchAccessor,
-{
+impl Search for Knn {
     type Output = SearchStats;
 
     /// Execute the k-NN search on the given index.
@@ -149,13 +146,14 @@ where
     /// # Errors
     ///
     /// Returns an error if there is a failure accessing elements or computing distances.
-    fn search<O, PP, OB>(
+    fn search<A, O, PP, OB>(
         self,
         accessor: &mut A,
         processor: PP,
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<Self::Output>>
     where
+        A: SearchAccessor,
         O: Send,
         PP: SearchPostProcess<A, O> + Send + Sync,
         OB: SearchOutputBuffer<O> + Send + ?Sized,
@@ -206,20 +204,19 @@ impl<'r, SR: ?Sized> RecordedKnn<'r, SR> {
     }
 }
 
-impl<A, SR> Search<A> for RecordedKnn<'_, SR>
-where
-    A: SearchAccessor,
+impl<SR> Search for RecordedKnn<'_, SR> where
     SR: super::record::SearchRecord<A::Id> + ?Sized,
 {
     type Output = SearchStats;
 
-    fn search<O, PP, OB>(
+    fn search<A, O, PP, OB>(
         self,
         accessor: &mut A,
         processor: PP,
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<Self::Output>>
     where
+        A: SearchAccessor,
         O: Send,
         PP: SearchPostProcess<A, O> + Send + Sync,
         OB: SearchOutputBuffer<O> + Send + ?Sized,

@@ -116,7 +116,10 @@ fn run(
 ) -> (graph::algorithms::SearchStats, Vec<Neighbor<u32>>) {
     let rt = current_thread_runtime();
     rt.block_on(async {
-        let multihop = MultihopFilterSearch::new(Knn::new_default(l).unwrap());
+        let multihop = MultihopFilterSearch::new(
+            Knn::new_default(l).unwrap(),
+            NonZeroUsize::new(index.max_degree() / 2),
+        );
         let (neighbors, stats) = index.filtered(multihop, query, filter, None).await.unwrap();
         (stats, neighbors)
     })
@@ -322,7 +325,8 @@ fn two_hop_reaches_through_non_matching() {
     let l = 20;
 
     let search_params = Knn::new_default(l).unwrap();
-    let multihop = MultihopFilterSearch::new(search_params);
+    let multihop =
+        MultihopFilterSearch::new(search_params, NonZeroUsize::new(index.max_degree() / 2));
 
     let (neighbors, stats) = rt
         .block_on(index.filtered(multihop, query.as_slice(), &filter, NonZeroUsize::new(k)))
@@ -376,7 +380,8 @@ fn even_filtering_grid() {
     let k = 20;
     let l = 40;
     let search_params = Knn::new_default(l).unwrap();
-    let multihop = MultihopFilterSearch::new(search_params);
+    let multihop =
+        MultihopFilterSearch::new(search_params, NonZeroUsize::new(index.max_degree() / 2));
 
     let (neighbors, stats) = rt
         .block_on(index.filtered(multihop, query.as_slice(), &filter, NonZeroUsize::new(k)))

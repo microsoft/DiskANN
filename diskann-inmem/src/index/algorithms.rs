@@ -123,7 +123,9 @@ where
         // Convert IDs to positions in `data`.
         let ids: HashMap<_, _> = ids.iter().enumerate().map(|(pos, i)| (*i, pos)).collect();
         if ids.len() != data.nrows() {
-            return Err(diskann::error::ANNError::message("mismatch in number of ids"));
+            return Err(diskann::error::ANNError::message(
+                "mismatch in number of ids",
+            ));
         }
 
         Ok(Self(Arc::new(BatchInsertInner { index, data, ids })))
@@ -159,7 +161,8 @@ where
         &mut self,
         id: u32,
     ) -> ANNResult<impl std::borrow::BorrowMut<Self::InsertAccessor<'_>> + Send> {
-        self.0.index
+        self.0
+            .index
             .write()?
             .insert_access(self.0.data.row(self.0.ids[&id]))
     }

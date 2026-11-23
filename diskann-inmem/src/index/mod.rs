@@ -154,12 +154,10 @@ where
                 .collect::<ANNResult<_>>()?;
 
             let batch_insert = algorithms::BatchInsert::new(self.clone(), data, &ids)?;
-            diskann::graph::algorithms::batch::insert::standard(
-                handle,
-                ids,
-                &self.graph,
-                || batch_insert.clone(),
-            ).await
+            diskann::graph::algorithms::batch::insert::standard(handle, ids, &self.graph, || {
+                batch_insert.clone()
+            })
+            .await
         })
     }
 }

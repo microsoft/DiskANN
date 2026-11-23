@@ -295,19 +295,17 @@ impl RangeBuilder {
     }
 }
 
-impl<A> Search<A> for Range
-where
-    A: SearchAccessor,
-{
+impl Search for Range {
     type Output = SearchStats;
 
-    fn search<O, PP, OB>(
+    fn search<A, O, PP, OB>(
         self,
         accessor: &mut A,
         processor: PP,
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<Self::Output>>
     where
+        A: SearchAccessor,
         O: Send,
         PP: glue::SearchPostProcess<A, O> + Send + Sync,
         OB: SearchOutputBuffer<O> + Send + ?Sized,

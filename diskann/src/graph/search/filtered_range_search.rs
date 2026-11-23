@@ -17,7 +17,7 @@ use crate::{
         glue::{self, FilteredAccessor},
         search::inline_filter_search::{Ret, inline_filter_search_internal},
         search::{
-            Range, RangeSearchError, Search,
+            FilteredSearch, Range, RangeSearchError,
             range_search::{InRange, RangeBuilder},
             record::NoopSearchRecord,
             scratch::SearchScratch,
@@ -115,19 +115,17 @@ impl From<Range> for FilteredRange {
     }
 }
 
-impl<A> Search<A> for FilteredRange
-where
-    A: FilteredAccessor,
-{
+impl FilteredSearch for FilteredRange {
     type Output = SearchStats;
 
-    fn search<O, PP, OB>(
+    fn filtered_search<A, O, PP, OB>(
         self,
         accessor: &mut A,
         processor: PP,
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<Self::Output>>
     where
+        A: FilteredSearch,
         O: Send,
         PP: glue::SearchPostProcess<A, O> + Send + Sync,
         OB: SearchOutputBuffer<O> + Send + ?Sized,
