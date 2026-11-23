@@ -272,10 +272,7 @@ impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
 
         for (new_index, neighbor) in neighbors[..new_count].iter().enumerate().rev() {
             let run_end = old_end;
-            // Equal old entries also follow the candidate.
-            while old_end > 0 && self.distances[old_end - 1] >= neighbor.distance {
-                old_end -= 1;
-            }
+            old_end = Self::lower_bound_from_end(&self.distances[..run_end], neighbor.distance);
 
             // The unread old entries and earlier candidates go before this one.
             let write = old_end + new_index;
@@ -290,6 +287,30 @@ impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
         while self.cursor < old_end && self.id_visiteds[self.cursor].1 {
             self.cursor += 1;
         }
+    }
+
+    /// Find the first distance at least as large as `target` in a sorted, NaN-free slice.
+    fn lower_bound_from_end(distances: &[f32], target: f32) -> usize {
+        let Some(&last) = distances.last() else {
+            return 0;
+        };
+        if last < target {
+            return distances.len();
+        }
+
+        // `upper` is at or after the lower bound. Double each step toward the front.
+        let mut upper = distances.len() - 1;
+        let mut step = 1;
+        while upper > 0 {
+            let probe = upper.saturating_sub(step);
+            if distances[probe] < target {
+                let start = probe + 1;
+                return start + distances[start..upper].partition_point(|&d| d < target);
+            }
+            upper = probe;
+            step *= 2;
+        }
+        0
     }
 
     fn move_old_entries(&mut self, source: std::ops::Range<usize>, destination: usize) {
