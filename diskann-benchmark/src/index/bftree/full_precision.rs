@@ -5,7 +5,7 @@
 use std::{io::Write, sync::Arc};
 
 use diskann::{
-    graph::{DiskANNIndex, SampleableForStart},
+    graph::{strategy::FullPrecision, DiskANNIndex, SampleableForStart},
     utils::VectorRepr,
 };
 use diskann_benchmark_runner::{
@@ -15,19 +15,16 @@ use diskann_benchmark_runner::{
     Benchmark, Checkpoint,
 };
 use diskann_bftree::{BfTreeProvider, NoStore};
-use diskann_providers::{
-    model::graph::provider::async_::common::FullPrecision,
-    storage::{FileStorageProvider, SaveWith},
-};
+use diskann_providers::storage::{FileStorageProvider, SaveWith};
 use diskann_utils::views::rowmajor::Matrix;
 
+use super::{
+    benchmarks::{run_build, QueryType, Strategy},
+    build::single_or_multi_insert,
+    result::BuildResult,
+    search::plugins::{Plugin, Plugins},
+};
 use crate::{
-    index::{
-        benchmarks::{run_build, QueryType, Strategy},
-        build::single_or_multi_insert,
-        result::BuildResult,
-        search::plugins::{Plugin, Plugins},
-    },
     inputs::{bftree::BfTreeFullPrecisionBuild, graph_index::SearchPhase},
     utils::{self, tokio},
 };

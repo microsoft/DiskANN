@@ -41,10 +41,7 @@ use diskann_utils::views::rowmajor::{self, Matrix};
 use diskann_vector::{self as dv};
 
 use crate::{
-    index::{
-        inmem2::{self, common::FromRawWith, Provider},
-        streaming::stats::GenericStats,
-    },
+    index::inmem2::{self, common::FromRawWith, Provider},
     utils::{nz, SimilarityMeasure},
 };
 
@@ -79,13 +76,21 @@ pub(in crate::index::inmem2) mod dto {
         }
     }
 
+    #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+    #[serde(tag = "method", content = "params", rename_all = "lowercase")]
+    pub enum InplaceDeleteMethod {
+        VisitedAndTopK { k_value: usize, l_value: usize },
+        TwoHopAndOneHop,
+        OneHop,
+    }
+
     #[derive(Debug, Serialize, Deserialize)]
     #[serde(deny_unknown_fields)]
     pub(in crate::index::inmem2) struct Streaming {
         pub(super) build: inmem2::benchmark::build::dto::Config,
         pub(super) search: inmem2::benchmark::knn::dto::StreamingKnn,
         pub(super) runbook: RunBook,
-        pub(super) delete_method: crate::inputs::graph_index::InplaceDeleteMethod,
+        pub(super) delete_method: InplaceDeleteMethod,
         pub(super) delete_num_to_replace: NonZeroUsize,
     }
 
@@ -97,7 +102,7 @@ pub(in crate::index::inmem2) mod dto {
                 build: inmem2::benchmark::build::dto::Config::example(),
                 search: inmem2::benchmark::knn::dto::StreamingKnn::example(),
                 runbook: RunBook::example(),
-                delete_method: crate::inputs::graph_index::InplaceDeleteMethod::TwoHopAndOneHop,
+                delete_method: InplaceDeleteMethod::TwoHopAndOneHop,
                 delete_num_to_replace: TO_REPLACE,
             }
         }
@@ -309,11 +314,21 @@ impl FromRawWith for Streaming {
         let build = inmem2::benchmark::build::Config::from_raw(build, runbook.data.distance())?;
         let search = inmem2::benchmark::knn::Plan::from_streaming(search)?;
 
+        let delete_method = match *delete_method {
+            dto::InplaceDeleteMethod::VisitedAndTopK { k_value, l_value } => {
+                diskann::graph::InplaceDeleteMethod::VisitedAndTopK { k_value, l_value }
+            }
+            dto::InplaceDeleteMethod::TwoHopAndOneHop => {
+                diskann::graph::InplaceDeleteMethod::TwoHopAndOneHop
+            }
+            dto::InplaceDeleteMethod::OneHop => diskann::graph::InplaceDeleteMethod::OneHop,
+        };
+
         Ok(Self {
             runbook,
             build,
             search,
-            delete_method: (*delete_method).into(),
+            delete_method,
             delete_num_to_replace: *delete_num_to_replace,
         })
     }
@@ -456,7 +471,7 @@ where
             self.build.runtime(),
         )?;
 
-        Ok(Step::Delete(GenericStats::new("delete".into(), r)?))
+        Ok(Step::Delete(inmem2::benchmark::build::Stats::new(r)?))
     }
 
     fn replace(
@@ -507,7 +522,7 @@ pub(in crate::index::inmem2) enum Step {
     Search(inmem2::benchmark::knn::Stats),
     Insert(inmem2::benchmark::build::Stats),
     Replace(inmem2::benchmark::build::Stats),
-    Delete(GenericStats),
+    Delete(inmem2::benchmark::build::Stats),
     Maintain,
 }
 

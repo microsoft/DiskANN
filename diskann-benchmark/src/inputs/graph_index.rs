@@ -3,39 +3,19 @@
  * Licensed under the MIT license.
  */
 
-use std::num::{NonZero, NonZeroU32, NonZeroUsize};
+use std::num::{NonZeroU32, NonZeroUsize};
 
 use anyhow::{anyhow, Context};
-use diskann::{
-    graph::{self, config, search::Range, RangeSearchError, StartPointStrategy},
-    utils::IntoUsize,
-};
+use diskann::graph::{self, config, search::Range, RangeSearchError, StartPointStrategy};
 use diskann_benchmark_core::streaming::executors::bigann;
 use diskann_benchmark_runner::{files::InputFile, utils::datatype::DataType, Checker};
-use diskann_providers::{
-    model::{
-        configuration::IndexConfiguration,
-        graph::provider::{async_::inmem::DefaultProviderParameters, DeterminantDiversityParams},
-    },
-    utils::load_metadata_from_file,
-};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
-    inputs::{self, as_input, save_and_load, write_field, Example, PRINT_WIDTH},
+    inputs::{write_field, Example, PRINT_WIDTH},
     utils::SimilarityMeasure,
 };
-
-//////////////
-// Registry //
-//////////////
-
-as_input!(IndexOperation);
-as_input!(IndexPQOperation);
-as_input!(IndexSQOperation);
-as_input!(SphericalQuantBuild);
-as_input!(DynamicIndexRun);
 
 ////////////
 // Search //
@@ -269,63 +249,6 @@ impl MultihopFilterSearchPhase {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub(crate) struct AdaptiveL {
-    pub(crate) sample_count: NonZeroUsize,
-    pub(crate) scale_factor: f64,
-}
-
-impl AdaptiveL {
-    pub(crate) fn validate(&self, _checker: &mut Checker) -> Result<(), anyhow::Error> {
-        let _ = graph::search::AdaptiveL::new(self.sample_count.into(), self.scale_factor)
-            .map_err(|e| anyhow::anyhow!("failed to create adaptive L: {}", e))?;
-        Ok(())
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub(crate) struct InlineFilterSearchPhase {
-    pub(crate) queries: InputFile,
-    pub(crate) query_predicates: InputFile,
-    pub(crate) groundtruth: InputFile,
-    pub(crate) reps: NonZeroUsize,
-    pub(crate) data_labels: InputFile,
-    pub(crate) num_threads: Vec<NonZeroUsize>,
-    pub(crate) runs: Vec<GraphSearch>,
-    #[serde(deserialize_with = "Deserialize::deserialize")]
-    pub(crate) adaptive_l: Option<AdaptiveL>,
-}
-
-impl InlineFilterSearchPhase {
-    pub(crate) fn validate(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
-        self.queries.resolve(checker)?;
-        self.query_predicates.resolve(checker)?;
-        self.data_labels.resolve(checker)?;
-        self.groundtruth.resolve(checker)?;
-        for (i, run) in self.runs.iter_mut().enumerate() {
-            run.validate(checker)
-                .with_context(|| format!("search run {}", i))?;
-        }
-        if let Some(ref adaptive_l) = self.adaptive_l {
-            adaptive_l.validate(checker)?;
-        }
-
-        Ok(())
-    }
-
-    pub(crate) fn adaptive_l(&self) -> Result<Option<graph::search::AdaptiveL>, anyhow::Error> {
-        if let Some(ref adaptive_l) = self.adaptive_l {
-            let adaptive_l = graph::search::AdaptiveL::new(
-                adaptive_l.sample_count.into(),
-                adaptive_l.scale_factor,
-            )?; // Safe to unwrap since we've already validated the input
-            Ok(Some(adaptive_l))
-        } else {
-            Ok(None)
-        }
-    }
-}
-
 /// A one-to-one correspondence with [`diskann::graph::config::IntraBatchCandidates`].
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -379,53 +302,6 @@ impl Example for MultiInsert {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub(crate) struct TopkDeterminantDiversityPhase {
-    pub(crate) queries: InputFile,
-    pub(crate) groundtruth: InputFile,
-    pub(crate) reps: NonZeroUsize,
-    pub(crate) num_threads: Vec<NonZeroUsize>,
-    pub(crate) runs: Vec<GraphSearch>,
-    pub(crate) power: f32,
-    pub(crate) eta: f32,
-}
-
-impl TopkDeterminantDiversityPhase {
-    pub(crate) fn max_k(&self) -> usize {
-        self.runs.iter().map(|run| run.recall_k).max().unwrap_or(0)
-    }
-
-    pub(crate) fn validate(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
-        DeterminantDiversityParams::new(self.power, self.eta)
-            .map_err(|e| anyhow::anyhow!("invalid determinant-diversity params: {e}"))?;
-        self.queries.resolve(checker)?;
-        self.groundtruth.resolve(checker)?;
-        for (i, run) in self.runs.iter_mut().enumerate() {
-            run.validate(checker)
-                .with_context(|| format!("search run {}", i))?;
-        }
-        Ok(())
-    }
-}
-
-impl Example for TopkDeterminantDiversityPhase {
-    fn example() -> Self {
-        Self {
-            queries: InputFile::new("path/to/queries"),
-            groundtruth: InputFile::new("path/to/groundtruth"),
-            reps: NonZeroUsize::new(1).unwrap(),
-            num_threads: vec![NonZeroUsize::new(1).unwrap()],
-            runs: vec![GraphSearch {
-                search_n: 10,
-                search_l: vec![10, 20, 30, 40],
-                recall_k: 10,
-            }],
-            power: 1.0,
-            eta: 0.5,
-        }
-    }
-}
-
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "search-type", rename_all = "kebab-case")]
 pub(crate) enum SearchPhase {
@@ -434,8 +310,6 @@ pub(crate) enum SearchPhase {
     FilteredRange(FilteredRangeSearchPhase),
     TopkBetaFilter(BetaSearchPhase),
     TopkMultihopFilter(MultihopFilterSearchPhase),
-    TopkInlineFilter(InlineFilterSearchPhase),
-    TopkDeterminantDiversity(TopkDeterminantDiversityPhase),
 }
 
 #[derive(Debug, Error)]
@@ -463,8 +337,6 @@ impl SearchPhase {
             Self::FilteredRange(_) => SearchPhaseKind::FilteredRange,
             Self::TopkBetaFilter(_) => SearchPhaseKind::TopkBetaFilter,
             Self::TopkMultihopFilter(_) => SearchPhaseKind::TopkMultihopFilter,
-            Self::TopkInlineFilter(_) => SearchPhaseKind::TopkInlineFilter,
-            Self::TopkDeterminantDiversity(_) => SearchPhaseKind::TopkDeterminantDiversity,
         }
     }
 
@@ -473,74 +345,6 @@ impl SearchPhase {
             Self::Topk(phase) => Ok(phase),
             _ => Err(WrongSearchPhaseKind::new(
                 SearchPhaseKind::Topk,
-                self.kind(),
-            )),
-        }
-    }
-
-    pub(crate) fn as_range(&self) -> Result<&RangeSearchPhase, WrongSearchPhaseKind> {
-        match self {
-            Self::Range(phase) => Ok(phase),
-            _ => Err(WrongSearchPhaseKind::new(
-                SearchPhaseKind::Range,
-                self.kind(),
-            )),
-        }
-    }
-
-    pub(crate) fn as_filtered_range(
-        &self,
-    ) -> Result<&FilteredRangeSearchPhase, WrongSearchPhaseKind> {
-        match self {
-            Self::FilteredRange(phase) => Ok(phase),
-            _ => Err(WrongSearchPhaseKind::new(
-                SearchPhaseKind::FilteredRange,
-                self.kind(),
-            )),
-        }
-    }
-
-    pub(crate) fn as_topk_beta_filter(&self) -> Result<&BetaSearchPhase, WrongSearchPhaseKind> {
-        match self {
-            Self::TopkBetaFilter(phase) => Ok(phase),
-            _ => Err(WrongSearchPhaseKind::new(
-                SearchPhaseKind::TopkBetaFilter,
-                self.kind(),
-            )),
-        }
-    }
-
-    pub(crate) fn as_topk_multihop_filter(
-        &self,
-    ) -> Result<&MultihopFilterSearchPhase, WrongSearchPhaseKind> {
-        match self {
-            Self::TopkMultihopFilter(phase) => Ok(phase),
-            _ => Err(WrongSearchPhaseKind::new(
-                SearchPhaseKind::TopkMultihopFilter,
-                self.kind(),
-            )),
-        }
-    }
-
-    pub(crate) fn as_topk_inline_filter(
-        &self,
-    ) -> Result<&InlineFilterSearchPhase, WrongSearchPhaseKind> {
-        match self {
-            Self::TopkInlineFilter(phase) => Ok(phase),
-            _ => Err(WrongSearchPhaseKind::new(
-                SearchPhaseKind::TopkInlineFilter,
-                self.kind(),
-            )),
-        }
-    }
-
-    pub(crate) fn as_topk_determinant_diversity(
-        &self,
-    ) -> Result<&TopkDeterminantDiversityPhase, WrongSearchPhaseKind> {
-        match self {
-            Self::TopkDeterminantDiversity(phase) => Ok(phase),
-            _ => Err(WrongSearchPhaseKind::new(
-                SearchPhaseKind::TopkDeterminantDiversity,
                 self.kind(),
             )),
         }
@@ -555,8 +359,6 @@ impl SearchPhase {
             SearchPhase::FilteredRange(phase) => phase.validate(checker),
             SearchPhase::TopkBetaFilter(phase) => phase.validate(checker),
             SearchPhase::TopkMultihopFilter(phase) => phase.validate(checker),
-            SearchPhase::TopkInlineFilter(phase) => phase.validate(checker),
-            SearchPhase::TopkDeterminantDiversity(phase) => phase.validate(checker),
         }
     }
 }
@@ -568,8 +370,6 @@ pub(crate) enum SearchPhaseKind {
     FilteredRange,
     TopkBetaFilter,
     TopkMultihopFilter,
-    TopkInlineFilter,
-    TopkDeterminantDiversity,
 }
 
 impl SearchPhaseKind {
@@ -580,8 +380,6 @@ impl SearchPhaseKind {
             Self::FilteredRange => "filtered-range",
             Self::TopkBetaFilter => "topk-beta-filter",
             Self::TopkMultihopFilter => "topk-multihop-filter",
-            Self::TopkInlineFilter => "topk-inline-filter",
-            Self::TopkDeterminantDiversity => "topk-determinant-diversity",
         }
     }
 }
@@ -595,83 +393,6 @@ impl std::fmt::Display for SearchPhaseKind {
 ////////////////////////////
 // Build - Full Precision //
 ////////////////////////////
-
-#[derive(Debug, Serialize, Deserialize)]
-pub(crate) struct IndexLoad {
-    pub(crate) data_type: DataType,
-    pub(crate) distance: SimilarityMeasure,
-    pub(crate) load_path: String,
-}
-
-impl IndexLoad {
-    pub(crate) const fn tag() -> &'static str {
-        "graph-index-load"
-    }
-
-    pub(crate) fn to_config(&self) -> Result<IndexConfiguration, anyhow::Error> {
-        let storage_provider = diskann_providers::storage::FileStorageProvider;
-        let num_frozen_pts =
-            save_and_load::get_graph_num_frozen_points(&storage_provider, &self.load_path)?;
-
-        let max_observed_degree =
-            save_and_load::get_graph_max_observed_degree(&storage_provider, &self.load_path)?;
-
-        let metadata =
-            load_metadata_from_file(&storage_provider, &format!("{}.data", self.load_path))?;
-
-        let distance: diskann_vector::distance::Metric = self.distance.into();
-        let config = config::Builder::new(
-            max_observed_degree.into_usize(),
-            config::MaxDegree::same(),
-            1, // No building happening - no need to configure `l_build`.
-            distance.into(),
-        )
-        .build()?;
-
-        let index_config = IndexConfiguration::new(
-            self.distance.into(),
-            metadata.ndims(),
-            metadata.npoints(),
-            num_frozen_pts,
-            1,
-            config,
-        );
-        Ok(index_config)
-    }
-
-    fn summarize_fields(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write_field!(f, "data_type", self.data_type)?;
-        write_field!(f, "Load Path", self.load_path)?;
-        Ok(())
-    }
-
-    pub(crate) fn validate(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
-        // Check if the file exists (allowing for relative paths with respect to the search
-        // directories.
-        //
-        // This isn't a fully complete check since the index may be composed of multiple files,
-        // but without encoding the type into the loader, it seems complicated to do better than this
-        let path = std::path::Path::new(&self.load_path);
-        let p = checker.find_input_file(path);
-        match p {
-            Ok(p) => {
-                self.load_path = p.to_string_lossy().to_string();
-                Ok(())
-            }
-            Err(e) => Err(e),
-        }
-    }
-}
-
-impl std::fmt::Display for IndexLoad {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "Graph Index Full-Precision Load\n")?;
-
-        write_field!(f, "tag", Self::tag())?;
-
-        self.summarize_fields(f)
-    }
-}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct InsertRetry {
@@ -782,22 +503,6 @@ impl IndexBuild {
         Ok(builder)
     }
 
-    pub(crate) fn inmem_parameters(
-        &self,
-        num_points: usize,
-        dim: usize,
-    ) -> DefaultProviderParameters {
-        DefaultProviderParameters {
-            max_points: num_points,
-            frozen_points: NonZero::new(self.start_point_strategy.count()).unwrap(),
-            metric: self.distance.into(),
-            dim,
-            max_degree: self.exact_max_degree() as u32,
-            prefetch_lookahead: None,
-            prefetch_cache_line_level: None,
-        }
-    }
-
     pub(crate) fn summarize_fields(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write_field!(f, "file", self.data.display())?;
         write_field!(f, "data_type", self.data_type)?;
@@ -845,10 +550,6 @@ impl IndexBuild {
 
     pub(crate) fn data_type(&self) -> DataType {
         self.data_type
-    }
-
-    pub(crate) fn l_build(&self) -> usize {
-        self.l_build
     }
 
     pub(crate) fn num_threads(&self) -> usize {
@@ -903,372 +604,6 @@ impl std::fmt::Display for IndexBuild {
         write_field!(f, "tag", Self::tag())?;
 
         self.summarize_fields(f)
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(tag = "index-source")] // Use tagged enums for JSON
-pub enum IndexSource {
-    Load(IndexLoad),
-    Build(IndexBuild),
-}
-
-impl IndexSource {
-    pub(crate) fn data_type(&self) -> &DataType {
-        match self {
-            IndexSource::Load(load) => &load.data_type,
-            IndexSource::Build(build) => &build.data_type,
-        }
-    }
-
-    pub(crate) fn validate(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
-        match self {
-            IndexSource::Load(load) => load.validate(checker),
-            IndexSource::Build(build) => build.validate(checker),
-        }
-    }
-
-    fn summarize_fields(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            IndexSource::Load(load) => load.summarize_fields(f),
-            IndexSource::Build(build) => build.summarize_fields(f),
-        }
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub(crate) struct IndexOperation {
-    pub(crate) source: IndexSource, // either load or build
-    pub(crate) search_phase: SearchPhase,
-}
-
-impl IndexOperation {
-    pub(crate) const fn tag() -> &'static str {
-        "graph-index-build"
-    }
-
-    pub(crate) fn validate(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
-        self.source.validate(checker)?;
-        self.search_phase.validate(checker)?;
-
-        Ok(())
-    }
-}
-
-impl Example for IndexOperation {
-    fn example() -> Self {
-        Self {
-            source: IndexSource::Build(IndexBuild::example()),
-            search_phase: SearchPhase::Topk(TopkSearchPhase::example()),
-        }
-    }
-}
-
-impl std::fmt::Display for IndexOperation {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "Graph Index Full-Precision Build\n")?;
-
-        write_field!(f, "tag", Self::tag())?;
-
-        self.source.summarize_fields(f)
-    }
-}
-
-//////////////////////////////
-// Graph Index Build PQ //
-//////////////////////////////
-
-#[derive(Debug, Serialize, Deserialize)]
-pub(crate) struct IndexPQOperation {
-    pub(crate) index_operation: IndexOperation, // either load or build
-    pub(crate) num_pq_chunks: usize,
-    pub(crate) seed: u64,
-    pub(crate) max_fp_vecs_per_prune: Option<usize>,
-    pub(crate) use_fp_for_search: bool,
-}
-
-impl IndexPQOperation {
-    pub(crate) const fn tag() -> &'static str {
-        "graph-index-build-pq"
-    }
-
-    #[cfg(feature = "product-quantization")]
-    pub(crate) fn to_config(&self) -> Result<IndexConfiguration, anyhow::Error> {
-        match &self.index_operation.source {
-            IndexSource::Load(load) => load.to_config(),
-            IndexSource::Build(_) => Err(anyhow::anyhow!(
-                "This function not supported on Build type, as it is only used during loading."
-            )),
-        }
-    }
-
-    #[cfg(feature = "product-quantization")]
-    pub(crate) fn try_as_config(&self) -> anyhow::Result<config::Builder> {
-        match &self.index_operation.source {
-            IndexSource::Load(_) => Err(anyhow::anyhow!(
-                "This function not supported on Load type, as it is only used during building."
-            )),
-            IndexSource::Build(build) => build.try_as_config(),
-        }
-    }
-
-    #[cfg(feature = "product-quantization")]
-    pub(crate) fn inmem_parameters(
-        &self,
-        num_points: usize,
-        dim: usize,
-    ) -> Result<DefaultProviderParameters, anyhow::Error> {
-        match &self.index_operation.source {
-            IndexSource::Load(_) => Err(anyhow::anyhow!(
-                "inmem_parameters is only supported for builds, not loads"
-            )),
-            IndexSource::Build(b) => Ok(b.inmem_parameters(num_points, dim)),
-        }
-    }
-
-    pub(crate) fn validate(&mut self, checker: &mut Checker) -> anyhow::Result<()> {
-        self.index_operation.validate(checker)?;
-
-        Ok(())
-    }
-}
-
-impl Example for IndexPQOperation {
-    fn example() -> Self {
-        Self {
-            index_operation: IndexOperation::example(),
-            num_pq_chunks: 16,
-            seed: 0xb578b71e688e65e3,
-            max_fp_vecs_per_prune: Some(48),
-            use_fp_for_search: false,
-        }
-    }
-}
-
-impl std::fmt::Display for IndexPQOperation {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "Graph Index PQ Build")?;
-        write_field!(f, "tag", Self::tag())?;
-        write_field!(f, "PQ Chunks", self.num_pq_chunks)?;
-        const MAX_FP_VECS: &str = "Max FP Vecs";
-        match &self.max_fp_vecs_per_prune {
-            Some(v) => write_field!(f, MAX_FP_VECS, v)?,
-            None => write_field!(f, MAX_FP_VECS, "none")?,
-        }
-        write_field!(f, "Use Full Precision for Search: ", self.use_fp_for_search)?;
-        // New line to separate PQ parameters from index build parameters.
-        writeln!(f)?;
-        self.index_operation.source.summarize_fields(f)?;
-
-        Ok(())
-    }
-}
-
-//////////////////////////////
-// Graph Index Build SQ //
-//////////////////////////////
-
-#[derive(Debug, Serialize, Deserialize)]
-pub(crate) struct IndexSQOperation {
-    pub(crate) index_operation: IndexOperation,
-    pub(crate) num_bits: usize,
-    pub(crate) standard_deviations: f64,
-    pub(crate) use_fp_for_search: bool,
-}
-
-impl IndexSQOperation {
-    pub(crate) const fn tag() -> &'static str {
-        "graph-index-build-sq"
-    }
-
-    #[cfg(feature = "scalar-quantization")]
-    pub(crate) fn try_as_config(&self) -> anyhow::Result<config::Builder> {
-        match &self.index_operation.source {
-            IndexSource::Load(_) => Err(anyhow::anyhow!(
-                "This function not supported on Load type, as it is only used during building."
-            )),
-            IndexSource::Build(build) => build.try_as_config(),
-        }
-    }
-
-    #[cfg(feature = "scalar-quantization")]
-    pub(crate) fn inmem_parameters(
-        &self,
-        num_points: usize,
-        dim: usize,
-    ) -> Result<DefaultProviderParameters, anyhow::Error> {
-        match &self.index_operation.source {
-            IndexSource::Load(_) => Err(anyhow::anyhow!(
-                "inmem_parameters is only supported for builds, not loads"
-            )),
-            IndexSource::Build(b) => Ok(b.inmem_parameters(num_points, dim)),
-        }
-    }
-
-    pub(crate) fn validate(&mut self, checker: &mut Checker) -> anyhow::Result<()> {
-        if self.standard_deviations <= 0.0 {
-            return Err(anyhow::anyhow!(
-                "scalar quantization standard deviations ({}) must be strictly positive",
-                self.standard_deviations
-            ));
-        }
-
-        self.index_operation.validate(checker)?;
-
-        Ok(())
-    }
-}
-
-impl Example for IndexSQOperation {
-    fn example() -> Self {
-        // Scalar Quantization does not support multi-insert, so make sure that we explicitly
-        // disable multi-insert from the example input.
-        let mut index_operation = IndexOperation::example();
-        match &mut index_operation.source {
-            IndexSource::Load(_) => {}
-            IndexSource::Build(b) => b.multi_insert = None,
-        }
-
-        Self {
-            index_operation,
-            num_bits: 4,
-            standard_deviations: 2.0,
-            use_fp_for_search: false,
-        }
-    }
-}
-
-impl std::fmt::Display for IndexSQOperation {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "Graph Index SQ Build")?;
-        write_field!(f, "tag", Self::tag())?;
-        write_field!(f, "SQ bits", self.num_bits)?;
-        write_field!(f, "StdDev", self.standard_deviations)?;
-        write_field!(f, "Use FP Search", self.use_fp_for_search)?;
-
-        // New line to separate SQ parameters from index build parameters.
-        writeln!(f)?;
-        self.index_operation.source.summarize_fields(f)?;
-
-        Ok(())
-    }
-}
-
-/////////////////////////////////////
-// Graph Index Build Spherical //
-/////////////////////////////////////
-
-#[derive(Debug, Serialize, Deserialize)]
-pub(crate) struct SphericalQuantBuild {
-    pub(crate) build: IndexBuild, // spherical does not support saving and loading
-    pub(crate) search_phase: SearchPhase,
-    pub(crate) seed: u64,
-    pub(crate) transform_kind: inputs::exhaustive::TransformKind,
-    pub(crate) query_layouts: Vec<inputs::exhaustive::SphericalQuery>,
-    pub(crate) num_bits: NonZeroUsize,
-    pub(crate) pre_scale: Option<inputs::exhaustive::PreScale>,
-}
-
-impl SphericalQuantBuild {
-    pub(crate) const fn tag() -> &'static str {
-        "graph-index-build-spherical-quantization"
-    }
-
-    #[cfg(feature = "spherical-quantization")]
-    pub(crate) fn try_as_config(&self) -> anyhow::Result<config::Builder> {
-        self.build.try_as_config()
-    }
-
-    #[cfg(feature = "spherical-quantization")]
-    pub(crate) fn inmem_parameters(
-        &self,
-        num_points: usize,
-        dim: usize,
-    ) -> DefaultProviderParameters {
-        self.build.inmem_parameters(num_points, dim)
-    }
-
-    pub(crate) fn validate(&mut self, checker: &mut Checker) -> anyhow::Result<()> {
-        self.build.validate(checker)?;
-        self.search_phase.validate(checker)?;
-
-        if self.build.save_path.is_some() {
-            return Err(anyhow::anyhow!(
-                "Spherical quantization does not support saving the index"
-            ));
-        }
-
-        // Check query plan.
-        for (i, layout) in self.query_layouts.iter().enumerate() {
-            inputs::exhaustive::check_compatibility(self.num_bits.get(), *layout).with_context(
-                || {
-                    format!(
-                        "while validating query layout {} of {}",
-                        i + 1,
-                        self.query_layouts.len()
-                    )
-                },
-            )?;
-        }
-
-        if let Some(pre_scale) = &mut self.pre_scale {
-            pre_scale.validate(checker)?;
-        }
-
-        Ok(())
-    }
-}
-
-impl Example for SphericalQuantBuild {
-    fn example() -> Self {
-        let mut build = IndexBuild::example();
-        build.multi_insert = None;
-
-        const NUM_BITS: NonZeroUsize = NonZeroUsize::new(1).unwrap();
-
-        Self {
-            build,
-            search_phase: SearchPhase::Topk(TopkSearchPhase::example()),
-            seed: 0xc0ffee,
-            transform_kind: inputs::exhaustive::TransformKind::PaddingHadamard(
-                inputs::exhaustive::TargetDim::Same,
-            ),
-            query_layouts: vec![
-                inputs::exhaustive::SphericalQuery::FourBitTransposed,
-                inputs::exhaustive::SphericalQuery::SameAsData,
-                inputs::exhaustive::SphericalQuery::ScalarQuantized,
-            ],
-            num_bits: NUM_BITS,
-            pre_scale: None,
-        }
-    }
-}
-
-impl std::fmt::Display for SphericalQuantBuild {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "Graph Index Spherical Quantization Build")?;
-        if cfg!(not(feature = "spherical-quantization")) {
-            writeln!(f, "Requires the `spherical-quantization` feature")?;
-        }
-
-        write_field!(f, "tag", Self::tag())?;
-
-        write_field!(f, "seed", self.seed)?;
-        write_field!(f, "Transform kind", self.transform_kind)?;
-        write_field!(f, "Num Bits", self.num_bits)?;
-        write_field!(
-            f,
-            "Pre Scale",
-            self.pre_scale
-                .as_ref()
-                .unwrap_or(&inputs::exhaustive::PreScale::None)
-        )?;
-
-        // New line to separate SQ parameters from index build parameters.
-        writeln!(f)?;
-        self.build.summarize_fields(f)?;
-
-        Ok(())
     }
 }
 
@@ -1413,71 +748,6 @@ impl std::fmt::Display for DynamicRunbookParams {
         if let Some(threshold) = self.consolidate_threshold {
             write_field!(f, "Consolidate Threshold", threshold)?;
         }
-
-        Ok(())
-    }
-}
-
-///////////////////////////
-// Graph Index Dynamic //
-///////////////////////////
-
-#[derive(Debug, Serialize, Deserialize)]
-pub(crate) struct DynamicIndexRun {
-    pub(crate) build: IndexBuild,
-    pub(crate) search_phase: SearchPhase,
-    pub(crate) runbook_params: DynamicRunbookParams,
-}
-
-impl DynamicIndexRun {
-    pub(crate) const fn tag() -> &'static str {
-        "graph-index-dynamic-run"
-    }
-
-    pub(crate) fn validate(&mut self, checker: &mut Checker) -> anyhow::Result<()> {
-        self.build.validate(checker)?;
-        self.runbook_params.validate(checker)?;
-        self.search_phase.validate(checker)?;
-
-        Ok(())
-    }
-
-    pub(crate) fn try_as_config(&self, insert_l: usize) -> anyhow::Result<config::Builder> {
-        let mut builder = self.build.try_as_config()?;
-        builder.l_build(insert_l);
-        Ok(builder)
-    }
-
-    pub(crate) fn inmem_parameters(
-        &self,
-        num_points: usize,
-        dim: usize,
-    ) -> DefaultProviderParameters {
-        self.build.inmem_parameters(num_points, dim)
-    }
-}
-
-impl Example for DynamicIndexRun {
-    fn example() -> Self {
-        let build = IndexBuild::example();
-
-        Self {
-            build,
-            search_phase: SearchPhase::Topk(TopkSearchPhase::example()),
-            runbook_params: DynamicRunbookParams::example(),
-        }
-    }
-}
-
-impl std::fmt::Display for DynamicIndexRun {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "Graph Index Dynamic Run")?;
-        write_field!(f, "tag", Self::tag())?;
-        writeln!(f, "Runbook Parameters:")?;
-        write!(f, "{}", self.runbook_params)?;
-
-        writeln!(f, "Index Build Parameters:")?;
-        self.build.summarize_fields(f)?;
 
         Ok(())
     }

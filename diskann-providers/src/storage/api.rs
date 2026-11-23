@@ -9,7 +9,6 @@ use super::{StorageReadProvider, StorageWriteProvider};
 use diskann_vector::distance::Metric;
 
 use super::get_mem_index_data_file;
-use crate::model::graph::provider::async_::PrefetchCacheLineLevel;
 
 /// A general trait for saving `self` to disk.
 ///
@@ -127,6 +126,4 @@ pub struct AsyncQuantLoadContext {
     pub metric: Metric,
     /// The number of iterations to prefetch when performing bulk-retrievals.
     pub prefetch_lookahead: Option<usize>,
-    /// controls the prefetch cache line level for the index.
-    pub prefetch_cache_line_level: Option<PrefetchCacheLineLevel>,
 }

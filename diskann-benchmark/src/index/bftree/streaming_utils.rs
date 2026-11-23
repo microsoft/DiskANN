@@ -8,7 +8,7 @@ use std::io::Write;
 use diskann_benchmark_core::streaming::{executors::bigann, Executor};
 use diskann_benchmark_runner::output::Output;
 
-use crate::index::streaming::{
+use super::streaming::{
     managed::{self, Managed},
     stats::StreamStats,
 };
@@ -73,7 +73,7 @@ where
     writeln!(
         output,
         "{}",
-        crate::index::streaming::stats::Summary::new(results.iter().map(|r| r.inner()))
+        super::streaming::stats::Summary::new(results.iter().map(|r| r.inner()))
     )?;
 
     Ok(results)

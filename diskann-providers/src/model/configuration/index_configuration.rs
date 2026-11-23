@@ -11,8 +11,6 @@ use std::num::NonZeroUsize;
 use diskann::graph::Config;
 use diskann_vector::distance::Metric;
 
-use crate::model::graph::provider::async_::PrefetchCacheLineLevel;
-
 /// The index configuration
 #[derive(Debug, Clone, PartialEq)]
 pub struct IndexConfiguration {
@@ -42,11 +40,6 @@ pub struct IndexConfiguration {
     /// when doing operations on a sequence of vectors.
     pub prefetch_lookahead: Option<NonZeroUsize>,
 
-    /// prefetch cache line level.
-    /// This controls the granularity of prefetching.
-    /// It can be set to None for default behavior (8 cache lines by default)
-    pub prefetch_cache_line_level: Option<PrefetchCacheLineLevel>,
-
     /// Optional seed for random number generator.
     pub random_seed: Option<u64>,
 }
@@ -69,7 +62,6 @@ impl IndexConfiguration {
             max_points,
             num_frozen_pts,
             prefetch_lookahead: None,
-            prefetch_cache_line_level: None,
             random_seed: None,
         }
     }
@@ -89,15 +81,6 @@ impl IndexConfiguration {
     /// sets prefetch lookahead using builder pattern
     pub fn with_prefetch_lookahead(mut self, prefetch_lookahead: Option<NonZeroUsize>) -> Self {
         self.prefetch_lookahead = prefetch_lookahead;
-        self
-    }
-
-    /// sets prefetch cache line level using builder pattern
-    pub fn with_prefetch_cache_line_level(
-        mut self,
-        prefetch_cache_line_level: Option<PrefetchCacheLineLevel>,
-    ) -> Self {
-        self.prefetch_cache_line_level = prefetch_cache_line_level;
         self
     }
 
@@ -134,7 +117,6 @@ mod tests {
             max_points: 1000,
             num_frozen_pts: ONE,
             prefetch_lookahead: None,
-            prefetch_cache_line_level: None,
             random_seed: None,
         }
     }
@@ -153,17 +135,6 @@ mod tests {
 
         let mut expected_index_configuration = sample_test_index();
         expected_index_configuration.prefetch_lookahead = NonZeroUsize::new(8);
-        assert_eq!(index_configuration, expected_index_configuration,);
-    }
-
-    #[test]
-    fn test_with_prefetch_cache_line_level_builder() {
-        let index_configuration = IndexConfiguration::new(Metric::L2, 128, 1000, ONE, 1, config())
-            .with_prefetch_cache_line_level(Some(PrefetchCacheLineLevel::CacheLine8));
-
-        let mut expected_index_configuration = sample_test_index();
-        expected_index_configuration.prefetch_cache_line_level =
-            Some(PrefetchCacheLineLevel::CacheLine8);
         assert_eq!(index_configuration, expected_index_configuration,);
     }
 

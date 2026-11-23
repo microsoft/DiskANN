@@ -7,10 +7,8 @@ use std::borrow::Cow;
 
 use diskann_benchmark_runner::utils::{fmt::Table, percentiles, MicroSeconds};
 
-use crate::{
-    index::{build::BuildStats, result::SearchResults},
-    utils::DisplayWrapper,
-};
+use super::super::{build::BuildStats, result::SearchResults};
+use crate::utils::DisplayWrapper;
 
 /// Statistics reported for each step in a streaming pipeline.
 #[derive(Debug, serde::Serialize)]
@@ -104,16 +102,6 @@ impl GenericStats {
             batches,
             latencies: percentiles::compute_percentiles(&mut latencies)?,
         })
-    }
-
-    #[cfg(feature = "inmem2")]
-    pub(crate) fn latencies(&self) -> &percentiles::Percentiles<MicroSeconds> {
-        &self.latencies
-    }
-
-    #[cfg(feature = "inmem2")]
-    pub(crate) fn total_time(&self) -> MicroSeconds {
-        self.total_time
     }
 }
 

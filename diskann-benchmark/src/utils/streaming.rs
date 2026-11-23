@@ -10,28 +10,25 @@ use std::collections::{HashMap, HashSet, VecDeque};
 /// This struct manages the relationship between tags, slots, and empty/deleted slots
 /// to maintain consistency during dynamic index operations.
 #[derive(Debug)]
-pub struct TagSlotManager {
+pub(crate) struct TagSlotManager {
     /// Queue of available empty slots
-    pub empty_slots: VecDeque<u32>,
+    pub(crate) empty_slots: VecDeque<u32>,
     /// Set of deleted slots pending cleanup
-    pub deleted_slots: HashSet<u32>,
+    pub(crate) deleted_slots: HashSet<u32>,
     /// Mapping from tag ID to slot ID
-    pub tag_to_slot: HashMap<usize, u32>,
+    pub(crate) tag_to_slot: HashMap<usize, u32>,
     /// Mapping from slot ID to tag ID
-    pub slot_to_tag: HashMap<u32, usize>,
-    /// The total capacity (number of slots)
-    capacity: usize,
+    pub(crate) slot_to_tag: HashMap<u32, usize>,
 }
 
 impl TagSlotManager {
     /// Create new slot bookkeeping with given capacity
-    pub fn new(max_capacity: usize) -> Self {
+    pub(crate) fn new(max_capacity: usize) -> Self {
         Self {
             empty_slots: (0..(max_capacity - 1) as u32).collect(), // Queue, initialize with 0, ..., max_capacity - 2 to leave room for 1 frozen point.
             deleted_slots: HashSet::new(),
             tag_to_slot: HashMap::new(),
             slot_to_tag: HashMap::new(),
-            capacity: max_capacity,
         }
     }
 
@@ -39,7 +36,7 @@ impl TagSlotManager {
     ///
     /// Returns a vector of slot IDs that have been removed from the empty_slots queue.
     /// If there are insufficient empty slots, returns an error.
-    pub fn get_n_empty_slots(&mut self, n: usize) -> anyhow::Result<Vec<u32>> {
+    pub(crate) fn get_n_empty_slots(&mut self, n: usize) -> anyhow::Result<Vec<u32>> {
         if self.empty_slots.len() < n {
             return Err(anyhow::anyhow!(
                 "Insufficient empty slots: requested {}, available {}",
@@ -55,26 +52,11 @@ impl TagSlotManager {
         Ok(slots)
     }
 
-    /// Return the number of deleted elements.
-    pub fn num_deleted(&self) -> usize {
-        self.deleted_slots.len()
-    }
-
-    /// Return the number of active elements (both valid and deleted).
-    pub fn num_active(&self) -> usize {
-        self.capacity() - self.empty_slots.len()
-    }
-
-    /// Return the total number of elements this object can manage.
-    pub fn capacity(&self) -> usize {
-        self.capacity
-    }
-
     /// Find slots corresponding to a range of tag IDs
     ///
     /// Returns a vector of slot IDs for the given tag range.
     /// If any tag is not found in the mapping, returns an error.
-    pub fn find_slots_by_tags(
+    pub(crate) fn find_slots_by_tags(
         &self,
         tag_range: std::ops::Range<usize>,
     ) -> anyhow::Result<Vec<u32>> {
@@ -92,7 +74,7 @@ impl TagSlotManager {
     ///
     /// Creates bidirectional mappings between tags and slots for the given range.
     /// Takes ownership of the slots vector for efficiency.
-    pub fn assign_slots_to_tags(
+    pub(crate) fn assign_slots_to_tags(
         &mut self,
         tag_range: std::ops::Range<usize>,
         slots: Vec<u32>,
@@ -113,30 +95,12 @@ impl TagSlotManager {
         Ok(())
     }
 
-    /// Mark tags as deleted by moving their slots to the deleted_slots set
-    ///
-    /// For each tag in the range, finds the corresponding slot and adds it to deleted_slots.
-    /// The tag-to-slot mappings remain intact until background cleaning occurs.
-    pub fn mark_tags_deleted(&mut self, tag_range: std::ops::Range<usize>) -> anyhow::Result<()> {
-        for tag in tag_range {
-            if let Some(&slot) = self.tag_to_slot.get(&tag) {
-                self.deleted_slots.insert(slot);
-            } else {
-                return Err(anyhow::anyhow!(
-                    "Tag {} not found in slot mapping for delete",
-                    tag
-                ));
-            }
-        }
-        Ok(())
-    }
-
     /// Immediately recycle tags back to empty slots, removing all mappings.
     ///
     /// Used by hard-delete providers where slots can be reused immediately
     /// without waiting for a consolidation pass.
     #[cfg(feature = "bftree")]
-    pub fn recycle_tags(&mut self, tag_range: std::ops::Range<usize>) -> anyhow::Result<()> {
+    pub(crate) fn recycle_tags(&mut self, tag_range: std::ops::Range<usize>) -> anyhow::Result<()> {
         for tag in tag_range {
             if let Some(slot) = self.tag_to_slot.remove(&tag) {
                 self.slot_to_tag.remove(&slot);
@@ -159,7 +123,7 @@ impl TagSlotManager {
     /// 3. Clearing the deleted_slots set
     ///
     /// Should be called after background cleaning operations complete.
-    pub fn consolidate(&mut self) {
+    pub(crate) fn consolidate(&mut self) {
         let slots_to_consolidate: Vec<u32> = self.deleted_slots.drain().collect();
 
         slots_to_consolidate.into_iter().for_each(|slot| {
@@ -271,19 +235,6 @@ mod tests {
         Ok(slots)
     }
 
-    /// Helper function to simulate delete operation
-    fn mock_delete(
-        bookkeeping: &mut TagSlotManager,
-        tag_range: std::ops::Range<usize>,
-        max_capacity: usize,
-        context: &str,
-    ) -> anyhow::Result<Vec<u32>> {
-        let slots = bookkeeping.find_slots_by_tags(tag_range.clone())?;
-        bookkeeping.mark_tags_deleted(tag_range)?;
-        bookkeeping.check_invariants(max_capacity, context)?;
-        Ok(slots)
-    }
-
     /// Helper function to simulate replace operation (read-only)
     fn mock_replace(
         bookkeeping: &TagSlotManager,
@@ -349,64 +300,6 @@ mod tests {
         // State should be unchanged after replace lookup
         assert_eq!(bookkeeping.tag_to_slot.len(), 5);
         assert_eq!(bookkeeping.deleted_slots.len(), 0);
-
-        // Test delete operation: find slots and mark them deleted
-        let delete_slots = mock_delete(
-            &mut bookkeeping,
-            100..102,
-            max_capacity,
-            "after delete marking",
-        )
-        .unwrap();
-        assert_eq!(delete_slots, vec![0, 1]);
-
-        // Tag mappings should still exist, but slots should be marked deleted
-        assert_eq!(bookkeeping.tag_to_slot.len(), 5);
-        assert_eq!(bookkeeping.deleted_slots.len(), 2);
-        assert!(bookkeeping.deleted_slots.contains(&0));
-        assert!(bookkeeping.deleted_slots.contains(&1));
-
-        // Test another insert while having deleted slots
-        let insert_slots_3 = mock_insert(
-            &mut bookkeeping,
-            300..301,
-            max_capacity,
-            "after insert with deleted slots",
-        )
-        .unwrap();
-        assert_eq!(insert_slots_3, vec![5]);
-
-        // Test consolidate operation
-        bookkeeping.consolidate();
-        bookkeeping
-            .check_invariants(max_capacity, "after consolidate")
-            .unwrap();
-
-        // After consolidate: deleted slots should be moved to empty_slots
-        assert_eq!(bookkeeping.deleted_slots.len(), 0);
-        assert_eq!(bookkeeping.tag_to_slot.len(), 4); // 200..202 + 300..301
-        assert_eq!(bookkeeping.slot_to_tag.len(), 4);
-        assert_eq!(bookkeeping.empty_slots.len(), max_capacity - 1 - 4); // 5 slots available
-
-        // Deleted tag mappings should be removed
-        assert!(!bookkeeping.tag_to_slot.contains_key(&100));
-        assert!(!bookkeeping.tag_to_slot.contains_key(&101));
-        assert!(!bookkeeping.slot_to_tag.contains_key(&0));
-        assert!(!bookkeeping.slot_to_tag.contains_key(&1));
-
-        // Remaining mappings should be intact
-        assert_eq!(bookkeeping.tag_to_slot[&200], 3);
-        assert_eq!(bookkeeping.tag_to_slot[&201], 4);
-        assert_eq!(bookkeeping.tag_to_slot[&300], 5);
-
-        // Test getting recycled slots success after consolidate
-        let _ = mock_insert(
-            &mut bookkeeping,
-            400..402,
-            max_capacity,
-            "after using recycled slots",
-        )
-        .unwrap();
     }
 
     #[test]
@@ -438,85 +331,5 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("Tag 999 not found"));
-
-        // Test marking non-existent tag as deleted
-        let result = bookkeeping.mark_tags_deleted(999..1000);
-        assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Tag 999 not found"));
-    }
-
-    #[test]
-    fn test_complex_interleaved_operations() {
-        let max_capacity = 20;
-        let mut bookkeeping = TagSlotManager::new(max_capacity);
-
-        // Insert batch 1: tags 1000-1004 (5 slots)
-        let slots1 =
-            mock_insert(&mut bookkeeping, 1000..1005, max_capacity, "batch 1 insert").unwrap();
-        assert_eq!(slots1.len(), 5);
-
-        // Insert batch 2: tags 2000-2002 (3 slots)
-        let slots2 =
-            mock_insert(&mut bookkeeping, 2000..2003, max_capacity, "batch 2 insert").unwrap();
-        assert_eq!(slots2.len(), 3);
-
-        // Delete partial batch 1: tags 1001-1003
-        let deleted_slots = mock_delete(
-            &mut bookkeeping,
-            1001..1004,
-            max_capacity,
-            "partial delete batch 1",
-        )
-        .unwrap();
-        assert_eq!(deleted_slots.len(), 3);
-
-        // Replace operation on remaining batch 1
-        let replace_slots =
-            mock_replace(&bookkeeping, 1000..1001, max_capacity, "replace operation").unwrap();
-        assert_eq!(replace_slots.len(), 1);
-
-        // Insert batch 3 while having deleted slots
-        let slots3 = mock_insert(
-            &mut bookkeeping,
-            3000..3002,
-            max_capacity,
-            "batch 3 insert with deleted",
-        )
-        .unwrap();
-        assert_eq!(slots3.len(), 2);
-
-        // Delete entire batch 2
-        let deleted_slots2 = mock_delete(
-            &mut bookkeeping,
-            2000..2003,
-            max_capacity,
-            "delete entire batch 2",
-        )
-        .unwrap();
-        assert_eq!(deleted_slots2.len(), 3);
-
-        // Consolidate
-        bookkeeping.consolidate();
-        bookkeeping
-            .check_invariants(max_capacity, "after consolidation")
-            .unwrap();
-
-        // Verify final state
-        assert_eq!(bookkeeping.deleted_slots.len(), 0);
-        assert_eq!(bookkeeping.tag_to_slot.len(), 4); // 1000, 1004, 3000, 3001
-        assert_eq!(bookkeeping.slot_to_tag.len(), 4);
-
-        // Insert using recycled slots
-        let recycled_slots = mock_insert(
-            &mut bookkeeping,
-            4000..4006,
-            max_capacity,
-            "final insert with recycled",
-        )
-        .unwrap();
-        assert_eq!(recycled_slots.len(), 6);
     }
 }

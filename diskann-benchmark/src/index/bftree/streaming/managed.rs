@@ -23,12 +23,7 @@ use crate::utils::streaming::TagSlotManager;
 pub(crate) enum SlotReclaim {
     /// Slots are recycled to `empty_slots` immediately during delete.
     /// No maintenance pass is needed.
-    #[cfg(feature = "bftree")]
     Immediate,
-
-    /// Slots are held in `deleted_slots` until maintenance fires.
-    /// Maintenance triggers when `num_deleted > num_active * threshold`.
-    Deferred(f32),
 }
 
 /// A layer trait for inter-operating with the [`Managed`] index.
@@ -148,9 +143,7 @@ where
         let (overhead_slots, slots) = timed!(self.book_keeping.find_slots_by_tags(tags.clone())?);
         let output = self.stream.delete(&slots)?;
         let (overhead_reclaim, _) = timed!(match &self.reclaim {
-            #[cfg(feature = "bftree")]
             SlotReclaim::Immediate => self.book_keeping.recycle_tags(tags)?,
-            SlotReclaim::Deferred(_) => self.book_keeping.mark_tags_deleted(tags)?,
         });
         Ok(Stats::new(overhead_slots + overhead_reclaim, output))
     }
@@ -163,13 +156,7 @@ where
 
     fn needs_maintenance(&mut self) -> bool {
         match &self.reclaim {
-            #[cfg(feature = "bftree")]
             SlotReclaim::Immediate => false,
-            SlotReclaim::Deferred(threshold) => {
-                let num_active = self.book_keeping.num_active();
-                let limit = (num_active as f32 * threshold) as usize;
-                self.book_keeping.num_deleted() > limit
-            }
         }
     }
 }

@@ -12,8 +12,7 @@ use diskann_inmem::{self as di, repr::quantized};
 use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::{
     common::MinMaxElement,
-    index::diskann_async::train_pq,
-    model::{IndexConfiguration, MAX_PQ_TRAINING_SET_SIZE},
+    model::{IndexConfiguration, MAX_PQ_TRAINING_SET_SIZE, pq},
     storage::{PQStorage, SQStorage},
     utils::{BridgeErr, PQPathNames, create_thread_pool, gen_random_slice},
 };
@@ -298,7 +297,7 @@ where
                         .create_rnd();
                 let (train_data, train_size, train_dim) =
                     gen_random_slice::<T, _>(data_path, p_val, storage_provider, &mut rnd)?;
-                train_pq(
+                pq::legacy_train(
                     rowmajor::Ref::try_from_data(&train_data, train_size, train_dim)
                         .bridge_err()?,
                     num_chunks,
@@ -378,8 +377,10 @@ where
             ))))
         }
         QuantizationType::Spherical(SphericalBits::One) => {
-            let metric: SupportedMetric =
-                index_configuration.dist_metric.try_into().bridge_err()?;
+            let metric: SupportedMetric = index_configuration
+                .dist_metric
+                .try_into()
+                .map_err(ANNError::new)?;
             let rng = diskann_providers::utils::create_rnd_provider_from_optional_seed(
                 index_configuration.random_seed,
             );

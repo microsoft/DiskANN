@@ -5,11 +5,10 @@
 
 use std::io::Result;
 
-use super::{StorageReadProvider, StorageWriteProvider};
+use diskann::{ANNError, ANNResult};
 use diskann_quantization::scalar::ScalarQuantizer;
 
-use super::protos;
-use crate::model::graph::provider::async_::inmem::SQError;
+use super::{StorageReadProvider, StorageWriteProvider, protos};
 
 /// The suffix for the compressed SQ vectors file.
 const COMPRESSED_DATA_FILE_NAME_SUFFIX: &str = "sq_compressed.bin";
@@ -57,16 +56,13 @@ impl SQStorage {
         protos::save(quantizer_proto, write_provider, self.quantizer_path())
     }
 
-    pub fn load_quantizer<Storage>(
-        &self,
-        read_provider: &Storage,
-    ) -> std::result::Result<ScalarQuantizer, SQError>
+    pub fn load_quantizer<Storage>(&self, read_provider: &Storage) -> ANNResult<ScalarQuantizer>
     where
         Storage: StorageReadProvider,
     {
         let quantizer_proto: protos::ScalarQuantizer =
-            protos::load(read_provider, self.quantizer_path())?;
-        Ok(ScalarQuantizer::try_from(quantizer_proto)?)
+            protos::load(read_provider, self.quantizer_path()).map_err(ANNError::new)?;
+        ScalarQuantizer::try_from(quantizer_proto).map_err(ANNError::new)
     }
 }
 

@@ -139,36 +139,6 @@ mod tests {
     use super::*;
 
     use diskann_benchmark_runner::{app::Commands, output::Memory};
-    use diskann_providers::storage::FileStorageProvider;
-    use diskann_tools::utils::compute_ground_truth_from_datafiles;
-    use diskann_vector::distance::Metric;
-
-    // Add these structs to deserialize the benchmark results
-    #[derive(Debug, Deserialize)]
-    struct BenchmarkResult {
-        results: ResultsContainer,
-    }
-
-    #[derive(Debug, Deserialize)]
-    struct ResultsContainer {
-        search: SearchContainer,
-    }
-
-    #[derive(Debug, Deserialize)]
-    struct SearchContainer {
-        #[serde(rename = "Topk")]
-        topk: Vec<SearchResultItem>,
-    }
-
-    #[derive(Debug, Deserialize)]
-    struct SearchResultItem {
-        recall: RecallMetrics,
-    }
-
-    #[derive(Debug, Deserialize)]
-    struct RecallMetrics {
-        average: f64,
-    }
 
     fn load_from_file<T>(path: &std::path::Path) -> T
     where
@@ -303,15 +273,6 @@ mod tests {
         assert_eq!(results.len(), num_jobs(&raw));
     }
 
-    ////////////////////////////////
-    //      Graph Index Build     //
-    ////////////////////////////////
-    #[test]
-    fn graph_index_integration() {
-        let raw = value_from_file(&example_directory().join("graph-index.json"));
-        run_integration_test(raw);
-    }
-
     /////////////////////////
     //    Flat Search      //
     /////////////////////////
@@ -319,22 +280,6 @@ mod tests {
     #[test]
     fn flat_search_integration() {
         let raw = value_from_file(&example_directory().join("flat-index.json"));
-        run_integration_test(raw);
-    }
-
-    ////////////////////////////
-    //      Dynamic Index     //
-    ////////////////////////////
-
-    #[test]
-    fn graph_index_dynamic_integration() {
-        let raw = value_from_file(&example_directory().join("graph-index-dynamic.json"));
-        run_integration_test(raw);
-    }
-
-    #[test]
-    fn graph_index_dynamic_yfcc_integration() {
-        let raw = value_from_file(&example_directory().join("graph-index-dynamic-yfcc.json"));
         run_integration_test(raw);
     }
 
@@ -584,73 +529,6 @@ mod tests {
         assert!(!output_path.exists());
     }
 
-    /////////////////////////
-    // Scalar Quantization //
-    /////////////////////////
-
-    #[test]
-    fn scalar_quantization_integration() {
-        let input_paths = [example_directory().join("scalar.json")];
-
-        for input_path in input_paths {
-            let tempdir = tempfile::tempdir().unwrap();
-            let output_path = tempdir.path().join("output.json");
-            assert!(!output_path.exists());
-
-            let modified_input_path = tempdir.path().join("input.json");
-
-            let mut raw = value_from_file(&input_path);
-            prefix_search_directories(&mut raw, &root_directory());
-            save_to_file(&modified_input_path, &raw);
-
-            run_scalar_integration(&modified_input_path, &output_path)
-        }
-    }
-
-    #[cfg(feature = "scalar-quantization")]
-    fn run_scalar_integration(input_path: &std::path::Path, output_path: &std::path::Path) {
-        let command = Commands::Run {
-            input_file: input_path.to_owned(),
-            output_file: output_path.to_owned(),
-            dry_run: false,
-            allow_debug: true,
-        };
-
-        let cli = Cli::from_commands(command, true);
-        let mut output = Memory::new();
-
-        cli.run(&mut output).unwrap();
-        println!(
-            "output = {}",
-            String::from_utf8(output.into_inner()).unwrap()
-        );
-
-        // Check that the results file is generated.
-        assert!(output_path.exists());
-    }
-
-    #[cfg(not(feature = "scalar-quantization"))]
-    fn run_scalar_integration(input_path: &std::path::Path, output_path: &std::path::Path) {
-        let command = Commands::Run {
-            input_file: input_path.to_owned(),
-            output_file: output_path.to_owned(),
-            dry_run: false,
-            allow_debug: true,
-        };
-        let cli = Cli::from_commands(command, true);
-        let mut output = Memory::new();
-
-        let err = cli.run(&mut output).unwrap_err();
-        println!("err = {:?}", err);
-
-        let output = String::from_utf8(output.into_inner()).unwrap();
-        assert!(output.contains("feature \"scalar-quantization\""));
-        println!("output = {}", output);
-
-        // The output file should not have been created because we failed the test.
-        assert!(!output_path.exists());
-    }
-
     ////////////////////////////
     // Spherical Quantization //
     ////////////////////////////
@@ -658,7 +536,6 @@ mod tests {
     #[test]
     fn spherical_quantization_intergration() {
         let input_paths = [
-            example_directory().join("graph-index-spherical-quantization.json"),
             example_directory().join("spherical-exhaustive.json"),
         ];
 
@@ -731,55 +608,6 @@ mod tests {
         run_integration_test(raw);
     }
 
-    #[test]
-    fn spherical_filter_search_integration() {
-        let input_path = example_directory().join("spherical-filter.json");
-
-        let tempdir = tempfile::tempdir().unwrap();
-        let output_path = tempdir.path().join("output.json");
-        assert!(!output_path.exists());
-
-        let modified_input_path = tempdir.path().join("input.json");
-
-        let mut raw = value_from_file(&input_path);
-        prefix_search_directories(&mut raw, &root_directory());
-        save_to_file(&modified_input_path, &raw);
-
-        run_spherical_integration(&modified_input_path, &output_path)
-    }
-
-    #[test]
-    fn graph_index_filter_integration() {
-        // First, parse and modify the input file to establish paths relative to the
-        // directory building the dispatcher.
-        let raw = value_from_file(&example_directory().join("graph-index-filter.json"));
-        run_integration_test(raw);
-    }
-
-    #[test]
-    fn graph_index_inline_filter_integration() {
-        // First, parse and modify the input file to establish paths relative to the
-        // directory building the dispatcher.
-        let raw = value_from_file(&example_directory().join("graph-index-inline-filter.json"));
-        run_integration_test(raw);
-    }
-
-    #[test]
-    fn graph_index_range_integration() {
-        // First, parse and modify the input file to establish paths relative to the
-        // directory building the dispatcher.
-        let raw = value_from_file(&example_directory().join("graph-index-range.json"));
-        run_integration_test(raw);
-    }
-
-    #[test]
-    fn graph_index_filter_range_integration() {
-        // First, parse and modify the input file to establish paths relative to the
-        // directory building the dispatcher.
-        let raw = value_from_file(&example_directory().join("graph-index-filter-range.json"));
-        run_integration_test(raw);
-    }
-
     /// Filtered disk search end-to-end: drives the disk-index backend through
     /// `disk-index-filter.json`
     #[test]
@@ -811,125 +639,6 @@ mod tests {
         assert_eq!(results.len(), num_jobs(&raw));
     }
 
-    #[test]
-    fn graph_index_inline_filter_yfcc_integration() {
-        // First, parse and modify the input file to establish paths relative to the
-        // directory building the dispatcher.
-        let raw = value_from_file(&example_directory().join("graph-index-inline-filter-yfcc.json"));
-        run_integration_test(raw);
-    }
-
-    #[test]
-    fn graph_index_filter_integration_with_gt_compute() {
-        let storage_provider = FileStorageProvider;
-
-        let disk_index_search_path = root_directory().join("test_data/disk_index_search");
-
-        let result = compute_ground_truth_from_datafiles::<f32, (), FileStorageProvider>(
-            &storage_provider,
-            Metric::L2, // distance function
-            disk_index_search_path
-                .join("disk_index_siftsmall_learn_256pts_data.fbin")
-                .to_str()
-                .unwrap(), // base_file
-            disk_index_search_path
-                .join("disk_index_sample_query_10pts.fbin")
-                .to_str()
-                .unwrap(), // query_file
-            disk_index_search_path
-                .join("gt_small_filter.bin")
-                .to_str()
-                .unwrap(), // ground_truth_file
-            None,       // vector_filters_file
-            10,         // default recall_at value
-            None,       // insert_file
-            None,       // skip_base
-            None,       // associated_data_file
-            Some(
-                disk_index_search_path
-                    .join("data.256.label.jsonl")
-                    .to_str()
-                    .unwrap(),
-            ), // base_file_labels
-            Some(
-                disk_index_search_path
-                    .join("query.10.label.jsonl")
-                    .to_str()
-                    .unwrap(),
-            ), // query_file_labels
-        );
-
-        match result {
-            Ok(_) => {
-                println!("Compute ground-truth completed successfully");
-            }
-            Err(err) => {
-                panic!("Error: {:?}", err);
-            }
-        };
-
-        let mut raw = value_from_file(
-            &example_directory().join("graph-index-filter-ground-truth-small.json"),
-        );
-        prefix_search_directories(&mut raw, &root_directory());
-
-        let tempdir = tempfile::tempdir().unwrap();
-
-        let input_path = tempdir
-            .path()
-            .join("graph-index-filter-ground-truth-small.json");
-        save_to_file(&input_path, &raw);
-
-        let output_path = tempdir.path().join("output.json");
-        assert!(!output_path.exists());
-
-        // Run the example program.
-        let command = Commands::Run {
-            input_file: input_path.to_owned(),
-            output_file: output_path.to_owned(),
-            dry_run: false,
-            allow_debug: true,
-        };
-        let cli = Cli::from_commands(command, true);
-        let mut output = Memory::new();
-
-        cli.run(&mut output).unwrap();
-        println!(
-            "output = {}",
-            String::from_utf8(output.into_inner()).unwrap()
-        );
-
-        // Check that the results file is generated.
-        assert!(output_path.exists());
-
-        let results: Vec<Value> = load_from_file(&output_path);
-        assert_eq!(results.len(), num_jobs(&raw));
-
-        for (job_idx, result) in results.iter().enumerate() {
-            let benchmark_result = BenchmarkResult::deserialize(result).unwrap_or_else(|e| {
-                panic!(
-                    "Failed to deserialize result for job {}: {}\nResult: {:#?}",
-                    job_idx, e, result
-                )
-            });
-
-            for (search_idx, search_result) in
-                benchmark_result.results.search.topk.iter().enumerate()
-            {
-                let recall_avg = search_result.recall.average;
-                println!(
-                    "Job {}, Search config {}: recall average = {}",
-                    job_idx, search_idx, recall_avg
-                );
-                assert_eq!(
-                    recall_avg, 1.0,
-                    "Expected recall average of 1.0 for job {} search config {}, got {}",
-                    job_idx, search_idx, recall_avg
-                );
-            }
-        }
-    }
-
     //////////////////////////
     // Product Quantization //
     //////////////////////////
@@ -938,7 +647,6 @@ mod tests {
     fn product_quantization_intergration() {
         let input_paths = [
             example_directory().join("product-exhaustive.json"),
-            example_directory().join("product.json"),
         ];
 
         for input_path in input_paths {

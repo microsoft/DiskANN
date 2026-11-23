@@ -380,7 +380,7 @@ pub(in crate::index::inmem2) struct Stats {
 }
 
 impl Stats {
-    fn new(results: dbc::build::BuildResults<()>) -> anyhow::Result<Self> {
+    pub(super) fn new(results: dbc::build::BuildResults<()>) -> anyhow::Result<Self> {
         let total_time = results.end_to_end_latency();
 
         let mut latencies = Vec::new();

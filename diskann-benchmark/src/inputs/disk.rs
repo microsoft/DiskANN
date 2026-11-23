@@ -24,9 +24,6 @@ use crate::{
     utils::SimilarityMeasure,
 };
 
-#[cfg(feature = "disk-index")]
-use crate::inputs::graph_index::AdaptiveL;
-
 //////////////
 // Registry //
 //////////////
@@ -70,6 +67,22 @@ pub(crate) struct DiskIndexBuild {
     #[cfg(feature = "disk-index")]
     pub(crate) quantization_type: QuantizationType,
     pub(crate) save_path: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[cfg(feature = "disk-index")]
+pub(crate) struct AdaptiveL {
+    pub(crate) sample_count: NonZeroUsize,
+    pub(crate) scale_factor: f64,
+}
+
+#[cfg(feature = "disk-index")]
+impl AdaptiveL {
+    pub(crate) fn validate(&self, _checker: &mut Checker) -> Result<(), anyhow::Error> {
+        let _ = graph::search::AdaptiveL::new(self.sample_count.into(), self.scale_factor)
+            .map_err(|e| anyhow::anyhow!("failed to create adaptive L: {}", e))?;
+        Ok(())
+    }
 }
 
 #[cfg(feature = "disk-index")]

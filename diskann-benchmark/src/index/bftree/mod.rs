@@ -18,7 +18,22 @@
 use diskann_benchmark_runner::Registry;
 
 #[cfg(feature = "bftree")]
-use crate::index::search::plugins::Topk;
+use self::search::plugins::Topk;
+
+#[cfg(feature = "bftree")]
+mod benchmarks;
+
+#[cfg(feature = "bftree")]
+mod build;
+
+#[cfg(feature = "bftree")]
+mod result;
+
+#[cfg(feature = "bftree")]
+mod search;
+
+#[cfg(feature = "bftree")]
+mod streaming;
 
 // Avoid `cfg_if` as `rustfmt` doesn't reliably format through `cfg_if`.
 #[cfg(feature = "bftree")]

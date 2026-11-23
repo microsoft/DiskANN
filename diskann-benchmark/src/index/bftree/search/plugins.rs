@@ -36,12 +36,9 @@ use std::sync::Arc;
 
 use diskann::{graph::DiskANNIndex, provider::DataProvider};
 use diskann_benchmark_runner::utils::fmt::{Delimit, Quote};
-use diskann_providers::model::graph::provider::DeterminantDiversityParams;
 
-use crate::{
-    index::result::AggregatedSearchResults,
-    inputs::graph_index::{SearchPhase, TopkDeterminantDiversityPhase},
-};
+use super::super::result::AggregatedSearchResults;
+use crate::inputs::graph_index::SearchPhase;
 
 /// A dyn-compatible search plugin for `DP`.
 ///
@@ -153,97 +150,5 @@ impl Topk {
 
     pub(crate) const fn as_str() -> &'static str {
         "topk"
-    }
-}
-
-/// A search plugin for determinant-diversity top-k post-processing.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct DeterminantDiversity;
-
-impl DeterminantDiversity {
-    pub(crate) fn is_match(phase: &SearchPhase) -> bool {
-        phase.as_topk_determinant_diversity().is_ok()
-    }
-
-    pub(crate) const fn as_str() -> &'static str {
-        "topk-determinant-diversity"
-    }
-
-    pub(crate) fn get(
-        phase: &SearchPhase,
-    ) -> anyhow::Result<(&TopkDeterminantDiversityPhase, DeterminantDiversityParams)> {
-        let phase = phase.as_topk_determinant_diversity()?;
-        let params = DeterminantDiversityParams::new(phase.power, phase.eta)?;
-        Ok((phase, params))
-    }
-}
-
-/// A search plugin for range search.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct Range;
-
-impl Range {
-    pub(crate) fn is_match(phase: &SearchPhase) -> bool {
-        phase.as_range().is_ok()
-    }
-
-    pub(crate) const fn as_str() -> &'static str {
-        "range"
-    }
-}
-
-/// A search plugin for filtered range search.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct FilteredRange;
-
-impl FilteredRange {
-    pub(crate) fn is_match(phase: &SearchPhase) -> bool {
-        phase.as_filtered_range().is_ok()
-    }
-
-    pub(crate) const fn as_str() -> &'static str {
-        "filtered-range"
-    }
-}
-
-/// A search plugin for beta-filtered search.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct TopkBetaFilter;
-
-impl TopkBetaFilter {
-    pub(crate) fn is_match(phase: &SearchPhase) -> bool {
-        phase.as_topk_beta_filter().is_ok()
-    }
-
-    pub(crate) const fn as_str() -> &'static str {
-        "topk + beta filter"
-    }
-}
-
-/// A search plugin for multi-hop filtered search.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct TopkMultihopFilter;
-
-impl TopkMultihopFilter {
-    pub(crate) fn is_match(phase: &SearchPhase) -> bool {
-        phase.as_topk_multihop_filter().is_ok()
-    }
-
-    pub(crate) const fn as_str() -> &'static str {
-        "topk + multihop filter"
-    }
-}
-
-/// A search plugin for inline filtered search.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct TopkInlineFilter;
-
-impl TopkInlineFilter {
-    pub(crate) fn is_match(phase: &SearchPhase) -> bool {
-        phase.as_topk_inline_filter().is_ok()
-    }
-
-    pub(crate) const fn as_str() -> &'static str {
-        "topk + inline filter"
     }
 }

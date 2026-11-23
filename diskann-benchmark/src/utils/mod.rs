@@ -3,24 +3,47 @@
  * Licensed under the MIT license.
  */
 
-use diskann_benchmark_runner::{
-    benchmark::Score,
-    utils::datatype::{AsDataType, DataType},
-};
+#[cfg(any(
+    feature = "inmem2",
+    feature = "bftree",
+    feature = "multi-vector",
+    feature = "disk-index"
+))]
+use diskann_benchmark_runner as dbr;
 use serde::{Deserialize, Serialize};
 
 pub(crate) mod datafiles;
 pub(crate) mod filters;
-pub(crate) mod progress;
 pub(crate) mod recall;
-pub(crate) mod streaming;
+
+#[cfg(feature = "bftree")]
 pub(crate) mod tokio;
 
+#[cfg(any(feature = "inmem2", feature = "bftree"))]
+pub(crate) mod progress;
+
+#[cfg(feature = "bftree")]
+pub(crate) mod streaming;
+
+#[cfg(any(
+    feature = "inmem2",
+    feature = "bftree",
+    feature = "multi-vector",
+    feature = "disk-index"
+))]
 const DATA_TYPE_MISMATCH: u32 = 1000;
 
-pub(crate) fn match_data_type<T>(score: &mut Score, data_type: DataType)
-where
-    T: AsDataType,
+#[cfg(any(
+    feature = "inmem2",
+    feature = "bftree",
+    feature = "multi-vector",
+    feature = "disk-index"
+))]
+pub(crate) fn match_data_type<T>(
+    score: &mut dbr::benchmark::Score,
+    data_type: dbr::utils::datatype::DataType,
+) where
+    T: dbr::utils::datatype::AsDataType,
 {
     if !T::is_match(data_type) {
         score.fail(DATA_TYPE_MISMATCH, &T::describe(data_type))
@@ -73,10 +96,12 @@ impl std::fmt::Display for SimilarityMeasure {
 /// A new-type wrapper to allow implementation of `std::fmt::Display` for non-local types.
 #[derive(Debug, Clone, Copy)]
 #[repr(transparent)]
+#[cfg(any(test, feature = "bftree", feature = "multi-vector"))]
 pub(crate) struct DisplayWrapper<'a, T>(pub(crate) &'a T)
 where
     T: ?Sized;
 
+#[cfg(any(test, feature = "bftree", feature = "multi-vector"))]
 impl<T> std::ops::Deref for DisplayWrapper<'_, T>
 where
     T: ?Sized,
@@ -118,8 +143,10 @@ where
 // SmallBanner //
 /////////////////
 
+#[cfg(any(feature = "inmem2", feature = "bftree"))]
 pub(crate) struct SmallBanner<'a>(pub(crate) &'a str);
 
+#[cfg(any(feature = "inmem2", feature = "bftree"))]
 impl std::fmt::Display for SmallBanner<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let st = format!("| {} |", self.0);
