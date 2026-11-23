@@ -535,9 +535,7 @@ mod tests {
 
     #[test]
     fn spherical_quantization_intergration() {
-        let input_paths = [
-            example_directory().join("spherical-exhaustive.json"),
-        ];
+        let input_paths = [example_directory().join("spherical-exhaustive.json")];
 
         for input_path in input_paths {
             let tempdir = tempfile::tempdir().unwrap();
@@ -645,9 +643,7 @@ mod tests {
 
     #[test]
     fn product_quantization_intergration() {
-        let input_paths = [
-            example_directory().join("product-exhaustive.json"),
-        ];
+        let input_paths = [example_directory().join("product-exhaustive.json")];
 
         for input_path in input_paths {
             let tempdir = tempfile::tempdir().unwrap();
