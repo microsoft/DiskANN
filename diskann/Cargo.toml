@@ -61,6 +61,9 @@ panic = "warn"
 [features]
 default = ["tracing"]
 
+# Enable blocked, parallel GEMM for dense FP32 flat search.
+flat-gemm = ["dep:diskann-linalg", "dep:rayon"]
+
 # Enable PiPNN batch graph construction.
 pipnn = ["dep:diskann-linalg", "dep:rayon", "diskann-utils/rayon"]
 
@@ -72,3 +75,7 @@ testing = ["dep:dashmap"]
 
 # Enable experimental diversity search
 experimental_diversity_search = []
+
+[[example]]
+name = "flat_gemm"
+required-features = ["flat-gemm"]

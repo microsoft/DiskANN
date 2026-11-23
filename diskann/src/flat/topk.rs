@@ -115,6 +115,47 @@ fn eligible_lanes(distances: &[f32; 8], threshold: f32) -> u8 {
         .to_underlying()
 }
 
+/// A persistent collector for producers that interleave blocks from multiple queries.
+#[cfg(feature = "flat-gemm")]
+pub(super) struct BatchCollector<I>(BatchStrategy<I>);
+
+#[cfg(feature = "flat-gemm")]
+enum BatchStrategy<I> {
+    Top1(Top1<I>),
+    Heap(Heap<I>),
+    Reservoir(Reservoir<I>),
+}
+
+#[cfg(feature = "flat-gemm")]
+impl<I: Copy> BatchCollector<I> {
+    pub(super) fn new(k: NonZeroUsize, reservoir_min_k: usize) -> Self {
+        Self(if k.get() == 1 {
+            BatchStrategy::Top1(Top1 { best: None })
+        } else if k.get() < reservoir_min_k {
+            BatchStrategy::Heap(Heap::new(k.get()))
+        } else {
+            BatchStrategy::Reservoir(Reservoir::new(k.get()))
+        })
+    }
+
+    pub(super) fn add_batch(&mut self, ids: &[I], distances: &[f32]) {
+        assert_eq!(ids.len(), distances.len(), "ID and distance lengths differ");
+        match &mut self.0 {
+            BatchStrategy::Top1(c) => c.insert_batch(ids, distances),
+            BatchStrategy::Heap(c) => c.insert_batch(ids, distances),
+            BatchStrategy::Reservoir(c) => c.insert_batch(ids, distances),
+        }
+    }
+
+    pub(super) fn finish(self) -> Vec<Neighbor<I>> {
+        match self.0 {
+            BatchStrategy::Top1(c) => c.finish(),
+            BatchStrategy::Heap(c) => c.finish(),
+            BatchStrategy::Reservoir(c) => c.finish(),
+        }
+    }
+}
+
 struct Top1<I> {
     best: Option<Neighbor<I>>,
 }
