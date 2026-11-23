@@ -261,64 +261,58 @@ impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
     /// Merge a nonempty, NaN-free batch sorted by ascending distance.
     /// Candidates precede old entries on ties; ties within the batch keep its order.
     fn merge_sorted(&mut self, neighbors: &[Neighbor<I>]) {
-        let candidate_count = neighbors.len();
-        let first = neighbors[0];
-        let prefix_len = self.get_lower_bound(&first);
-        let mut cursor = self.cursor.min(prefix_len);
-        // Cursor-resetting operations may leave it pointing at a visited entry.
-        // The unchanged prefix retains its visited flags; the first new entry is unvisited.
-        while cursor < prefix_len && self.id_visiteds[cursor].1 {
-            cursor += 1;
+        let merged_size = self.capacity.min(self.size + neighbors.len());
+        let mut old_end = self.count_old_in_top_l(neighbors, merged_size);
+        let new_count = merged_size - old_end;
+
+        // Keep discarded old slots ready for overwrite; initialize only actual growth.
+        self.id_visiteds
+            .resize(merged_size, (neighbors[0].id, false));
+        self.distances.resize(merged_size, 0.0);
+
+        for (new_index, neighbor) in neighbors[..new_count].iter().enumerate().rev() {
+            let run_end = old_end;
+            // Equal old entries also follow the candidate.
+            while old_end > 0 && self.distances[old_end - 1] >= neighbor.distance {
+                old_end -= 1;
+            }
+
+            // The unread old entries and earlier candidates go before this one.
+            let write = old_end + new_index;
+            self.move_old_entries(old_end..run_end, write + 1);
+            self.id_visiteds[write] = (neighbor.id, false);
+            self.distances[write] = neighbor.distance;
         }
 
-        let merged_size = self.capacity.min(self.size + candidate_count);
-        // Partition the combined top-L so neither discarded tail needs to be merged.
-        let mut min_old = prefix_len.max(merged_size.saturating_sub(candidate_count));
+        self.size = merged_size;
+        // The unread old prefix did not move. Skip any visited entries left by drain_best.
+        self.cursor = self.cursor.min(old_end);
+        while self.cursor < old_end && self.id_visiteds[self.cursor].1 {
+            self.cursor += 1;
+        }
+    }
+
+    fn move_old_entries(&mut self, source: std::ops::Range<usize>, destination: usize) {
+        if !source.is_empty() {
+            self.distances.copy_within(source.clone(), destination);
+            self.id_visiteds.copy_within(source, destination);
+        }
+    }
+
+    fn count_old_in_top_l(&self, neighbors: &[Neighbor<I>], merged_size: usize) -> usize {
+        let mut min_old = merged_size.saturating_sub(neighbors.len());
         let mut max_old = self.size.min(merged_size);
         while min_old < max_old {
             let old_count = min_old + (max_old - min_old) / 2;
             let new_count = merged_size - old_count;
-            if old_count < self.size
-                && new_count > 0
-                && self.distances[old_count] < neighbors[new_count - 1].distance
-            {
+            // Take the next old entry only if it precedes the last selected new entry.
+            if self.distances[old_count] < neighbors[new_count - 1].distance {
                 min_old = old_count + 1;
             } else {
                 max_old = old_count;
             }
         }
-        let (mut old_remaining, mut new_remaining) = (min_old, merged_size - min_old);
-
-        self.id_visiteds.truncate(old_remaining);
-        self.distances.truncate(old_remaining);
-        self.id_visiteds.resize(merged_size, (first.id, false));
-        self.distances.resize(merged_size, 0.0);
-        // Merge backwards without overwriting unread old entries.
-        // On ties, write the old entry to the higher slot so new entries stay first.
-        while new_remaining > 1 {
-            let destination = old_remaining + new_remaining - 1;
-            let neighbor = neighbors[new_remaining - 1];
-            if old_remaining > 0 && self.distances[old_remaining - 1] >= neighbor.distance {
-                old_remaining -= 1;
-                self.id_visiteds[destination] = self.id_visiteds[old_remaining];
-                self.distances[destination] = self.distances[old_remaining];
-            } else {
-                new_remaining -= 1;
-                self.id_visiteds[destination] = (neighbor.id, false);
-                self.distances[destination] = neighbor.distance;
-            }
-        }
-        if new_remaining == 1 {
-            // Only the first candidate remains; shift the old suffix in one move.
-            self.id_visiteds
-                .copy_within(prefix_len..old_remaining, prefix_len + 1);
-            self.distances
-                .copy_within(prefix_len..old_remaining, prefix_len + 1);
-            self.id_visiteds[prefix_len] = (first.id, false);
-            self.distances[prefix_len] = first.distance;
-        }
-        self.size = merged_size;
-        self.cursor = cursor;
+        min_old
     }
 
     /// Drain candidates from the front, signaling that they have been consumed.
