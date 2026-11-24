@@ -73,9 +73,9 @@ for API and term formats.
 ## Installing
 
 Garnet depends on diskann-garnet as a NuGet package, which includes native
-libraries for Windows x64 (`win-x64`), Linux x64 (`linux-x64`), and macOS ARM64
-(`osx-arm64`, Apple Silicon). With a native .NET toolchain installed, check out
-the Garnet repo and run:
+libraries for Windows x64 (`win-x64`) and ARM64 (`win-arm64`), Linux x64
+(`linux-x64`) and ARM64 (`linux-arm64`), and macOS ARM64 (`osx-arm64`, Apple
+Silicon). With a native .NET toolchain installed, check out the Garnet repo and run:
 
 ```sh
 dotnet run -c Release -f net10.0 --project main/GarnetServer -- --enable-vector-set-preview
@@ -85,25 +85,29 @@ and it will build and launch Garnet with vector sets enabled.
 
 ### Local Installs
 
-If you want to install a specific version of diskann-garnet to use with Garnet,
-it is a little more complicated. Aside from compiling diskann-garnet, you will
-need to create a NuGet package. For example, on Windows:
+For local testing with Garnet, build diskann-garnet and pack only the RID you
+built. For example, on Windows x64:
 
 ```pwsh
 cd diskann-garnet
 cargo build --locked --release --package diskann-garnet
 mkdir ../target/pkg
-mkdir ../target/pkg/linux
 mkdir ../target/pkg/windows
-mkdir ../target/pkg/macos-arm64
 mkdir ../target/pkg/docs
-cp diskann-garnet.nuspec ../target/pkg
-cp README.md ../target/pkg/linux/libdiskann_garnet.so # dummy file
-cp README.md ../target/pkg/macos-arm64/libdiskann_garnet.dylib # dummy file
-cp ../target/release/*.dll ../target/pkg/windows
-cp ../target/release/*.pdb ../target/pkg/windows
-cp README.md ../target/pkg/docs
-nuget pack -BasePath ../target/pkg -OutputDirectory LOCAL_NUGET_PATH
+cp diskann-garnet.nuspec ../target/pkg/
+cp README.md ../target/pkg/docs/
+cp ../target/release/diskann_garnet.dll ../target/pkg/windows/
+cp ../target/release/diskann_garnet.pdb ../target/pkg/windows/
+```
+
+On Windows ARM64, build with the native Arm64 Rust toolchain and use
+`../target/pkg/windows-arm64` in place of `../target/pkg/windows`.
+
+In the staged `.nuspec`, keep only the two `<file>` entries for your Windows
+RID and the entry for the README. Then pack the local package:
+
+```pwsh
+nuget pack ../target/pkg/diskann-garnet.nuspec -BasePath ../target/pkg -OutputDirectory LOCAL_NUGET_PATH
 nuget locals all -clear
 ```
 
@@ -130,9 +134,8 @@ You will need to set up a local path to host NuGets and setup
 
 Replace `LOCAL_NUGET_PATH` with whatever path you like.
 
-Linux and macOS instructions are a bit more difficult as `nuget pack` does not
-exist for those platforms. You will need to grab an existing NuGet from
-NuGet.org, unzip it, and then replace the files, and rezip.
+On Linux and macOS, you can replace the native library in an existing
+`.nupkg` that already contains the matching RID. For example, on Linux:
 
 ```
 mkdir target/nupkg
@@ -141,7 +144,8 @@ unzip PATH_TO/diskann-garnet.x.y.z.nupkg
 cd ../..
 cargo build --release --package diskann-garnet
 cp diskann-garnet/diskann-garnet.nuspec target/nupkg/
-cp target/release/libdiskann_garnet.so target/nupkg/runtimes/linux-x64/native/
+RID=linux-x64 # Use linux-arm64 on ARM64.
+cp target/release/libdiskann_garnet.so "target/nupkg/runtimes/$RID/native/"
 cd target/nupkg
 zip -r LOCAL_NUGET_PATH/diskann-garnet.X.Y.Z.nupkg *
 dotnet nuget locals all --clear
