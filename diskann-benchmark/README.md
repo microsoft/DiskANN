@@ -15,10 +15,8 @@ cargo run --release --package diskann-benchmark -- run --input-file diskann-benc
 
 The [example workload](example/neighbor-queue.json) compares per-item `insert` with
 one `batch_insert` call on the same synthetic fixed-capacity queue state and candidate set.
-It covers capacities 10, 20, 40, 200, and 2,000 with a fixed 8-candidate update and an
-L-sized update at each capacity. It adds `2L` candidate pressure points only at L=20, 200,
-and 2,000, plus one `L+1` boundary case. Focused L=20 cases compare head/tail placement,
-descending input, cutoff rejection, and partially full queues both below and across capacity.
+It varies cutoff survivors, candidate placement and order, and initial queue occupancy.
+See the linked workload for the current capacities, candidate counts, and sample settings.
 
 Each case exposes queue-update variables: `capacity`, `initial_size`, `input_size` (the
 number of unique candidates passed to the operation), `initial_cutoff_survivors` (how many
