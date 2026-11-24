@@ -472,7 +472,9 @@ mod tests {
     use diskann_benchmark_runner::utils::MicroSeconds;
 
     #[test]
-    fn visitor_honors_staging_hint_before_building_batches() {
+    fn visitor_batches_preserve_candidates_and_honor_staging_hint() {
+        use diskann::neighbor::{Neighbor, NeighborPriorityQueue};
+
         struct Recorder {
             stage: bool,
             singles: usize,
@@ -498,66 +500,69 @@ mod tests {
             .build()
             .unwrap()
             .block_on(async {
-                let provider = InMemProvider {
-                    data: Arc::new(rowmajor::Owned::from_element(65, 1, 1.0f32)),
-                };
-                let mut expected = Vec::new();
-                Visitor::new(&provider, &[2.0], Metric::L2)
-                    .distances_unordered(|id, d| expected.push((id, d.to_bits())))
-                    .await
-                    .unwrap();
-                for stage in [false, true] {
-                    let mut recorder = Recorder {
-                        stage,
-                        singles: 0,
-                        batches: 0,
-                        values: Vec::new(),
-                    };
-                    Visitor::new(&provider, &[2.0], Metric::L2)
-                        .distances_unordered_with(&mut recorder)
-                        .await
-                        .unwrap();
-                    assert_eq!(recorder.values, expected);
-                    assert_eq!(recorder.singles, if stage { 0 } else { 65 });
-                    assert_eq!(recorder.batches, if stage { 3 } else { 0 });
-                }
-            });
-    }
-
-    #[test]
-    fn zero_dimensional_search_preserves_candidates() {
-        tokio::runtime::Builder::new_current_thread()
-            .build()
-            .unwrap()
-            .block_on(async {
-                for nrows in [0, 3, 129] {
-                    let provider = InMemProvider {
-                        data: Arc::new(rowmajor::Owned::from_element(nrows, 0, 0.0f32)),
-                    };
-                    for k in [1, 2, 100] {
-                        let mut visitor = Visitor::new(&provider, &[], Metric::L2);
-                        let mut output = Vec::new();
-                        let stats = knn_search(
-                            &mut visitor,
-                            NonZeroUsize::new(k).unwrap(),
-                            CopyIds,
-                            (),
-                            &mut output,
-                        )
-                        .await
-                        .unwrap();
-                        let expected: Vec<_> = (0..nrows as u32)
-                            .rev()
-                            .take(k)
-                            .map(|id| (id, 0.0))
-                            .collect();
-                        assert_eq!(
-                            output.into_iter().map(|n| n.as_tuple()).collect::<Vec<_>>(),
-                            expected,
-                            "nrows={nrows}, k={k}"
-                        );
-                        assert_eq!(stats.cmps as usize, nrows);
-                        assert_eq!(stats.result_count as usize, nrows.min(k));
+                for nrows in [0usize, 3, 32, 65, 129] {
+                    for dim in [0, 1] {
+                        let provider = InMemProvider {
+                            data: Arc::new(rowmajor::Owned::from_fn(nrows, dim, |rc| {
+                                (rc.row % 11) as f32
+                            })),
+                        };
+                        let query = vec![2.0; dim];
+                        let mut expected = Vec::new();
+                        Visitor::new(&provider, &query, Metric::L2)
+                            .distances_unordered(|id, d| expected.push((id, d.to_bits())))
+                            .await
+                            .unwrap();
+                        assert_eq!(expected.len(), nrows);
+                        for stage in [false, true] {
+                            let mut recorder = Recorder {
+                                stage,
+                                singles: 0,
+                                batches: 0,
+                                values: Vec::new(),
+                            };
+                            Visitor::new(&provider, &query, Metric::L2)
+                                .distances_unordered_with(&mut recorder)
+                                .await
+                                .unwrap();
+                            let batched = stage && dim != 0;
+                            assert_eq!(recorder.values, expected);
+                            assert_eq!(recorder.singles, if batched { 0 } else { nrows });
+                            assert_eq!(
+                                recorder.batches,
+                                if batched { nrows.div_ceil(32) } else { 0 }
+                            );
+                        }
+                        for k in [1, 2, 100] {
+                            let mut reference = NeighborPriorityQueue::new(k);
+                            for &(id, bits) in &expected {
+                                reference.insert(Neighbor::new(id, f32::from_bits(bits)));
+                            }
+                            let mut visitor = Visitor::new(&provider, &query, Metric::L2);
+                            let mut output = Vec::new();
+                            let stats = knn_search(
+                                &mut visitor,
+                                NonZeroUsize::new(k).unwrap(),
+                                CopyIds,
+                                (),
+                                &mut output,
+                            )
+                            .await
+                            .unwrap();
+                            assert_eq!(
+                                output
+                                    .iter()
+                                    .map(|n| (*n.id(), n.distance().to_bits()))
+                                    .collect::<Vec<_>>(),
+                                reference
+                                    .iter()
+                                    .map(|n| (*n.id(), n.distance().to_bits()))
+                                    .collect::<Vec<_>>(),
+                                "nrows={nrows}, dim={dim}, k={k}"
+                            );
+                            assert_eq!(stats.cmps as usize, nrows);
+                            assert_eq!(stats.result_count as usize, nrows.min(k));
+                        }
                     }
                 }
             });

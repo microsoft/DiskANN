@@ -110,6 +110,13 @@ pub fn knn_inner_product(
         let nq = options.query_block_size.get().min(queries.nrows() - q0);
         let dim = data.ncols();
         let query_tile = &queries.as_slice()[q0 * dim..(q0 + nq) * dim];
+        if workers == 1 {
+            // A single partition already contains the sorted global top-k.
+            output.extend(
+                pool.install(|| scan_partition(data, query_tile, nq, 0..data.nrows(), k, options))?,
+            );
+            continue;
+        }
         let mut partials: Vec<ANNResult<Vec<Vec<Neighbor<u32>>>>> =
             (0..workers).map(|_| Ok(Vec::new())).collect();
         pool.scope(|scope| {
@@ -371,24 +378,26 @@ mod tests {
         let data = rowmajor::Owned::from_fn(values.len(), 1, |rc| values[rc.row]);
         let query_values = [1.0, -1.0, 0.0, f32::NAN];
         let queries = rowmajor::Owned::from_fn(query_values.len(), 1, |rc| query_values[rc.row]);
-        let options = GemmOptions {
-            max_workers: NonZeroUsize::new(3).unwrap(),
-            ..Default::default()
-        };
-        for k in [1, 2, 10] {
-            let actual = knn_inner_product(
-                data.as_view(),
-                queries.as_view(),
-                NonZeroUsize::new(k).unwrap(),
-                &options,
-                &pool,
-            )
-            .unwrap();
-            let actual: Vec<Vec<_>> = actual
-                .into_iter()
-                .map(|row| row.into_iter().map(Neighbor::as_tuple).collect())
-                .collect();
-            assert_eq!(actual, reference(data.as_view(), queries.as_view(), k));
+        for max_workers in [1, 3] {
+            let options = GemmOptions {
+                max_workers: NonZeroUsize::new(max_workers).unwrap(),
+                ..Default::default()
+            };
+            for k in [1, 2, 10] {
+                let actual = knn_inner_product(
+                    data.as_view(),
+                    queries.as_view(),
+                    NonZeroUsize::new(k).unwrap(),
+                    &options,
+                    &pool,
+                )
+                .unwrap();
+                let actual: Vec<Vec<_>> = actual
+                    .into_iter()
+                    .map(|row| row.into_iter().map(Neighbor::as_tuple).collect())
+                    .collect();
+                assert_eq!(actual, reference(data.as_view(), queries.as_view(), k));
+            }
         }
     }
 

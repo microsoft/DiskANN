@@ -134,7 +134,9 @@ mod tests {
     use std::num::NonZeroUsize;
 
     use crate::flat::test::{
-        harness::{CopyIdsOracle, EvenIdsOnlyOracle, KnnOracleRun, OracleProcessor},
+        harness::{
+            CopyIdsOracle, EvenIdsOnlyOracle, KnnOracleRun, OracleProcessor, brute_force_topk,
+        },
         provider::{self as flat_provider},
     };
     use crate::graph::test::synthetic::Grid;
@@ -145,36 +147,21 @@ mod tests {
         (provider, len)
     }
 
-    #[test]
-    fn collector_switch_preserves_post_processing_and_statistics() {
-        let (provider, len) = fixture(Grid::One, 256);
-        for k in [1, 99, 100, 101, 1000] {
-            for query in [&[-1.0][..], &[300.0][..]] {
-                let result = KnnOracleRun::run_sync(&provider, &CopyIdsOracle, query, k).unwrap();
-                assert_eq!(result.top_k, result.ground_truth);
-                assert_eq!(result.stats.cmps as usize, len);
-                assert_eq!(result.stats.result_count as usize, k.min(len));
-                let filtered =
-                    KnnOracleRun::run_sync(&provider, &EvenIdsOnlyOracle, query, k).unwrap();
-                assert_eq!(filtered.top_k, filtered.ground_truth);
-                assert_eq!(filtered.stats.cmps as usize, len);
-                assert_eq!(
-                    filtered.stats.result_count as usize,
-                    filtered.ground_truth.len()
-                );
-            }
-        }
-    }
-
     async fn assert_options<O: OracleProcessor>(
         provider: &flat_provider::Provider,
         oracle: O,
         query: &[f32],
         k: NonZeroUsize,
     ) {
+        let expected = oracle.expected(brute_force_topk(
+            provider,
+            diskann_vector::distance::Metric::L2,
+            query,
+            k.get(),
+        ));
         let mut visitor = flat_provider::Visitor::new(provider, query).unwrap();
-        let mut expected = Vec::new();
-        let stats = knn_search(&mut visitor, k, oracle.processor(), query, &mut expected)
+        let mut output = Vec::new();
+        let stats = knn_search(&mut visitor, k, oracle.processor(), query, &mut output)
             .await
             .unwrap();
         let bits = |neighbors: &[crate::neighbor::Neighbor<u32>]| {
@@ -183,6 +170,9 @@ mod tests {
                 .map(|n| (*n.id(), n.distance().to_bits()))
                 .collect::<Vec<_>>()
         };
+        assert_eq!(bits(&output), bits(&expected));
+        assert_eq!(stats.cmps as usize, provider.len());
+        assert_eq!(stats.result_count as usize, expected.len());
         for reservoir_min_k in [0, 2, 17, 100, usize::MAX] {
             let mut visitor = flat_provider::Visitor::new(provider, query).unwrap();
             let mut output = Vec::new();
@@ -209,35 +199,12 @@ mod tests {
     async fn custom_thresholds_preserve_results_and_post_processing() {
         let (provider, _) = fixture(Grid::One, 256);
         for k in [1, 2, 16, 17, 18, 99, 100, 101, 1000] {
-            for query in [&[-1.0][..], &[128.0][..], &[300.0][..]] {
+            // Unique distances let the existing oracle check IDs as well as scores.
+            // Collector tests separately exercise scan-order ties and signed zeros.
+            for query in [&[-1.0][..], &[300.0][..]] {
                 let k = NonZeroUsize::new(k).unwrap();
                 assert_options(&provider, CopyIdsOracle, query, k).await;
                 assert_options(&provider, EvenIdsOnlyOracle, query, k).await;
-            }
-        }
-    }
-
-    #[tokio::test]
-    async fn custom_thresholds_escalate_scan_errors_without_post_processing() {
-        use crate::graph::glue::CopyIds;
-
-        let (provider, _) = fixture(Grid::One, 32);
-        for k in [1, 17] {
-            for reservoir_min_k in [0, 17, 18, 100] {
-                let mut visitor = flat_provider::Visitor::flaky(&provider, &[0.0], [3]).unwrap();
-                let mut output = Vec::new();
-                let err = knn_search_with_options(
-                    &mut visitor,
-                    NonZeroUsize::new(k).unwrap(),
-                    SearchOptions { reservoir_min_k },
-                    CopyIds,
-                    (),
-                    &mut output,
-                )
-                .await
-                .expect_err("partial scans must fail before post-processing");
-                assert!(format!("{err}").contains("id 3"));
-                assert!(output.is_empty());
             }
         }
     }
@@ -457,27 +424,51 @@ mod tests {
     ////////////
 
     /// A transient error from the visitor's scan must escalate up through `knn_search`.
-    #[test]
-    fn transient_scan_error() {
-        // The flat scan touches every id, so any transient id is guaranteed to be hit.
-        for (transient_ids, k) in [(&[0u32][..], 4), (&[3][..], 100), (&[1, 2, 5][..], 101)] {
-            let (provider, _) = fixture(Grid::Two, 3);
-            let query = &[1.0, 0.0];
-            let visitor =
-                flat_provider::Visitor::flaky(&provider, query, transient_ids.iter().copied())
-                    .unwrap();
-            let err =
-                KnnOracleRun::run_sync_with_visitor(&provider, visitor, &CopyIdsOracle, query, k)
-                    .expect_err("transient error during full scan must escalate");
+    #[tokio::test]
+    async fn transient_scan_error() {
+        use crate::graph::glue::CopyIds;
 
-            let msg = format!("{err}");
-            assert!(
-                transient_ids
-                    .iter()
-                    .any(|id| msg.contains(&format!("id {id}"))),
-                "transients = {transient_ids:?}: expected error to name one of the \
-                 transient ids, got: {msg}",
-            );
+        let (provider, _) = fixture(Grid::Two, 3);
+        let query = &[1.0, 0.0];
+        // The flat scan touches every id, so any transient id is guaranteed to be hit.
+        for transient_ids in [&[0u32][..], &[3][..], &[1, 2, 5][..]] {
+            for k in [1, 4, 100, 101] {
+                for threshold in [None, Some(0), Some(100), Some(usize::MAX)] {
+                    let mut visitor = flat_provider::Visitor::flaky(
+                        &provider,
+                        query,
+                        transient_ids.iter().copied(),
+                    )
+                    .unwrap();
+                    let mut output = Vec::new();
+                    let k = NonZeroUsize::new(k).unwrap();
+                    let result = if let Some(reservoir_min_k) = threshold {
+                        knn_search_with_options(
+                            &mut visitor,
+                            k,
+                            SearchOptions { reservoir_min_k },
+                            CopyIds,
+                            (),
+                            &mut output,
+                        )
+                        .await
+                    } else {
+                        knn_search(&mut visitor, k, CopyIds, (), &mut output).await
+                    };
+                    let err = result.expect_err("transient error during full scan must escalate");
+                    let msg = format!("{err}");
+                    assert!(
+                        transient_ids
+                            .iter()
+                            .any(|id| msg.contains(&format!("id {id}"))),
+                        "transients = {transient_ids:?}, k={k}, threshold={threshold:?}: {msg}",
+                    );
+                    assert!(
+                        output.is_empty(),
+                        "partial scans must not reach post-processing"
+                    );
+                }
+            }
         }
     }
 
