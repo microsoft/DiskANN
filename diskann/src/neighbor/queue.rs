@@ -217,7 +217,10 @@ impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
             !neighbor.distance.is_nan()
                 && worst.is_none_or(|distance| neighbor.distance <= distance)
         });
-        if neighbors.is_empty() {
+        if neighbors.len() <= 1 {
+            if let Some(neighbor) = neighbors.pop() {
+                self.insert(neighbor);
+            }
             return;
         }
 
@@ -231,7 +234,7 @@ impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
     /// Candidates precede old entries on ties; ties within the batch reverse its order.
     fn merge_sorted(&mut self, neighbors: &[Neighbor<I>]) {
         let merged_size = self.capacity.min(self.size + neighbors.len());
-        let mut old_end = self.count_old_in_top_l(neighbors, merged_size);
+        let mut old_end = self.count_old_entries_to_keep(neighbors, merged_size);
         let new_count = merged_size - old_end;
 
         // Keep discarded old slots ready for overwrite; initialize only actual growth.
@@ -241,15 +244,16 @@ impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
 
         let mut pending = neighbors[neighbors.len() - new_count..].iter();
         while let Some(neighbor) = pending.next() {
-            let old_before = self.distances[..old_end].partition_point(|&d| d < neighbor.distance);
+            let old_before =
+                Self::lower_bound_from_right(&self.distances, old_end, neighbor.distance);
 
             // The remaining candidates precede this one in the output.
             let write = old_before + pending.len();
             if old_before < old_end {
-                let source = old_before..old_end;
                 let destination = write + 1;
-                self.distances.copy_within(source.clone(), destination);
-                self.id_visiteds.copy_within(source, destination);
+                self.distances.copy_within(old_before..old_end, destination);
+                self.id_visiteds
+                    .copy_within(old_before..old_end, destination);
             }
             self.id_visiteds[write] = (neighbor.id, false);
             self.distances[write] = neighbor.distance;
@@ -257,28 +261,68 @@ impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
         }
 
         self.size = merged_size;
-        // The unread old prefix did not move. Skip any visited entries left by drain_best.
+        // Old entries before the first retained new entry stay at their original indices.
         self.cursor = self.cursor.min(old_end);
-        while self.cursor < old_end && self.id_visiteds[self.cursor].1 {
-            self.cursor += 1;
-        }
     }
 
-    fn count_old_in_top_l(&self, neighbors: &[Neighbor<I>], merged_size: usize) -> usize {
-        let mut min_old = merged_size.saturating_sub(neighbors.len());
-        let mut max_old = self.size.min(merged_size);
-        while min_old < max_old {
-            let old_count = min_old + (max_old - min_old) / 2;
-            let new_count = merged_size - old_count;
-            let worst_kept_new = neighbors[neighbors.len() - new_count].distance;
-            // On ties, keep the new entry.
-            if self.distances[old_count] < worst_kept_new {
-                min_old = old_count + 1;
-            } else {
-                max_old = old_count;
-            }
+    /// Finds the first distance at least `target` in the sorted, NaN-free prefix `d[..hi]`.
+    /// `target` must not be NaN.
+    #[inline(always)]
+    fn lower_bound_from_right(d: &[f32], hi: usize, target: f32) -> usize {
+        let mut right = hi; // Distances in d[right..hi] are at least target.
+        let mut step = 1;
+        while step <= right && d[right - step] >= target {
+            right -= step;
+            step <<= 1;
         }
-        min_old
+        let left = right.saturating_sub(step);
+        left + d[left..right].partition_point(|&x| x < target)
+    }
+
+    /// Returns how many old entries remain when the queue keeps the
+    /// `merged_size` best entries out of the old entries and `batch`.
+    ///
+    /// `batch` is sorted from farthest to closest, so its best `n` candidates are
+    /// `batch[batch.len() - n..]`. Ties favor candidates over old entries.
+    ///
+    /// Keeping `k` old entries means keeping `merged_size - k` candidates. `k` is too
+    /// small if the next old entry is closer than the worst kept candidate. This
+    /// predicate is monotonic in `k`, so the answer is found by binary search.
+    ///
+    /// ```text
+    /// old   (closest first): [1, 4, 7]
+    /// batch (farthest first): [6, 4, 2]          merged_size = 3
+    ///
+    /// k = 1: keep old [1], batch [4, 2]; next old 4 < worst kept candidate 4? no -> k = 1
+    /// ```
+    fn count_old_entries_to_keep(&self, batch: &[Neighbor<I>], merged_size: usize) -> usize {
+        // i-th best candidate; i = 0 is the closest.
+        let best_candidate = |i: usize| batch[batch.len() - 1 - i].distance;
+
+        let keeps_too_few_old = |k: usize| {
+            let kept_candidates = merged_size - k;
+            self.distances[k] < best_candidate(kept_candidates - 1)
+        };
+
+        // At least `merged_size - batch.len()` old entries survive, at most all of them.
+        let fewest = merged_size.saturating_sub(batch.len());
+        let most = self.size.min(merged_size);
+        Self::partition_point_in(fewest..most, keeps_too_few_old)
+    }
+
+    /// Returns the first value in `range` for which `pred` is false,
+    /// or `range.end` if there is none. `pred` must be true then false.
+    #[inline(always)]
+    fn partition_point_in(
+        range: std::ops::Range<usize>,
+        mut pred: impl FnMut(usize) -> bool,
+    ) -> usize {
+        let (mut lo, mut hi) = (range.start, range.end);
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            if pred(mid) { lo = mid + 1 } else { hi = mid }
+        }
+        lo
     }
 
     /// Drain candidates from the front, signaling that they have been consumed.
@@ -835,7 +879,7 @@ mod neighbor_priority_queue_test {
     }
 
     #[test]
-    fn batch_insert_normalizes_cursor_after_drain() {
+    fn batch_insert_matches_insert_after_drain() {
         let mut queue = NeighborPriorityQueue::new(8);
         for id in 0..6 {
             queue.insert(Neighbor::new(id, id as f32));
@@ -844,14 +888,13 @@ mod neighbor_priority_queue_test {
             queue.closest_notvisited();
         }
         queue.drain_best(2);
-        queue.batch_insert(&mut vec![Neighbor::new(6, 10.0)]);
 
-        assert_eq!(queue.cursor, 4);
-        assert_eq!(
-            queue.closest_notvisited().map(Neighbor::as_tuple),
-            Some((6, 10.0))
-        );
-        assert!(!queue.has_notvisited_node());
+        let mut reference = queue.clone();
+        let neighbor = Neighbor::new(6, 10.0);
+        reference.insert(neighbor);
+        queue.batch_insert(&mut vec![neighbor]);
+
+        assert_same_queue(&queue, &reference);
     }
 
     #[test]
