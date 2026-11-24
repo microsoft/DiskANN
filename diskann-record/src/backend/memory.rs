@@ -142,7 +142,6 @@ delegate_write_and_seek!(cursor, MemoryWriter<'_>);
 #[derive(Debug)]
 pub struct MemoryContext {
     files: HashMap<String, Vec<u8>>,
-    #[cfg_attr(not(any(feature = "disk", test)), expect(dead_code))]
     value: Value<'static>,
 }
 

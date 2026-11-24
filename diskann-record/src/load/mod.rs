@@ -62,7 +62,6 @@ use crate::{Version, save};
 /// # Errors
 ///
 /// Returns [`Error`] if the context cannot produce a root value or if `T`'s loader fails.
-#[cfg_attr(not(any(feature = "disk", test)), expect(dead_code))]
 pub(crate) fn load<'a, T>(context: &'a dyn LoadContext) -> Result<T>
 where
     T: Loadable<'a>,
@@ -71,13 +70,45 @@ where
 }
 
 /// Load the root value using caller-supplied settings or resources.
-#[cfg_attr(not(any(feature = "disk", test)), expect(dead_code))]
 pub(crate) fn load_with<'a, L>(context: &'a dyn LoadContext, loader: L) -> Result<L::Value>
 where
     L: Loader<'a>,
 {
     let value = context.value()?;
     loader.load(Context::new(context, value))
+}
+
+/// Reload a value from an in-memory context.
+///
+/// The result may borrow from `context`; keep the context alive for as long as those
+/// borrows are used. The in-memory save never serializes the manifest through JSON.
+///
+/// # Errors
+///
+/// Returns [`Error`] if `context` cannot produce its root value or if `T`'s loader
+/// fails.
+pub fn load_from_memory<'a, T>(context: &'a crate::MemoryContext) -> Result<T>
+where
+    T: Loadable<'a>,
+{
+    load(context)
+}
+
+/// Reload a value from an in-memory context using caller-supplied settings or resources.
+///
+/// The result may borrow either from `context` or from resources owned by the loader.
+///
+/// # Errors
+///
+/// Returns [`Error`] if `context` cannot produce its root value or if the loader fails.
+pub fn load_from_memory_with<'a, L>(
+    context: &'a crate::MemoryContext,
+    loader: L,
+) -> Result<L::Value>
+where
+    L: Loader<'a>,
+{
+    load_with(context, loader)
 }
 
 /// Reload a value previously written by [`save::save_to_disk`].

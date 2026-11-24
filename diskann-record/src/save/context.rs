@@ -92,7 +92,6 @@ pub(crate) trait SaveContext {
     /// # Errors
     ///
     /// Returns [`Error`] if the manifest cannot be serialized or committed.
-    #[cfg_attr(not(any(feature = "disk", test)), expect(dead_code))]
     fn finish(self, value: Value<'_>) -> Result<Self::Output>;
 }
 
@@ -128,7 +127,6 @@ pub struct Context<'a> {
 }
 
 impl<'a> Context<'a> {
-    #[cfg_attr(not(any(feature = "disk", test)), expect(dead_code))]
     pub(super) fn new(inner: &'a dyn GetWrite) -> Self {
         Self { inner }
     }

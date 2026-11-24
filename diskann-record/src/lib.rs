@@ -23,10 +23,14 @@
 //!
 //! # Entry Points
 //!
+//! - [`save::save_to_memory`] and [`load::load_from_memory`]: Round-trip a value through
+//!   an owned in-memory context without serialization or the `disk` feature.
 //! - `save::save_to_disk` (requires the `disk` feature): Save a value to a directory
 //!   plus a manifest path.
 //! - `load::load_from_disk` (requires the `disk` feature): Reload a value from a
 //!   manifest and its artifact directory.
+//! - [`load::load_from_memory_with`]: Load in memory with caller-supplied settings or
+//!   resources. Use `load::load_from_disk_with` for the equivalent disk operation.
 //!
 //! # Defining Save / Load
 //!

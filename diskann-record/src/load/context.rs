@@ -43,7 +43,6 @@ pub(crate) trait LoadContext {
     /// # Errors
     ///
     /// Returns [`Error`](crate::load::Error) if the root value cannot be produced.
-    #[cfg_attr(not(any(feature = "disk", test)), expect(dead_code))]
     fn value(&self) -> Result<&save::Value<'_>>;
 
     /// Open the side-car artifact identified by `key` for reading.
