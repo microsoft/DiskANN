@@ -3,12 +3,19 @@
  * Licensed under the MIT license.
  */
 
+//! Algorithms measuring statistics about a graph.
+
 use std::collections::VecDeque;
 
 use hashbrown::HashSet;
 
 use crate::{ANNResult, graph::AdjacencyList, provider::NeighborAccessor};
 
+/// Count the number of distinct nodes reachable from the start points.
+///
+/// Let `N` be the number of reachable nodes. This algorithm has a memory consumption roughly
+/// on the order of `(2 * N).next_power_of(2)` and will make `N` calls to
+/// [`NeighborAccessor::get_neighbors`].
 pub async fn reachable_from<A>(accessor: &mut A, start: &[A::Id]) -> ANNResult<usize>
 where
     A: NeighborAccessor,

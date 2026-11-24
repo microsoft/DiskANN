@@ -32,6 +32,10 @@ macro_rules! representation {
                 self.capacity
             }
 
+            fn reclaim(&self) -> Option<usize> {
+                self.store.try_drain()
+            }
+
             fn read_guard(&self) -> ANNResult<$crate::repr::ReadGuard<'_>> {
                 Ok($crate::repr::ReadGuard::new(self.store.read_guard(|_, g| g)?))
             }

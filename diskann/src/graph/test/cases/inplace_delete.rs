@@ -21,13 +21,6 @@ use crate::{
 use super::helpers::{generate_2d_square_adjacency_list, setup_2d_square};
 
 fn inplace_delete_setup() -> Arc<test_provider::Provider> {
-    let provider_config = test_provider::Config::new(
-        Metric::L2,
-        10,
-        test_provider::StartPoint::new(0, vec![0.0, 0.0]),
-    )
-    .unwrap();
-
     let index_config = graph::config::Builder::new(
         10,
         graph::config::MaxDegree::default_slack(),
@@ -37,11 +30,17 @@ fn inplace_delete_setup() -> Arc<test_provider::Provider> {
     .build()
     .unwrap();
 
+    let provider_config = test_provider::Config::new(
+        index_config,
+        Metric::L2,
+        test_provider::StartPoint::new(0, vec![0.0, 0.0]),
+    )
+    .unwrap();
+
     let provider = test_provider::Provider::new_from(
         provider_config,
         iter::once((0, AdjacencyList::new())),
         iter::empty(),
-        index_config,
     )
     .unwrap();
 

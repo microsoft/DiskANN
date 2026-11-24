@@ -3,6 +3,8 @@
  * Licensed under the MIT license.
  */
 
+use std::num::NonZeroUsize;
+
 use diskann::{
     ANNError, ANNResult,
     graph::{SearchOutputBuffer, glue},
@@ -95,6 +97,11 @@ where
         self.representation.max_degree()
     }
 
+    /// Advance the epoch - returning the number of reclaimed IDs, if any.
+    pub fn reclaim(&self) -> Option<usize> {
+        repr::Representation::reclaim(&self.representation)
+    }
+
     fn id_limit(&self) -> IdLimit {
         self.representation.id_limit()
     }
@@ -103,7 +110,19 @@ where
         &self.mapping
     }
 
-    fn temp_delete(&self, id: &M) -> ANNResult<()> {
+    fn to_internal(&self, id: &M) -> Option<u32> {
+        self.mapping.to_internal(id)
+    }
+
+    fn to_external(&self, id: u32) -> Option<M> {
+        self.mapping.to_external(id)
+    }
+
+    fn is_readable(&self, id: u32) -> Option<bool> {
+        <_ as repr::Representation>::is_readable(&self.representation, id)
+    }
+
+    fn temp_delete(&self, id: &M) -> ANNResult<u32> {
         // This guarantees that we have a valid mapping, but defers the actual deletion until
         // we know it's also safe to retire the internal slot.
         //
@@ -115,14 +134,17 @@ where
             Some(e) => e,
         };
 
+        // The internal ID.
+        let internal = entry.internal();
+
         // An early return here will cause `entry` to be dropped, which will *not* cause
         // the delete to commit.
-        <R as repr::Representation>::retire(&self.representation, entry.internal())?;
+        <R as repr::Representation>::retire(&self.representation, internal)?;
 
         // Successfully retired the internal slot. We can safely release the ID mapping.
         entry.delete();
 
-        Ok(())
+        Ok(internal)
     }
 
     //------------------//
@@ -205,7 +227,7 @@ impl<R, M> Read<'_, R, M>
 where
     M: Id,
 {
-    // FIXME: Remove unnecessary lifetime bounds
+    // FIXME: Remove uneecessary lifetime bounds
     pub fn search<'a, O>(
         &'a self,
         query: R::Query<'a>,
@@ -223,7 +245,7 @@ where
             self.index.local_counters(),
         )?;
 
-        let fut = <_ as diskann::graph::search::Search<_>>::search(
+        let fut = <_ as diskann::graph::search::Search>::search(
             params,
             &mut accessor,
             Translate(self.index.mapping()),
@@ -394,7 +416,7 @@ where
     where
         O: diskann::graph::SearchOutputBuffer<M> + Send,
     {
-        let fut = <_ as diskann::graph::search::Search<_>>::search(
+        let fut = <_ as diskann::graph::search::FilteredSearch>::filtered_search(
             params,
             &mut self.accessor,
             self.translate,
@@ -413,7 +435,7 @@ where
     where
         O: diskann::graph::SearchOutputBuffer<M> + Send,
     {
-        let fut = <_ as diskann::graph::search::Search<_>>::search(
+        let fut = <_ as diskann::graph::search::FilteredSearch>::filtered_search(
             params,
             &mut self.accessor,
             self.translate,
@@ -492,6 +514,28 @@ where
         poll(fut)
     }
 
+    // FIXME: Actually think this through.
+    pub fn delete(&self, id: &M) -> ANNResult<()>
+    where
+        R: repr::Insert,
+    {
+        use diskann::graph::algorithms::inplace_delete;
+
+        const THREE: NonZeroUsize = NonZeroUsize::new(3).unwrap();
+
+        let id = self.index.temp_delete(id)?;
+
+        let mut access = algorithms::InplaceDelete::new(self.prune_accessor()?);
+        let mut workspace = inplace_delete::Workspace::new();
+        let kind = inplace_delete::TwoHopAndOneHop {
+            replacements: THREE,
+        };
+
+        let fut = workspace.two_hop_and_one_hop(&kind, &mut access, id, &self.index.graph);
+
+        poll(fut)
+    }
+
     /// Construct an [`algorithms::Insert`] with `vector`.
     ///
     /// This function does *not* any persistent data.
@@ -512,12 +556,259 @@ where
     }
 
     /// Construct an [`accessors::PruneAccessor`].
-    ///
-    /// This function does *not* any persistent data.
     fn prune_accessor(&self) -> ANNResult<accessors::Prune<'a>>
     where
         R: repr::Insert,
     {
         repr::Insert::prune_accessor(&self.index.representation, self.index.local_counters())
+    }
+}
+
+///////////
+// Tests //
+///////////
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use diskann::{
+        graph::{
+            search::{InlineFilterSearch, Knn, MultihopFilterSearch},
+            test::synthetic::Grid,
+        },
+        neighbor::Neighbor,
+    };
+    use diskann_utils::{
+        assert_contains,
+        views::rowmajor::{self, Matrix},
+    };
+    use diskann_vector::distance::Metric;
+
+    use crate::{num::Capacity, poll::poll};
+
+    /// The true tests live in the integration tests for this repo.
+    ///
+    /// The smoke test here uses a 2D grid of points to verify that our provider
+    /// implementations are more-or-less correct.
+    ///
+    /// Note that since `Provider` separates internal and external IDs, we multiply the
+    /// coordinates of each element in the grid by 10 and add 1 to verify that the ID
+    /// translation is behaving properly.
+    ///
+    /// For clarity, the expected structure of the grid is as follows:
+    ///
+    ///                       <unknown>
+    ///   41 91 141 191 241
+    ///   31 81 131 181 231
+    ///   21 71 121 171 221
+    ///   11 61 111 161 211
+    ///    1 51 101 151 201
+    ///
+    #[test]
+    fn smoke() {
+        let grid = Grid::Two;
+        let size = 5;
+        let data = grid.data(size);
+        let start = grid.start_point(size);
+        let degree = 6;
+
+        let config = repr::full::Config::new(
+            Capacity::new(grid.num_points(size)),
+            MaxDegree::new(degree),
+            Metric::L2,
+            rowmajor::Owned::row_vector(start.into()),
+        )
+        .unwrap();
+
+        let graph = diskann::graph::config::Builder::new(
+            2 * (grid.dim() as usize),
+            diskann::graph::config::MaxDegree::new(degree),
+            10,
+            (Metric::L2).into(),
+        )
+        .build()
+        .unwrap();
+
+        let index = Index::<_, u64>::new(config, graph).unwrap();
+        assert_eq!(index.max_degree(), MaxDegree::new(degree));
+        assert_eq!(index.capacity(), Capacity::new(grid.num_points(size)));
+
+        {
+            let write = index.write().unwrap();
+            for (i, data) in data.rows().enumerate() {
+                write.insert(data, (10 * i + 1) as u64).unwrap();
+            }
+        }
+
+        // Verify that each ID round trips.
+        for i in 0..data.nrows() {
+            let i = (10 * i + 1) as u64;
+            let internal = index.to_internal(&i).unwrap();
+            assert_ne!(
+                internal as u64,
+                i + 1,
+                "this relies on the start points being located at the beginning of the id space\
+                 this is **NOT** guaranteed",
+            );
+
+            assert!(index.is_readable(internal).unwrap());
+        }
+
+        // Assert that out-of-bounds translations returns errors.
+        assert!(index.to_internal(&0).is_none());
+
+        // Searches should return something reasonable.
+        let knn = Knn::new(10, None).unwrap();
+        let mut neighbors = Vec::<Neighbor<u64>>::new();
+        index
+            .read()
+            .unwrap()
+            .search(&[0.0, 0.0], knn, &mut neighbors)
+            .unwrap();
+
+        assert_eq!(neighbors[0].as_tuple(), (1, 0.0));
+        assert_eq!(neighbors[1].as_tuple(), (11, 1.0)); // this can be swapped with 2
+        assert_eq!(neighbors[2].as_tuple(), (51, 1.0));
+        assert_eq!(neighbors[3].as_tuple(), (61, 2.0));
+
+        // Filtered searches work.
+        //
+        // What we do here is create a `Scoped` then a `Filtered`.
+        //
+        // We then hold onto these to ensure that algorithms like inplace delete can still
+        // run but that IDs cannot be reclaimed until both to away.
+        //
+        // The filter excludes IDs where the 10s digit is odd.
+        let read = index.read().unwrap();
+        let mut filtered = read
+            .filtered(&[0.0, 0.0], |i| (*i / 10).is_multiple_of(2))
+            .unwrap();
+
+        {
+            let mut neighbors = Vec::<Neighbor<u64>>::new();
+            let ifs = InlineFilterSearch::new(knn, None);
+            filtered
+                .inline_filtered(ifs.clone(), &mut neighbors)
+                .unwrap();
+
+            // We should not observe entries with odd 10s digits.
+            assert_eq!(neighbors[0].as_tuple(), (1, 0.0));
+            assert_eq!(neighbors[1].as_tuple(), (61, 2.0));
+            assert_eq!(neighbors[2].as_tuple(), (21, 4.0)); // This can be swapped with 3
+            assert_eq!(neighbors[3].as_tuple(), (101, 4.0));
+
+            // This is a bit sneaky.
+            //
+            // We mimic the case where a rerank style post-processing routine clears the
+            // internal buffer and leaves it that way.
+            //
+            // The `expand_beam` should handle this case properly.
+            filtered.accessor.search().mimic_destructive_post_process();
+
+            // Try again, this time with mulit-hop filter.
+            neighbors.clear();
+            let mfs =
+                MultihopFilterSearch::new(knn, NonZeroUsize::new(index.max_degree().value() / 2));
+            filtered.multihop_filtered(mfs, &mut neighbors).unwrap();
+
+            // We should not observe entries with odd 10s digits.
+            assert_eq!(neighbors[0].as_tuple(), (1, 0.0));
+            assert_eq!(neighbors[1].as_tuple(), (61, 2.0));
+            assert_eq!(neighbors[2].as_tuple(), (21, 4.0)); // This can be swapped with 3
+            assert_eq!(neighbors[3].as_tuple(), (101, 4.0));
+        }
+
+        // If we run inplace delete on point 61, it longer be present.
+        let internal = index.to_internal(&61).unwrap();
+        assert!(index.is_readable(internal).unwrap());
+        index.write().unwrap().delete(&61).unwrap();
+
+        assert!(index.to_internal(&61).is_none());
+        assert!(!index.is_readable(internal).unwrap());
+
+        // We can't delete the same thing twice.
+        assert!(index.write().unwrap().delete(&61).is_err());
+
+        // Rerun search - the point 61 should now be gone.
+        let mut neighbors = Vec::<Neighbor<u64>>::new();
+        read.search(&[0.0, 0.0], knn, &mut neighbors).unwrap();
+
+        assert_eq!(neighbors[0].as_tuple(), (1, 0.0));
+        assert_eq!(neighbors[1].as_tuple(), (51, 1.0)); // this can be swapped with 2
+        assert_eq!(neighbors[2].as_tuple(), (11, 1.0));
+        assert_eq!(neighbors[3].as_tuple(), (101, 4.0)); // we can also accept "21"
+
+        // This insert fails because even though there is an empty slot, it cannot be
+        // reclaimed until the `scoped` is dropped.
+        //
+        // After this check, we free up these resources.
+        assert_contains!(
+            index
+                .write()
+                .unwrap()
+                .insert(&[10.0, 10.0], 1)
+                .unwrap_err()
+                .to_string(),
+            "could not allocate a new slot",
+        );
+
+        assert!(index.reclaim().is_none());
+        drop(filtered);
+        drop(read);
+
+        // Need to advance one epoch before the next implicit epoch advancement will succeed.
+        assert_eq!(index.reclaim(), Some(0));
+        let write = index.write().unwrap();
+
+        // We can't insert an existing ID.
+        assert_contains!(
+            write.insert(&[10.0, 10.0], 1).unwrap_err().to_string(),
+            "external id is already mapped",
+        );
+
+        // If we insert a new ID but the query vector is too long - make sure we leave the
+        // provider untouched.
+        assert_contains!(
+            write
+                .insert(&[10.0, 10.0, 10.0], 2)
+                .unwrap_err()
+                .to_string(),
+            "expected slice of length 2",
+        );
+
+        // Check that we can reinsert the same point with a different ID and have it be
+        // returned from search.
+        write.insert(&[1.0, 1.0], 62).unwrap();
+
+        // We can't insert an ID - but this time it's because we don't have any more internal
+        // slots.
+        assert!(write.insert(&[0.0, 0.0], 62).is_err());
+
+        let read = index.read().unwrap();
+
+        // Rerun search - the point 62 should be present.
+        let mut neighbors = Vec::<Neighbor<u64>>::new();
+        read.search(&[0.0, 0.0], knn, &mut neighbors).unwrap();
+
+        assert_eq!(neighbors[0].as_tuple(), (1, 0.0));
+
+        // These two can be swapped. Accept either ordering.
+        if *neighbors[1].id() == 11 {
+            assert_eq!(neighbors[1].as_tuple(), (11, 1.0));
+            assert_eq!(neighbors[2].as_tuple(), (51, 1.0));
+        } else {
+            assert_eq!(neighbors[1].as_tuple(), (51, 1.0));
+            assert_eq!(neighbors[2].as_tuple(), (11, 1.0));
+        }
+
+        assert_eq!(neighbors[3].as_tuple(), (62, 2.0));
+
+        // Finally - test that we can create a crazy predicate for filtering that deletes
+        // all the external IDs as they are evaluated.
+        let _ = read.filtered(&[0.0, 0.0], |i| {
+            write.delete(i).unwrap();
+            true
+        });
     }
 }

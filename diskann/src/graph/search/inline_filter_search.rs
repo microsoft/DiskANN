@@ -111,7 +111,7 @@ impl FilteredSearch for InlineFilterSearch {
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<Self::Output>>
     where
-        A: FilteredSearch,
+        A: FilteredAccessor,
         O: Send,
         PP: SearchPostProcess<A, O> + Send + Sync,
         OB: SearchOutputBuffer<O> + Send + ?Sized,

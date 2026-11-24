@@ -52,9 +52,18 @@ pub(super) fn setup_2d_square(
         .unwrap_or(pruned_degree)
         .max(start_adj.len());
 
+    let index_config = graph::config::Builder::new(
+        pruned_degree,
+        graph::config::MaxDegree::new(provider_max_degree),
+        10,
+        Metric::L2.into(),
+    )
+    .build()
+    .unwrap();
+
     let provider_config = test_provider::Config::new(
+        index_config,
         Metric::L2,
-        provider_max_degree,
         test_provider::StartPoint::new(start_id, vec![0.5; dim]),
     )
     .unwrap();
@@ -65,22 +74,8 @@ pub(super) fn setup_2d_square(
         .enumerate()
         .map(|(id, (row, adj))| (id as u32, row.to_vec(), adj));
 
-    let index_config = graph::config::Builder::new(
-        pruned_degree,
-        graph::config::MaxDegree::same(),
-        10,
-        Metric::L2.into(),
-    )
-    .build()
-    .unwrap();
-
-    let provider = Provider::new_from(
-        provider_config,
-        iter::once((start_id, start_adj)),
-        points,
-        index_config,
-    )
-    .unwrap();
+    let provider =
+        Provider::new_from(provider_config, iter::once((start_id, start_adj)), points).unwrap();
 
     Arc::new(provider)
 }
@@ -93,29 +88,24 @@ pub(super) fn setup_2d_square_using_synthetics_grid(
     let grid = Grid::Two;
     let setup = grid.setup(size, start_id);
 
-    let provider_config = test_provider::Config::new(
-        Metric::L2,
-        (grid.dim() * 2).into(),
-        StartPoint::new(setup.start_id(), setup.start_point()),
-    )
-    .unwrap();
-
     let index_config = graph::config::Builder::new(
         pruned_degree,
-        graph::config::MaxDegree::same(),
+        graph::config::MaxDegree::new((grid.dim() * 2).into()),
         10,
         Metric::L2.into(),
     )
     .build()
     .unwrap();
 
-    let provider = Provider::new_from(
-        provider_config,
-        setup.start_neighbors(),
-        setup.setup(),
+    let provider_config = test_provider::Config::new(
         index_config,
+        Metric::L2,
+        StartPoint::new(setup.start_id(), setup.start_point()),
     )
     .unwrap();
+
+    let provider =
+        Provider::new_from(provider_config, setup.start_neighbors(), setup.setup()).unwrap();
 
     Arc::new(provider)
 }

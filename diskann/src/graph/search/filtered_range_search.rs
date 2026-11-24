@@ -125,7 +125,7 @@ impl FilteredSearch for FilteredRange {
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<Self::Output>>
     where
-        A: FilteredSearch,
+        A: FilteredAccessor,
         O: Send,
         PP: glue::SearchPostProcess<A, O> + Send + Sync,
         OB: SearchOutputBuffer<O> + Send + ?Sized,

@@ -60,13 +60,6 @@ fn build_index(
     let max_degree: usize = (grid.dim() as usize) * 2;
     let start_vector = grid.start_point(size);
 
-    let config = test_provider::Config::new(
-        Metric::L2,
-        max_degree,
-        test_provider::StartPoint::new(u32::MAX, start_vector),
-    )
-    .unwrap();
-
     // We need to be a little careful with our `target_degree` handling. When the grid
     // dimension is 1, we set the `max_degree` equal to 2. Setting the `target_degree`
     // any lower results in a degenerate graph.
@@ -91,7 +84,14 @@ fn build_index(
     .build()
     .unwrap();
 
-    Arc::new(test_provider::Provider::new(config, index_config))
+    let config = test_provider::Config::new(
+        index_config,
+        Metric::L2,
+        test_provider::StartPoint::new(u32::MAX, start_vector),
+    )
+    .unwrap();
+
+    Arc::new(test_provider::Provider::new(config))
 }
 
 /// Run a round of index building on `data`.

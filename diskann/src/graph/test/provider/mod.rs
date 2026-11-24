@@ -97,7 +97,7 @@ impl IntoIterator for StartPoint {
 #[derive(Debug, Clone)]
 pub struct Config {
     start_points: HashMap<u32, Vec<f32>>,
-    max_degree: NonZeroUsize,
+    graph: graph::Config,
     dim: NonZeroUsize,
     metric: Metric,
 }
@@ -109,19 +109,18 @@ impl Config {
     ///
     /// Returns an error in the following cases:
     ///
-    /// * `max_degree` is zero.
     /// * No start points are provided.
     /// * The dimensions of the provided start points do not match or are zero.
     /// * The provided start points are not unique.
-    pub fn new<I>(metric: Metric, max_degree: usize, start_points: I) -> Result<Self, ConfigError>
+    pub fn new<I>(
+        graph: graph::Config,
+        metric: Metric,
+        start_points: I,
+    ) -> Result<Self, ConfigError>
     where
         I: IntoIterator<Item = StartPoint>,
     {
-        let max_degree = match NonZeroUsize::new(max_degree) {
-            Some(max_degree) => max_degree,
-            None => return Err(ConfigError::MaxDegreeCannotBeZero),
-        };
-
+        let max_degree = graph.max_degree();
         let mut dim: Option<NonZeroUsize> = None;
         let mut count = 0;
         let start_points = start_points
@@ -157,7 +156,7 @@ impl Config {
 
         Ok(Self {
             start_points,
-            max_degree,
+            graph,
             dim,
             metric,
         })
@@ -175,8 +174,6 @@ pub enum ConfigError {
     MismatchedDims,
     #[error("start point dimension must be non-zero")]
     DimCannotBeZero,
-    #[error("max degree must be non-zero")]
-    MaxDegreeCannotBeZero,
 }
 
 convert_error!(ConfigError);
@@ -200,7 +197,6 @@ convert_error!(ConfigError);
 pub struct Provider {
     terms: DashMap<u32, Term>,
     config: Config,
-    graph: graph::Config,
 
     // Counters
     pub(crate) get_vector: Counter,
@@ -214,11 +210,10 @@ impl Provider {
     /// Create a new [`Provider`].
     ///
     /// All counters will be initialized to zero.
-    pub fn new(config: Config, graph: graph::Config) -> Self {
+    pub fn new(config: Config) -> Self {
         let this = Self {
             terms: DashMap::new(),
             config,
-            graph,
             get_vector: Counter::new(),
             set_vector: Counter::new(),
             get_neighbors: Counter::new(),
@@ -251,18 +246,13 @@ impl Provider {
     ///
     /// After initialization, all adjacency lists are verified to ensure that they only
     /// contain either start point IDs or IDs yielded by the `points` iterator.
-    pub fn new_from<I, T>(
-        config: Config,
-        start_points: I,
-        points: T,
-        graph: graph::Config,
-    ) -> ANNResult<Self>
+    pub fn new_from<I, T>(config: Config, start_points: I, points: T) -> ANNResult<Self>
     where
         I: IntoIterator<Item = (u32, AdjacencyList<u32>)>,
         T: IntoIterator<Item = (u32, Vec<f32>, AdjacencyList<u32>)>,
     {
-        let this = Self::new(config, graph);
-        let max_degree = this.config.max_degree.get();
+        let this = Self::new(config);
+        let max_degree = this.config.graph.max_degree().get();
 
         // Add the start points.
         for (id, neighbors) in start_points {
@@ -334,13 +324,6 @@ impl Provider {
 
         let setup = grid.setup(size, start_id);
 
-        // Create the provider config with the grid start point.
-        let provider_config = Config::new(
-            Metric::L2,
-            max_degree,
-            StartPoint::new(setup.start_id(), setup.start_point()),
-        )?;
-
         let graph_config = graph::config::Builder::new(
             max_degree,
             graph::config::MaxDegree::same(),
@@ -349,13 +332,15 @@ impl Provider {
         )
         .build()?;
 
-        // Initialize the provider.
-        Self::new_from(
-            provider_config,
-            setup.start_neighbors(),
-            setup.setup(),
+        // Create the provider config with the grid start point.
+        let provider_config = Config::new(
             graph_config,
-        )
+            Metric::L2,
+            StartPoint::new(setup.start_id(), setup.start_point()),
+        )?;
+
+        // Initialize the provider.
+        Self::new_from(provider_config, setup.start_neighbors(), setup.setup())
     }
 
     /// Return the dimensionality of data contained by this provider.
@@ -365,7 +350,7 @@ impl Provider {
 
     /// Return the largest degree this provider is capable of holding.
     pub fn max_degree(&self) -> usize {
-        self.config.max_degree.get()
+        self.config.graph.max_degree().get()
     }
 
     /// Return the [`Metric`] used by this provider.
@@ -527,7 +512,7 @@ impl Provider {
             builder
         };
 
-        let set = builder.build(self.graph.max_occlusion_size().get());
+        let set = builder.build(self.config.graph.max_occlusion_size().get());
         match &options.transient_ids {
             Some(ids) => PruneAccessor::new(self, Some(Cow::Borrowed(ids)), set),
             None => PruneAccessor::new(self, None, set),
@@ -629,7 +614,7 @@ impl Provider {
         knn: Option<NonZeroUsize>,
     ) -> ANNResult<(Vec<Neighbor<u32>>, P::Output)>
     where
-        P: graph::Search<Accessor<'a>>,
+        P: graph::Search,
     {
         let mut accessor = self.search_accessor(vector)?;
         let mut buf = MaybeCapped::new(knn);
@@ -657,14 +642,14 @@ impl Provider {
         knn: Option<NonZeroUsize>,
     ) -> ANNResult<(Vec<Neighbor<u32>>, P::Output)>
     where
-        P: graph::Search<labeled::FilteredAccessor<'a, Accessor<'a>>>,
+        P: graph::FilteredSearch,
     {
         let mut accessor = labeled::FilteredAccessor::new(self.search_accessor(vector)?, predicate);
 
         let mut buf = MaybeCapped::new(knn);
         let post_processor = glue::DefaultPostProcessor::default_post_processor(&accessor);
         let output = search
-            .search(&mut accessor, post_processor, &mut buf)
+            .filtered_search(&mut accessor, post_processor, &mut buf)
             .await?;
         Ok((buf.into_inner(), output))
     }
@@ -693,7 +678,7 @@ impl Provider {
         algorithms::insert::insert(
             &mut self.insert_accessor(vector, options, None)?,
             id,
-            &self.graph,
+            &self.config.graph,
         )
         .await?;
 
@@ -742,7 +727,7 @@ impl Provider {
         };
 
         let overlay = workingset::map::Overlay::from_batch(data.clone(), ids.iter().cloned());
-        algorithms::batch::insert::standard(&spawner, ids, &self.graph, || BatchInsert {
+        algorithms::batch::insert::standard(&spawner, ids, &self.config.graph, || BatchInsert {
             provider: self.clone(),
             overlay: overlay.clone(),
             options: options.clone(),
@@ -771,12 +756,22 @@ impl Provider {
         match kind {
             InplaceDeleteMethod::OneHop(kind) => {
                 workspace
-                    .one_hop(&kind, &mut InplaceDelete::new(prune), id, &self.graph)
+                    .one_hop(
+                        &kind,
+                        &mut InplaceDelete::new(prune),
+                        id,
+                        &self.config.graph,
+                    )
                     .await
             }
             InplaceDeleteMethod::TwoHopAndOneHop(kind) => {
                 workspace
-                    .one_hop_and_two_hop(&kind, &mut InplaceDelete::new(prune), id, &self.graph)
+                    .two_hop_and_one_hop(
+                        &kind,
+                        &mut InplaceDelete::new(prune),
+                        id,
+                        &self.config.graph,
+                    )
                     .await
             }
             InplaceDeleteMethod::VisitedAndTopK(kind) => {
@@ -789,7 +784,7 @@ impl Provider {
                 let search = self.search_accessor(&vector)?;
                 let mut accessor = TopKInplaceDelete::new(prune, search);
                 workspace
-                    .visited_and_topk(&kind, &mut accessor, id, &self.graph)
+                    .visited_and_topk(&kind, &mut accessor, id, &self.config.graph)
                     .await
             }
         }
@@ -810,7 +805,7 @@ impl Provider {
         };
 
         algorithms::consolidate::Workspace::new()
-            .run(&mut consolidate, id, &self.graph)
+            .run(&mut consolidate, id, &self.config.graph)
             .await
     }
 }
@@ -1678,6 +1673,10 @@ mod tests {
     #[test]
     fn test_config_new() {
         let metric = Metric::L2;
+        let graph =
+            graph::config::Builder::new(10, graph::config::MaxDegree::same(), 100, metric.into())
+                .build()
+                .unwrap();
 
         // Happy path - valid configuration
         {
@@ -1685,31 +1684,15 @@ mod tests {
                 StartPoint::new(0, vec![1.0, 2.0, 3.0]),
                 StartPoint::new(1, vec![4.0, 5.0, 6.0]),
             ];
-            let config = Config::new(metric, 10, start_points).unwrap();
-            assert_eq!(config.max_degree.get(), 10);
+            let config = Config::new(graph.clone(), metric, start_points).unwrap();
             assert_eq!(config.dim.get(), 3);
             assert_eq!(config.metric, metric);
             assert_eq!(config.start_points.len(), 2);
         }
 
-        // Error: max_degree is zero
-        {
-            let err = Config::new(metric, 0, StartPoint::new(0, vec![1.0, 2.0])).unwrap_err();
-            assert!(matches!(err, ConfigError::MaxDegreeCannotBeZero));
-
-            let msg = err.to_string();
-            let ann: ANNError = err.into();
-            assert!(
-                ann.to_string().contains(&msg),
-                "ANNError message \"{}\" does not contain original error: \"{}\"",
-                ann,
-                msg,
-            );
-        }
-
         // Error: no start points provided
         {
-            let err = Config::new(metric, 10, []).unwrap_err();
+            let err = Config::new(graph.clone(), metric, []).unwrap_err();
             assert!(matches!(err, ConfigError::NeedStartPoint));
         }
 
@@ -1719,13 +1702,13 @@ mod tests {
                 StartPoint::new(0, vec![1.0, 2.0, 3.0]),
                 StartPoint::new(1, vec![4.0, 5.0]), // Different dimension
             ];
-            let err = Config::new(metric, 10, start_points).unwrap_err();
+            let err = Config::new(graph.clone(), metric, start_points).unwrap_err();
             assert!(matches!(err, ConfigError::MismatchedDims));
         }
 
         // Error: zero dimension (empty vectors)
         {
-            let err = Config::new(metric, 10, StartPoint::new(0, vec![])).unwrap_err();
+            let err = Config::new(graph.clone(), metric, StartPoint::new(0, vec![])).unwrap_err();
             assert!(matches!(err, ConfigError::DimCannotBeZero));
         }
 
@@ -1735,7 +1718,7 @@ mod tests {
                 StartPoint::new(0, vec![1.0, 2.0]),
                 StartPoint::new(0, vec![3.0, 4.0]), // Same ID
             ];
-            let err = Config::new(metric, 10, start_points).unwrap_err();
+            let err = Config::new(graph.clone(), metric, start_points).unwrap_err();
             assert!(matches!(err, ConfigError::StartPointsNotUnique));
         }
     }
@@ -1784,7 +1767,7 @@ mod tests {
     fn test_provider_new_from() {
         // A dummy graph config.
         let graph = graph::config::Builder::new(
-            5,
+            2,
             graph::config::MaxDegree::same(),
             100,
             (Metric::L2).into(),
@@ -1795,8 +1778,8 @@ mod tests {
         // Happy path - valid provider with start points and additional points
         {
             let config = Config::new(
+                graph.clone(),
                 Metric::L2,
-                3,
                 [
                     StartPoint::new(0, vec![1.0, 0.0]),
                     StartPoint::new(1, vec![0.0, 1.0]),
@@ -1811,86 +1794,86 @@ mod tests {
                 AdjacencyList::from_iter_untrusted([0, 1]),
             )];
 
-            let provider = Provider::new_from(config, start_points, points, graph.clone()).unwrap();
+            let provider = Provider::new_from(config, start_points, points).unwrap();
             assert_eq!(provider.dim(), 2);
-            assert_eq!(provider.max_degree(), 3);
+            assert_eq!(provider.max_degree(), 2);
         }
 
         // Happy Path: empty iterators (only start points from config)
         {
-            let config = Config::new(Metric::L2, 5, [StartPoint::new(0, vec![1.0])]).unwrap();
-            let provider = Provider::new_from(config, [], [], graph.clone()).unwrap();
+            let config =
+                Config::new(graph.clone(), Metric::L2, [StartPoint::new(0, vec![1.0])]).unwrap();
+            let provider = Provider::new_from(config, [], []).unwrap();
             assert_eq!(provider.dim(), 1);
         }
 
         // Error: start point neighbors exceed max degree
         {
-            let config = Config::new(Metric::L2, 2, [StartPoint::new(0, vec![1.0])]).unwrap();
-            // Exceeds max degree of 2
+            let config =
+                Config::new(graph.clone(), Metric::L2, [StartPoint::new(0, vec![1.0])]).unwrap();
+            // Exceeds max degree of 5
             let start_points = [(0, AdjacencyList::from_iter_untrusted([1, 2, 3]))];
-            let err = Provider::new_from(config, start_points, [], graph.clone()).unwrap_err();
+            let err = Provider::new_from(config, start_points, []).unwrap_err();
             assert_contains!(err.to_string(), "max degree");
         }
 
         // Error: invalid start point ID
         {
-            let config = Config::new(Metric::L2, 5, [StartPoint::new(0, vec![1.0])]).unwrap();
+            let config =
+                Config::new(graph.clone(), Metric::L2, [StartPoint::new(0, vec![1.0])]).unwrap();
             let start_points = [(999, AdjacencyList::new())]; // 999 is not a valid start point
-            let err = Provider::new_from(config, start_points, [], graph.clone()).unwrap_err();
+            let err = Provider::new_from(config, start_points, []).unwrap_err();
             assert_contains!(err.to_string(), "not a valid start point");
         }
 
         // Error: regular point neighbors exceed max degree
         {
-            let config = Config::new(Metric::L2, 2, [StartPoint::new(0, vec![1.0])]).unwrap();
+            let config =
+                Config::new(graph.clone(), Metric::L2, [StartPoint::new(0, vec![1.0])]).unwrap();
 
             // Exceeds max degree
             let points = [(1, vec![2.0], AdjacencyList::from_iter_untrusted([0, 2, 3]))];
-            let err = Provider::new_from(config, [], points, graph.clone()).unwrap_err();
+            let err = Provider::new_from(config, [], points).unwrap_err();
             assert_contains!(err.to_string(), "max degree");
         }
 
         // Error: trying to assign start point through regular points
         {
-            let config = Config::new(Metric::L2, 5, [StartPoint::new(0, vec![1.0])]).unwrap();
+            let config =
+                Config::new(graph.clone(), Metric::L2, [StartPoint::new(0, vec![1.0])]).unwrap();
             let points = [(0, vec![2.0], AdjacencyList::new())]; // 0 is already a start point
-            let err = Provider::new_from(config, [], points, graph.clone()).unwrap_err();
+            let err = Provider::new_from(config, [], points).unwrap_err();
             assert_contains!(err.to_string(), "cannot assign start point");
         }
 
         // Error: dimension mismatch in regular points
         {
-            let config = Config::new(Metric::L2, 5, [StartPoint::new(0, vec![1.0, 2.0])]).unwrap();
+            let config = Config::new(
+                graph.clone(),
+                Metric::L2,
+                [StartPoint::new(0, vec![1.0, 2.0])],
+            )
+            .unwrap();
             let points = [(1, vec![3.0], AdjacencyList::new())]; // Wrong dimension (1 instead of 2)
-            let err = Provider::new_from(config, [], points, graph.clone()).unwrap_err();
+            let err = Provider::new_from(config, [], points).unwrap_err();
             assert_contains!(err.to_string(), "expecting dim");
         }
 
         // Error: inconsistent graph (neighbor points to non-existent ID)
         {
-            let config = Config::new(Metric::L2, 5, [StartPoint::new(0, vec![1.0])]).unwrap();
+            let config =
+                Config::new(graph.clone(), Metric::L2, [StartPoint::new(0, vec![1.0])]).unwrap();
             let points = [(
                 1,
                 vec![2.0],
                 AdjacencyList::from_iter_unique(std::iter::once(999)),
             )]; // 999 doesn't exist
-            let err = Provider::new_from(config, [], points, graph.clone()).unwrap_err();
+            let err = Provider::new_from(config, [], points).unwrap_err();
             assert_contains!(err.to_string(), "not in the provider");
         }
     }
 
     fn create_test_provider() -> Provider {
-        // Edge case: complex valid graph
-        let config = Config::new(
-            Metric::L2,
-            4,
-            [
-                StartPoint::new(0, vec![1.0, 0.0]),
-                StartPoint::new(1, vec![0.0, 1.0]),
-            ],
-        )
-        .unwrap();
-
         let graph_config = graph::config::Builder::new(
             4,
             graph::config::MaxDegree::same(),
@@ -1898,6 +1881,17 @@ mod tests {
             (Metric::L2).into(),
         )
         .build()
+        .unwrap();
+
+        // Edge case: complex valid graph
+        let config = Config::new(
+            graph_config,
+            Metric::L2,
+            [
+                StartPoint::new(0, vec![1.0, 0.0]),
+                StartPoint::new(1, vec![0.0, 1.0]),
+            ],
+        )
         .unwrap();
 
         let start_points = [
@@ -1917,7 +1911,7 @@ mod tests {
                 AdjacencyList::from_iter_untrusted([0, 1, 2]),
             ),
         ];
-        let provider = Provider::new_from(config, start_points, points, graph_config).unwrap();
+        let provider = Provider::new_from(config, start_points, points).unwrap();
 
         assert_eq!(provider.dim(), 2);
         assert_eq!(provider.max_degree(), 4);

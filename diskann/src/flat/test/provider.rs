@@ -24,7 +24,7 @@ use crate::{
     flat::DistancesUnordered,
     graph::test::synthetic::Grid,
     internal::counter::{Counter, LocalCounter},
-    provider::{self, ExecutionContext, HasId, NoopGuard},
+    provider::{self, HasId},
     utils::VectorRepr,
 };
 
@@ -115,24 +115,6 @@ pub struct ElementCounter {
 
 #[cfg(test)]
 crate::test::cmp::verbose_eq!(ElementCounter { count });
-
-/////////////
-// Context //
-/////////////
-
-/// Per-search execution context. No spawn/clone tracking — flat search runs on
-/// the calling task and never spawns.
-#[derive(Debug, Clone, Default)]
-pub struct Context;
-
-impl ExecutionContext for Context {
-    fn wrap_spawn<F, T>(&self, f: F) -> impl Future<Output = T> + Send + 'static
-    where
-        F: Future<Output = T> + Send + 'static,
-    {
-        f
-    }
-}
 
 /////////////////////
 // Errors / Guards //
@@ -235,26 +217,6 @@ impl ToRanked for AccessError {
 
     fn from_error(error: InvalidId) -> Self {
         Self::InvalidId(error)
-    }
-}
-
-//////////////////
-// DataProvider //
-//////////////////
-
-impl provider::DataProvider for Provider {
-    type Context = Context;
-    type InternalId = u32;
-    type ExternalId = u32;
-    type Error = InvalidId;
-    type Guard = NoopGuard<u32>;
-
-    fn to_internal_id(&self, _ctx: &Context, gid: &u32) -> Result<u32, InvalidId> {
-        if (*gid as usize) < self.items.nrows() {
-            Ok(*gid)
-        } else {
-            Err(InvalidId(*gid))
-        }
     }
 }
 

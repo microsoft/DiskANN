@@ -61,9 +61,18 @@ fn build_three_level_labeled_provider() -> test_provider::Provider {
     let max_degree = 10;
     let start_id = 0u32;
 
-    let config = test_provider::Config::new(
-        Metric::L2,
+    let index_config = graph::config::Builder::new(
         max_degree,
+        graph::config::MaxDegree::same(),
+        32,
+        Metric::L2.into(),
+    )
+    .build()
+    .unwrap();
+
+    let config = test_provider::Config::new(
+        index_config,
+        Metric::L2,
         test_provider::StartPoint::new(start_id, vec![0.0]),
     )
     .unwrap();
@@ -97,16 +106,7 @@ fn build_three_level_labeled_provider() -> test_provider::Provider {
         ));
     }
 
-    let index_config = graph::config::Builder::new(
-        max_degree,
-        graph::config::MaxDegree::same(),
-        32,
-        Metric::L2.into(),
-    )
-    .build()
-    .unwrap();
-
-    test_provider::Provider::new_from(config, start_neighbors, points, index_config).unwrap()
+    test_provider::Provider::new_from(config, start_neighbors, points).unwrap()
 }
 
 #[derive(Debug)]

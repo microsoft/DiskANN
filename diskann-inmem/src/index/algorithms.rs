@@ -66,6 +66,12 @@ pub(super) struct InplaceDelete<'a> {
     prune: Prune<'a>,
 }
 
+impl<'a> InplaceDelete<'a> {
+    pub(super) fn new(prune: Prune<'a>) -> Self {
+        Self { prune }
+    }
+}
+
 impl provider::HasId for InplaceDelete<'_> {
     type Id = u32;
 }

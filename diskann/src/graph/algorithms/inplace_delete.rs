@@ -95,10 +95,6 @@ where
         }
     }
 
-    pub(crate) fn delta(&self) -> &HashMap<I, BackedgeBuffer<I>> {
-        &self.edges
-    }
-
     pub async fn one_hop<A>(
         &mut self,
         one_hop: &OneHop,
@@ -123,7 +119,7 @@ where
         Ok(())
     }
 
-    pub async fn one_hop_and_two_hop<A>(
+    pub async fn two_hop_and_one_hop<A>(
         &mut self,
         two_hop: &TwoHopAndOneHop,
         accessor: &mut A,
@@ -171,6 +167,14 @@ where
         .await?;
 
         Ok(())
+    }
+
+    pub(crate) fn delta(&self) -> &HashMap<I, BackedgeBuffer<I>> {
+        &self.edges
+    }
+
+    pub(crate) fn prune(&mut self) -> &mut prune::Scratch<I> {
+        &mut self.prune
     }
 }
 
@@ -579,14 +583,13 @@ async fn add_edges_and_drop<A>(
 where
     A: PruneAccessor,
 {
-    let delete_set = HashSet::from_iter(std::iter::once(id));
     for (src, dsts) in edges {
         algorithms::insert::add_edge_and_prune(
             prune,
             dsts,
             *src,
             scratch,
-            Some(&delete_set),
+            Some(&algorithms::insert::Exclude::new(&id)),
             config,
         )
         .await?;

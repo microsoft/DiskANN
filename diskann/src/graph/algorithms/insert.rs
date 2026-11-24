@@ -241,6 +241,42 @@ where
     }
 }
 
+/// Retain only valid candidates in `list`.
+pub(crate) trait RetainCandidates<I>: Send + Sync {
+    /// Retain only valid candidates in `list`. Return `true` is any item was removed.
+    fn retain_candidates(&self, list: &mut AdjacencyList<I>) -> bool;
+}
+
+pub(crate) struct Exclude<'a, I>(&'a I);
+
+impl<'a, I> Exclude<'a, I> {
+    pub(crate) fn new(exclusion: &'a I) -> Self {
+        Self(exclusion)
+    }
+}
+
+impl<I> RetainCandidates<I> for Exclude<'_, HashSet<I>>
+where
+    I: std::hash::Hash + Eq + Send + Sync,
+{
+    fn retain_candidates(&self, list: &mut AdjacencyList<I>) -> bool {
+        let len = list.len();
+        list.retain(|i| !self.0.contains(i));
+        list.len() != len
+    }
+}
+
+impl<I> RetainCandidates<I> for Exclude<'_, I>
+where
+    I: PartialEq + Send + Sync,
+{
+    fn retain_candidates(&self, list: &mut AdjacencyList<I>) -> bool {
+        let len = list.len();
+        list.retain(|i| i != self.0);
+        list.len() != len
+    }
+}
+
 /// A method to add edges from `source` to `targets`, and prune the adjacency list
 /// `source` if its degree exceeds `degree*graph_slack_factor`.
 /// Uses `append_neighbors` to append the new edge if a prune is not required.
@@ -258,7 +294,7 @@ pub(crate) fn add_edge_and_prune<A>(
     targets: &[A::Id],
     source: A::Id,
     scratch: &mut prune::Scratch<A::Id>,
-    to_remove: Option<&HashSet<A::Id>>,
+    retain: Option<&dyn RetainCandidates<A::Id>>,
     config: &Config,
 ) -> impl SendFuture<ANNResult<()>>
 where
@@ -272,16 +308,13 @@ where
             .get_neighbors(source, adj_list.as_empty())
             .await?;
 
-        let mut did_remove = false;
-        if let Some(set) = to_remove {
-            adj_list.retain(|i| {
-                let contains = set.contains(i);
-                did_remove |= contains;
-                !contains
-            })
-        }
-
         let num_new_edges = adj_list.extend_from_slice(targets);
+        let did_remove = if let Some(retain) = retain {
+            retain.retain_candidates(&mut adj_list)
+        } else {
+            false
+        };
+
         if num_new_edges == 0 && !did_remove {
             tracked_trace!(
                 "Skipping edge insertion from {} to {:?} all edges already exist",

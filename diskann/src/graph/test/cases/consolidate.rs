@@ -43,9 +43,18 @@ fn setup_consolidation_index(
     let provider_max_degree = 5;
     let pruned_degree = 4;
 
+    let index_config = graph::config::Builder::new(
+        pruned_degree,
+        graph::config::MaxDegree::new(provider_max_degree),
+        10,
+        Metric::L2.into(),
+    )
+    .build()
+    .unwrap();
+
     let provider_config = test_provider::Config::new(
+        index_config,
         Metric::L2,
-        provider_max_degree,
         test_provider::StartPoint::new(start_id, vec![0.5; dim]),
     )
     .unwrap();
@@ -59,20 +68,10 @@ fn setup_consolidation_index(
         .enumerate()
         .map(|(id, (vec, adj))| (id as u32, vec, adj));
 
-    let index_config = graph::config::Builder::new(
-        pruned_degree,
-        graph::config::MaxDegree::same(),
-        10,
-        Metric::L2.into(),
-    )
-    .build()
-    .unwrap();
-
     let provider = Provider::new_from(
         provider_config,
         iter::once((start_id, start_neighbors)),
         points,
-        index_config,
     )
     .unwrap();
 

@@ -83,13 +83,6 @@ pub(super) fn build_1d_index(
     points: Vec<(u32, Vec<f32>, AdjacencyList<u32>)>,
     max_degree: usize,
 ) -> test_provider::Provider {
-    let config = test_provider::Config::new(
-        Metric::L2,
-        max_degree,
-        test_provider::StartPoint::new(start_id, vec![start_pos]),
-    )
-    .unwrap();
-
     let index_config = graph::config::Builder::new(
         max_degree,
         graph::config::MaxDegree::Same,
@@ -99,13 +92,15 @@ pub(super) fn build_1d_index(
     .build()
     .unwrap();
 
-    test_provider::Provider::new_from(
-        config,
-        std::iter::once((start_id, start_neighbors)),
-        points,
+    let config = test_provider::Config::new(
         index_config,
+        Metric::L2,
+        test_provider::StartPoint::new(start_id, vec![start_pos]),
     )
-    .unwrap()
+    .unwrap();
+
+    test_provider::Provider::new_from(config, std::iter::once((start_id, start_neighbors)), points)
+        .unwrap()
 }
 
 fn run(

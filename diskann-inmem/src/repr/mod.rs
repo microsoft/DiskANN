@@ -96,6 +96,9 @@ pub trait Representation: std::fmt::Debug + Send + Sync + 'static {
     /// Retire the internal ID `i`. Such IDs will eventually be recycled for reuse.
     fn retire(&self, i: u32) -> ANNResult<()>;
 
+    /// Attempt to reclaim internal IDs, returning the number of IDs reclaimed.
+    fn reclaim(&self) -> Option<usize>;
+
     /// Return `true` if internal ID `i` is currently readable, returning `None` if `i`
     /// is outside `0..self.id_limit()`.
     fn is_readable(&self, i: u32) -> Option<bool>;

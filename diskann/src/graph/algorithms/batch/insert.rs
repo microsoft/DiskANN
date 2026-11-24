@@ -189,10 +189,7 @@ impl<I> Iterator for BackEdgeIter<I> {
 
     fn next(&mut self) -> Option<BackEdge<I>> {
         let (source, destinations) = self.iter.next()?;
-        Some(BackEdge {
-            source,
-            destinations,
-        })
+        Some(BackEdge::new(source, destinations))
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
@@ -270,7 +267,7 @@ where
         }
     }
 
-    async fn bootstrap<A>(
+    pub async fn bootstrap<A>(
         &mut self,
         forward_edges: &mut ForwardEdges<I>,
         accessor: &mut A,
@@ -321,7 +318,7 @@ where
             ));
     }
 
-    async fn apply_back_edge<A>(
+    pub async fn apply_back_edge<A>(
         &mut self,
         accessor: &mut A,
         back_edge: &BackEdge<I>,
@@ -334,10 +331,12 @@ where
             source,
             destinations,
         } = back_edge;
+
         // Even though `BackEdge` maintains the same uniqueness property, the replacement
         // algorithm will sort the results, which can improve determinism.
         self.buf
             .replace_from_iter_untrusted(destinations.iter().copied());
+
         algorithms::insert::add_edge_and_prune(
             accessor,
             &self.buf,

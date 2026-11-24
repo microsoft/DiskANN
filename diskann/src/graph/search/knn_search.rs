@@ -182,68 +182,68 @@ impl Search for Knn {
     }
 }
 
-//////////////////
-// Recorded Knn //
-//////////////////
-
-/// K-NN search with traversal path recording.
-///
-/// Records the path taken during search for debugging or analysis.
-#[derive(Debug)]
-pub struct RecordedKnn<'r, SR: ?Sized> {
-    /// Base k-NN search parameters.
-    pub inner: Knn,
-    /// The recorder to capture search path.
-    pub recorder: &'r mut SR,
-}
-
-impl<'r, SR: ?Sized> RecordedKnn<'r, SR> {
-    /// Create new recorded search parameters.
-    pub fn new(inner: Knn, recorder: &'r mut SR) -> Self {
-        Self { inner, recorder }
-    }
-}
-
-impl<SR> Search for RecordedKnn<'_, SR> where
-    SR: super::record::SearchRecord<A::Id> + ?Sized,
-{
-    type Output = SearchStats;
-
-    fn search<A, O, PP, OB>(
-        self,
-        accessor: &mut A,
-        processor: PP,
-        output: &mut OB,
-    ) -> impl SendFuture<ANNResult<Self::Output>>
-    where
-        A: SearchAccessor,
-        O: Send,
-        PP: SearchPostProcess<A, O> + Send + Sync,
-        OB: SearchOutputBuffer<O> + Send + ?Sized,
-    {
-        async move {
-            let num_start_ids = accessor.num_starting_points().await?;
-            let max_degree = algorithms::max_degree_from_hint(accessor.max_degree_hint());
-            let mut scratch =
-                algorithms::search_scratch_2(max_degree, self.inner.l_value.get(), num_start_ids);
-
-            let stats = algorithms::search(
-                accessor,
-                self.inner.beam_width(),
-                &mut scratch,
-                self.recorder,
-            )
-            .await?;
-
-            let result_count = processor
-                .post_process(accessor, scratch.best.iter(), output)
-                .await
-                .into_ann_result()?;
-
-            Ok(stats.finish(result_count as u32))
-        }
-    }
-}
+// //////////////////
+// // Recorded Knn //
+// //////////////////
+//
+// /// K-NN search with traversal path recording.
+// ///
+// /// Records the path taken during search for debugging or analysis.
+// #[derive(Debug)]
+// pub struct RecordedKnn<'r, SR: ?Sized> {
+//     /// Base k-NN search parameters.
+//     pub inner: Knn,
+//     /// The recorder to capture search path.
+//     pub recorder: &'r mut SR,
+// }
+//
+// impl<'r, SR: ?Sized> RecordedKnn<'r, SR> {
+//     /// Create new recorded search parameters.
+//     pub fn new(inner: Knn, recorder: &'r mut SR) -> Self {
+//         Self { inner, recorder }
+//     }
+// }
+//
+// impl<SR> Search for RecordedKnn<'_, SR> where
+//     SR: super::record::SearchRecord<A::Id> + ?Sized,
+// {
+//     type Output = SearchStats;
+//
+//     fn search<A, O, PP, OB>(
+//         self,
+//         accessor: &mut A,
+//         processor: PP,
+//         output: &mut OB,
+//     ) -> impl SendFuture<ANNResult<Self::Output>>
+//     where
+//         A: SearchAccessor,
+//         O: Send,
+//         PP: SearchPostProcess<A, O> + Send + Sync,
+//         OB: SearchOutputBuffer<O> + Send + ?Sized,
+//     {
+//         async move {
+//             let num_start_ids = accessor.num_starting_points().await?;
+//             let max_degree = algorithms::max_degree_from_hint(accessor.max_degree_hint());
+//             let mut scratch =
+//                 algorithms::search_scratch_2(max_degree, self.inner.l_value.get(), num_start_ids);
+//
+//             let stats = algorithms::search(
+//                 accessor,
+//                 self.inner.beam_width(),
+//                 &mut scratch,
+//                 self.recorder,
+//             )
+//             .await?;
+//
+//             let result_count = processor
+//                 .post_process(accessor, scratch.best.iter(), output)
+//                 .await
+//                 .into_ann_result()?;
+//
+//             Ok(stats.finish(result_count as u32))
+//         }
+//     }
+// }
 
 ///////////
 // Tests //

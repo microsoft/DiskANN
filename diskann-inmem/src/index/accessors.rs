@@ -196,6 +196,11 @@ impl<'a> Search<'a> {
     }
 
     #[cfg(test)]
+    pub(super) fn mimic_destructive_post_process(&mut self) {
+        self.buffer.clear()
+    }
+
+    #[cfg(test)]
     pub(crate) fn get_expand_beam(&self) -> &dyn repr::ExpandBeam {
         &*self.expand_beam
     }
