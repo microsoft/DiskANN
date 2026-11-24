@@ -95,12 +95,22 @@ pub(crate) struct SelectionRows<'a> {
 impl<'a> SelectionRows<'a> {
     #[expect(
         clippy::expect_used,
-        reason = "a nonempty TopK scan has positive width"
+        reason = "a nonempty TopK scan has positive width and a representable padded row count"
     )]
-    fn new(mut output: rowmajor::Mut<'a, Candidate>, cutoffs: &'a mut [f32]) -> Self {
+    fn new<const MR: usize>(
+        mut output: rowmajor::Mut<'a, Candidate>,
+        cutoffs: &'a mut [f32],
+    ) -> Self {
+        const { assert!(MR > 0) };
         let width = NonZeroUsize::new(output.ncols()).expect("nonempty TopK scan");
         let valid = output.nrows();
-        assert!(cutoffs.len() >= valid, "cutoffs cover all logical rows");
+        let required = valid
+            .checked_next_multiple_of(MR)
+            .expect("padded row count overflow");
+        assert!(
+            cutoffs.len() >= required,
+            "cutoffs must cover the padded A rows"
+        );
         output.as_mut_slice().fill(Candidate::EMPTY);
         cutoffs.fill(f32::INFINITY);
         Self {
@@ -289,7 +299,7 @@ pub(crate) fn compute<A: Kernel<MR>, const MR: usize, const NR: usize>(
         _ => score,
     };
     let mut cutoffs = vec![0.0; a.padded_nrows()];
-    let mut selection = SelectionRows::new(output, &mut cutoffs);
+    let mut selection = SelectionRows::new::<MR>(output, &mut cutoffs);
     let a = packed::View::from_block_transposed(a).expect("nonempty query");
     let b = unpacked::View::from_matrix_view(b).expect("nonempty documents");
 
@@ -343,11 +353,19 @@ mod tests {
     use diskann_wide::arch::Scalar;
 
     #[test]
+    #[should_panic(expected = "cutoffs must cover the padded A rows")]
+    fn selection_rows_rejects_unpadded_cutoffs() {
+        let mut output = rowmajor::Owned::from_element(5, 2, Candidate::EMPTY);
+        let mut cutoffs = [0.0; 5];
+        SelectionRows::new::<8>(output.as_view_mut(), &mut cutoffs);
+    }
+
+    #[test]
     fn selection_subviews_keep_cutoffs_in_sync_and_ignore_padding() {
         let mut output = rowmajor::Owned::from_element(5, 2, Candidate::new(99, -10.0));
         let mut cutoffs = [0.0; 8];
         {
-            let mut rows = SelectionRows::new(output.as_view_mut(), &mut cutoffs);
+            let mut rows = SelectionRows::new::<4>(output.as_view_mut(), &mut cutoffs);
             {
                 let mut tail = rows.sub_rows(4, 4);
                 tail.insert(0, Candidate::new(1, 3.0));
