@@ -44,13 +44,11 @@ impl FullProviderLoader {
     }
 
     fn load_object(self, object: load::Object<'_>) -> load::Result<Provider<Full<f32>, u32>> {
-        let live_count: u32 = object.field("live_count")?;
-        let frozen_count: u32 = object.field("frozen_count")?;
-        let representation = Full::load(&object, self.capacity, self.store)?;
+        let (representation, live_count) = Full::load(&object, self.capacity, self.store)?;
         let mapping = common::load_external_ids(
             &object,
             live_count,
-            frozen_count,
+            representation.frozen_ids(),
             representation.id_limit(),
         )?;
         Ok(Provider {
@@ -94,10 +92,11 @@ impl save::Save for Provider<Full<f32>, u32> {
         let _writers = representation
             .try_exclude_writers()
             .ok_or_else(|| save::Error::message("could not exclude writers while saving"))?;
-        let compact = common::compact(self, representation.frozen_ids())?;
-        let mut record =
-            representation.save(context.clone(), compact.renaming(), compact.live_count())?;
-        record.insert("external_ids", compact.save_external_ids(self, context)?)?;
+        let (mut record, compaction) = representation.save(context.clone(), &_writers)?;
+        record.insert(
+            "external_ids",
+            common::save_external_ids(self, &compaction, context)?,
+        )?;
         Ok(record)
     }
 }
@@ -125,6 +124,8 @@ mod tests {
     struct Fixture {
         version: Version,
         live_count: u32,
+        frozen_start: u32,
+        include_frozen_start: bool,
         frozen_count: u32,
         dim: usize,
         max_degree: u32,
@@ -139,6 +140,8 @@ mod tests {
             Self {
                 version: VERSION,
                 live_count: 2,
+                frozen_start: 0,
+                include_frozen_start: true,
                 frozen_count: 1,
                 dim: 2,
                 max_degree: 2,
@@ -163,6 +166,12 @@ mod tests {
                 context,
                 [live_count, frozen_count, dim, max_degree,]
             );
+            if self.include_frozen_start {
+                record.insert(
+                    "frozen_start",
+                    save::Saveable::save(&self.frozen_start, context.clone())?,
+                )?;
+            }
             record.insert("metric", save::Value::String(self.metric.into()))?;
             for (key, bytes) in [
                 ("vectors", &self.vectors),
@@ -498,17 +507,39 @@ mod tests {
                 Capacity::new(live_count)
             );
             assert_eq!(restored.mapping.len(), live_count);
+            let search = restored
+                .representation
+                .search_accessor(&[0.0], &restored, None, restored.local_counters())
+                .unwrap();
+            let frozen_start = old_ids.iter().filter(|&&old| old < 2).count() as u32;
+            assert_eq!(
+                (search.start_points.start(), search.start_points.end()),
+                (frozen_start, frozen_start + 2)
+            );
+            drop(search);
+
+            let mut saved_old_ids = old_ids.to_vec();
+            saved_old_ids.sort_unstable();
             let accessor = restored
                 .representation
                 .prune_accessor(restored.local_counters())
                 .unwrap();
             let mut neighbors = AdjacencyList::new();
-            for (new, &old) in old_ids.iter().enumerate() {
+            for (new, &old) in saved_old_ids.iter().enumerate() {
                 let id = new as u32;
                 assert_eq!(&*restored.representation.get(id).unwrap(), &[old as f32]);
+                let source = old_ids
+                    .iter()
+                    .position(|&candidate| candidate == old)
+                    .unwrap();
+                let target = old_ids[(source + 1) % old_ids.len()];
+                let target = saved_old_ids
+                    .iter()
+                    .position(|&candidate| candidate == target)
+                    .unwrap();
                 accessor.neighbors.get(id, &mut neighbors).unwrap();
-                assert_eq!(&neighbors[..], &[((new + 1) % old_ids.len()) as u32]);
-                let external = (new >= 2).then_some(old + 10);
+                assert_eq!(&neighbors[..], &[target as u32]);
+                let external = (!(2..4).contains(&old)).then_some(old + 10);
                 assert_eq!(restored.mapping.to_external(id), external);
                 if let Some(external) = external {
                     assert_eq!(restored.mapping.to_internal(&external), Some(id));
@@ -730,6 +761,7 @@ mod tests {
             |fixture| fixture.metric = "invalid",
             |fixture| fixture.dim = usize::MAX,
             |fixture| fixture.frozen_count = u32::MAX,
+            |fixture| fixture.frozen_start = u32::MAX,
             |fixture| fixture.live_count = u32::MAX,
             |fixture| fixture.vectors.truncate(fixture.vectors.len() - 1),
             |fixture| fixture.vectors.push(0),
@@ -775,6 +807,21 @@ mod tests {
             assert_eq!(restored.representation.capacity(), Capacity::new(0));
             assert_eq!(restored.representation.id_limit(), IdLimit::new(0));
         }
+    }
+
+    #[test]
+    fn legacy_record_without_frozen_start_uses_prefix() {
+        let fixture = Fixture {
+            include_frozen_start: false,
+            ..Fixture::default()
+        };
+        let provider = fixture.load(FullProviderLoader::default()).unwrap();
+        let search = provider
+            .representation
+            .search_accessor(&[0.0, 0.0], &provider, None, provider.local_counters())
+            .unwrap();
+        assert_eq!(search.start_points.start(), 0);
+        assert_eq!(search.start_points.end(), fixture.frozen_count);
     }
 
     #[test]

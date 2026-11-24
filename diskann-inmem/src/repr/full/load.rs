@@ -18,7 +18,12 @@ impl Full<f32> {
         object: &load::Object<'_>,
         capacity: Option<Capacity>,
         config: store::Config,
-    ) -> load::Result<Self> {
+    ) -> load::Result<(Self, u32)> {
+        let frozen_start = if object.keys().any(|key| key == "frozen_start") {
+            object.field("frozen_start")?
+        } else {
+            0
+        };
         diskann_record::load_fields!(object, [
             live_count: u32,
             frozen_count: u32,
@@ -41,6 +46,13 @@ impl Full<f32> {
         let saved_count = frozen_count
             .checked_add(live_count)
             .ok_or_else(|| load::Error::message("saved point count exceeds u32::MAX"))?;
+        let frozen_ids = Range::start_plus(frozen_start, frozen_count)
+            .ok_or_else(|| load::Error::message("frozen-point range overflows u32::MAX"))?;
+        if frozen_ids.end() > saved_count {
+            return Err(load::Error::message(
+                "frozen-point range exceeds the saved point count",
+            ));
+        }
         let bytes = dim
             .checked_mul(size_of::<f32>())
             .ok_or_else(|| load::Error::message("vector dimension overflows usize"))?;
@@ -115,7 +127,7 @@ impl Full<f32> {
                 .neighbors()
                 .set(id, &neighbors)
                 .map_err(load::Error::new)?;
-            if id < frozen_count {
+            if frozen_ids.iter().contains(&id) {
                 slot.freeze();
             } else {
                 slot.publish();
@@ -126,15 +138,17 @@ impl Full<f32> {
                 "graph artifact contains extra rows or edges",
             ));
         }
-        Ok(Self {
-            store,
-            start_point_ids: Range::start_plus(0, frozen_count)
-                .ok_or_else(|| load::Error::message("invalid frozen-point range"))?,
-            capacity,
-            metric,
-            lookahead: Some(DEFAULT_LOOKAHEAD),
-            _type: std::marker::PhantomData,
-        })
+        Ok((
+            Self {
+                store,
+                start_point_ids: frozen_ids,
+                capacity,
+                metric,
+                lookahead: Some(DEFAULT_LOOKAHEAD),
+                _type: std::marker::PhantomData,
+            },
+            live_count,
+        ))
     }
 }
 

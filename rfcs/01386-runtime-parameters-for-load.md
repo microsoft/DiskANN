@@ -125,15 +125,17 @@ In this sketch, `load_object` is an internal loader method that dispatches on th
 
 ### Saved ID Layout
 
-Let `F` be the frozen-point range length, `N` the live-node count, and `C` the requested writable capacity, with `C >= N`. The in-memory frozen range may be relocated with `locate_start_point_ids_at`; saving remaps it to the prefix `[0, F)`:
+Let `F` be the frozen-point range length, `N` the live-node count, and `C` the requested writable capacity, with `C >= N`. The in-memory frozen range may be relocated with `locate_start_point_ids_at`. Saving scans retained representation slots in physical ID order and compacts deleted holes without forcing frozen points to the prefix.
+
+Let `S` be the number of retained live nodes before the original frozen range. The saved frozen range is `[S, S + F)`, and the representation persists `S` as `frozen_start`:
 
 | Kind | Saved IDs | Restored IDs |
 |---|---|---|
-| Frozen points | `[0, F)` | `[0, F)` |
-| Live nodes | `[F, F + N)` | `[F, F + N)` |
+| Frozen points | `[S, S + F)` | `[S, S + F)` |
+| Live nodes | `[0, S)` and `[S + F, F + N)` | `[0, S)` and `[S + F, F + N)` |
 | Spare writable slots | Not saved | `[F + N, F + C)` |
 
-Increasing capacity only adds empty slots, so we don't need to move any graph IDs on load. This means the load path should be blazing fast for any 'capacity' value `>= N`.
+Records without `frozen_start` use `S = 0`, matching the original prefix layout. Increasing capacity only adds empty slots after the dense saved prefix, so saved graph IDs do not need another remap on load.
     
 ### Taking care of 'holes'
 
@@ -141,7 +143,8 @@ The save path for in-mem 2.0 is a little more involved because the live ID space
 
 After deletions, run `DiskANNIndex::consolidate_vector` on live nodes and frozen start points before saving. Saving rejects any edge from a retained row to an omitted slot instead of silently dropping it: deleted rows can contain the replacement neighbors needed to preserve paths to live nodes, and cannot be recovered after loading.
 
-1. Check that live slots and the ID map agree and that every retained edge targets a saved node. Remap the actual frozen range, in its current ID order, to `[0, F)`, then assign live nodes outside that range, in their current ID order, to `[F, F + N)`. This creates a temporary map from `old ID -> new ID`.
-2. Write vectors and graph rows in saved-ID order, frozen points first, and external IDs in the same order as the live rows. Include frozen neighbor lists, process the nbr list in a streaming manner, and update all edge targets using the same mapping.
+1. The `Representation` scans readable slots in physical ID order, verifies that all frozen slots are retained, and assigns each retained slot its dense saved ID. This produces the compacted frozen range and the temporary `old ID -> new ID` map; the provider does not decide where frozen points are placed.
+2. The `Representation` writes vectors and graph rows in saved-ID order, includes frozen neighbor lists, processes each neighbor list in a streaming manner, and updates all edge targets using that map. It returns the record, frozen range, live count, and renaming to the `Provider`.
+3. The `Provider` uses the renaming to validate its external-ID map and writes external IDs in saved-live-ID order, skipping the frozen range.
 
-`Save` will not persist capacity.
+`Save` will not persist capacity. Retained live nodes and frozen start points must still form a valid graph; saving rejects an edge that targets an omitted slot rather than silently dropping it.

@@ -12,6 +12,7 @@
 
 pub(crate) mod load;
 mod save;
+pub(crate) use save::Compaction;
 
 mod internal_docs {
     //! Internally, the [`super::repr::Search`] and [`super::repr::Insert`] traits
@@ -405,6 +406,10 @@ where
     /// Return the logical dimension of the data handled by this [`repr::Representation`].
     pub fn dim(&self) -> usize {
         self.bytes().value() / std::mem::size_of::<T>()
+    }
+
+    pub(crate) fn frozen_ids(&self) -> Range {
+        self.start_point_ids
     }
 
     /// Return the number of payload bytes in each stored vector.
