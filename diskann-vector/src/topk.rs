@@ -47,13 +47,8 @@ impl Default for Candidate {
 /// The set must be nonempty, sorted by nondecreasing distance, and the candidate
 /// must be strictly nearer than its last slot. Its ID must not be [`UNASSIGNED`].
 /// A candidate goes after existing candidates with an equal distance.
-/// Arrays and slices both retain their concrete type at the call site.
 #[inline(always)]
-pub fn insert_sorted<Nearest>(nearest: &mut Nearest, candidate: Candidate) -> f32
-where
-    Nearest: AsMut<[Candidate]> + ?Sized,
-{
-    let nearest = nearest.as_mut();
+pub fn insert_sorted(nearest: &mut [Candidate], candidate: Candidate) -> f32 {
     let last = nearest.len() - 1;
     let mut slot = last;
     while slot > 0 && candidate.distance < nearest[slot - 1].distance {

@@ -388,6 +388,13 @@ impl<'a, T, const CAPACITY: usize> Remainder<'a, T, CAPACITY> {
         self.start
     }
 
+    /// Revisit a partial panel with a smaller kernel width.
+    #[inline(always)]
+    pub(in crate::matrix_kernels) fn into_view(self) -> View<'a, T> {
+        // SAFETY: A remainder has the same extent * k storage invariant as a view.
+        unsafe { View::new_inner(self.ptr, self.extent, self.k) }
+    }
+
     /// Return the number of elements in each "band" of `self`.
     fn k(&self) -> Bound {
         self.k

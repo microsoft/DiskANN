@@ -5,6 +5,12 @@
 
 //! Instruction Set Architecture (ISA) selection for the multi-vector factories.
 
+use diskann_wide::arch::Scalar;
+#[cfg(target_arch = "aarch64")]
+use diskann_wide::arch::aarch64::Neon;
+#[cfg(target_arch = "x86_64")]
+use diskann_wide::arch::x86_64::{V3, V4};
+
 /// Instruction Set Architecture (ISA) selector for which multi-vector MaxSim or
 /// TopK kernel to build.
 ///
@@ -114,6 +120,58 @@ macro_rules! dispatch_isa {
 
 pub(super) use dispatch_isa;
 
+/// Checked backend retained by kernels that dispatch once at construction.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum RuntimeArch {
+    Scalar(Scalar),
+    #[cfg(target_arch = "x86_64")]
+    V3(V3),
+    #[cfg(target_arch = "x86_64")]
+    V4(V4),
+    #[cfg(target_arch = "aarch64")]
+    Neon(Neon),
+    Reference,
+}
+
+impl RuntimeArch {
+    pub(crate) fn resolve(isa: MaxSimIsa) -> Result<Self, NotSupported> {
+        let unavailable = || NotSupported {
+            isa,
+            reason: "requested ISA unavailable on this host",
+        };
+        Ok(match isa {
+            MaxSimIsa::Auto => {
+                #[cfg(target_arch = "x86_64")]
+                {
+                    if let Some(arch) = V4::new_checked() {
+                        return Ok(Self::V4(arch));
+                    }
+                    if let Some(arch) = V3::new_checked() {
+                        return Ok(Self::V3(arch));
+                    }
+                }
+                #[cfg(target_arch = "aarch64")]
+                if let Some(arch) = Neon::new_checked() {
+                    return Ok(Self::Neon(arch));
+                }
+                Self::Scalar(Scalar::new())
+            }
+            MaxSimIsa::Scalar => Self::Scalar(Scalar::new()),
+            MaxSimIsa::Reference => Self::Reference,
+            #[cfg(target_arch = "x86_64")]
+            MaxSimIsa::X86_64_V3 => Self::V3(V3::new_checked().ok_or_else(unavailable)?),
+            #[cfg(target_arch = "x86_64")]
+            MaxSimIsa::X86_64_V4 => Self::V4(V4::new_checked().ok_or_else(unavailable)?),
+            #[cfg(not(target_arch = "x86_64"))]
+            MaxSimIsa::X86_64_V3 | MaxSimIsa::X86_64_V4 => return Err(unavailable()),
+            #[cfg(target_arch = "aarch64")]
+            MaxSimIsa::Neon => Self::Neon(Neon::new_checked().ok_or_else(unavailable)?),
+            #[cfg(not(target_arch = "aarch64"))]
+            MaxSimIsa::Neon => return Err(unavailable()),
+        })
+    }
+}
+
 impl std::fmt::Display for MaxSimIsa {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s = match self {
@@ -129,7 +187,7 @@ impl std::fmt::Display for MaxSimIsa {
 }
 
 /// Returned by [`build_max_sim`](super::build_max_sim) or
-/// [`build_top_k`](super::build_top_k) when the requested ISA cannot be produced
+/// [`TopKKernel::new`](super::TopKKernel::new) when the requested ISA cannot be produced
 /// on the current host (e.g. x86_64 V4 requested on a non-AVX512 CPU, or Neon
 /// requested on x86_64).
 #[derive(Debug, Clone, Copy)]

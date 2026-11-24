@@ -3,12 +3,6 @@
  * Licensed under the MIT license.
  */
 
-use diskann_wide::arch::Scalar;
-#[cfg(target_arch = "aarch64")]
-use diskann_wide::arch::aarch64::Neon;
-#[cfg(target_arch = "x86_64")]
-use diskann_wide::arch::x86_64::{V3, V4};
-
 use super::{
     kernel::{MinMaxMaxSim, MinMaxMaxSimKernel},
     prepared,
@@ -18,7 +12,7 @@ use crate::{
     bits::{Representation, Unsigned},
     matrix_kernels::maxsim::packed_minmax_x_unpacked_minmax::max_k,
     minmax::MinMaxMeta,
-    multi_vector::{BuildMaxSimError, MatRef, MaxSimIsa, NotSupported, QueryMatRef},
+    multi_vector::{BuildMaxSimError, MatRef, MaxSimIsa, QueryMatRef, distance::RuntimeArch},
 };
 
 /// Build a kernel that owns a copy of the MinMax query.
@@ -133,57 +127,6 @@ where
     Ok(())
 }
 
-#[derive(Debug, Clone, Copy)]
-enum RuntimeArch {
-    Scalar(Scalar),
-    #[cfg(target_arch = "x86_64")]
-    V3(V3),
-    #[cfg(target_arch = "x86_64")]
-    V4(V4),
-    #[cfg(target_arch = "aarch64")]
-    Neon(Neon),
-    Reference,
-}
-
-impl RuntimeArch {
-    fn resolve(isa: MaxSimIsa) -> Result<Self, NotSupported> {
-        let unavailable = || NotSupported {
-            isa,
-            reason: "requested ISA unavailable on this host",
-        };
-        Ok(match isa {
-            MaxSimIsa::Auto => {
-                #[cfg(target_arch = "x86_64")]
-                {
-                    if let Some(arch) = V4::new_checked() {
-                        return Ok(Self::V4(arch));
-                    }
-                    if let Some(arch) = V3::new_checked() {
-                        return Ok(Self::V3(arch));
-                    }
-                }
-                #[cfg(target_arch = "aarch64")]
-                if let Some(arch) = Neon::new_checked() {
-                    return Ok(Self::Neon(arch));
-                }
-                Self::Scalar(Scalar::new())
-            }
-            MaxSimIsa::Scalar => Self::Scalar(Scalar::new()),
-            MaxSimIsa::Reference => Self::Reference,
-            #[cfg(target_arch = "x86_64")]
-            MaxSimIsa::X86_64_V3 => Self::V3(V3::new_checked().ok_or_else(unavailable)?),
-            #[cfg(target_arch = "x86_64")]
-            MaxSimIsa::X86_64_V4 => Self::V4(V4::new_checked().ok_or_else(unavailable)?),
-            #[cfg(not(target_arch = "x86_64"))]
-            MaxSimIsa::X86_64_V3 | MaxSimIsa::X86_64_V4 => return Err(unavailable()),
-            #[cfg(target_arch = "aarch64")]
-            MaxSimIsa::Neon => Self::Neon(Neon::new_checked().ok_or_else(unavailable)?),
-            #[cfg(not(target_arch = "aarch64"))]
-            MaxSimIsa::Neon => return Err(unavailable()),
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -191,6 +134,10 @@ mod tests {
         minmax::MinMaxCompensation,
         multi_vector::{Defaulted, Mat, MaxSimError},
     };
+    #[cfg(target_arch = "aarch64")]
+    use diskann_wide::arch::aarch64::Neon;
+    #[cfg(target_arch = "x86_64")]
+    use diskann_wide::arch::x86_64::{V3, V4};
 
     fn matrix<const BITS: usize>(rows: usize, dim: usize) -> Mat<MinMaxMeta<BITS>>
     where

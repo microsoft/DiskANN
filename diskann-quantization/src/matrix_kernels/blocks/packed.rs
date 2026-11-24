@@ -352,7 +352,7 @@ mod tests {
             value
         });
 
-        let bt = BlockTransposed::<f32, SZ, PACK>::from_matrix_view(matrix.as_view());
+        let bt = BlockTransposed::<f32, SZ, PACK>::try_from_matrix_view(matrix.as_view()).unwrap();
         let padded = bt.padded_ncols();
 
         let view = View::<f32, SZ, PACK>::from_block_transposed(bt.as_view()).unwrap();

@@ -5,431 +5,245 @@
 
 //! Consume complete dot tiles into sorted nearest sets instead of max reductions.
 
-use crate::matrix_kernels::blocks::unpacked::PanelVisitor;
-use crate::matrix_kernels::{
-    Cache,
-    blocks::{packed, unpacked},
-    driver,
-    maxsim::packed_f32_x_unpacked_f32::{ExtraWide, Params, dot_tile, visit_tiles},
-    num::{Bytes, DimK},
-};
-use diskann_vector::{
-    distance::Metric,
-    topk::{Candidate, insert_sorted},
-};
-use diskann_wide::{Architecture, SIMDFloat, SIMDMask, SIMDVector, arch::Scalar};
+use std::num::NonZeroUsize;
 
-diskann_wide::alias!(f32x4<A> = f32x4);
-diskann_wide::alias!(f32x8<A> = f32x8);
-diskann_wide::alias!(f32x16<A> = f32x16);
+use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
+use diskann_vector::topk::{Candidate, insert_sorted};
+use diskann_wide::{Architecture, SIMDVector};
 
-/// Checked working-set accounting, including nearest sets and L2 norms.
-pub(crate) fn params(
-    cache: Cache,
-    dimensions: usize,
-    width: usize,
-    mr: usize,
-    nr: usize,
-    metric: Metric,
-) -> Option<Params> {
-    let norm = if metric == Metric::L2 {
-        size_of::<f32>()
-    } else {
-        0
-    };
-    let codes = dimensions.checked_mul(size_of::<f32>())?;
-    let row = codes
-        .checked_add(width.checked_mul(size_of::<Candidate>())?)?
-        .checked_add(size_of::<f32>())?
-        .checked_add(norm)?;
-    let a = mr.checked_mul(row)?;
-    let b = codes.checked_add(norm)?;
-    Params::try_new(cache, Bytes::new(a), Bytes::new(b), nr)
+use crate::{
+    matrix_kernels::{
+        Cache,
+        blocks::{packed, unpacked},
+        maxsim::packed_f32_x_unpacked_f32::{ExtraWide, Params, dot_tile, visit_tiles},
+        num::{Bytes, DimK},
+    },
+    multi_vector::BlockTransposedRef,
+};
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Scoring<N> {
+    InnerProduct,
+    L2(N),
 }
 
-/// Output and thresholds span the whole B scan, not an individual tile.
-pub(crate) struct Driver<'a, A, const MR: usize, const NR: usize> {
-    arch: A,
-    a: packed::View<'a, f32, MR>,
-    b: unpacked::View<'a, f32>,
-    c: Rows<'a>,
-    b_norms: &'a [f32],
-    k: DimK,
-    params: Params,
+#[derive(Clone, Copy)]
+pub(crate) struct Norms<'a> {
+    pub a: &'a [f32],
+    pub b: &'a [f32],
 }
 
-impl<'a, A, const MR: usize, const NR: usize> Driver<'a, A, MR, NR> {
-    /// # Safety
-    ///
-    /// Panels have contraction dimension `k`. `c.width` is positive,
-    /// `c.c` has exactly `c.valid * c.width` slots, and `c.valid` occupies
-    /// exactly the A panels. `c.kth` covers the padded A rows. L2 norms in
-    /// `c.a_norms` and `b_norms` cover padded A rows and all B rows.
-    /// B row IDs fit below `u32::MAX`. Blocking was checked by [`params`].
-    pub(crate) unsafe fn new(
-        arch: A,
-        a: packed::View<'a, f32, MR>,
-        b: unpacked::View<'a, f32>,
-        c: Rows<'a>,
-        b_norms: &'a [f32],
-        k: DimK,
-        params: Params,
-    ) -> Self {
-        Self {
-            arch,
-            a,
-            b,
-            c,
-            b_norms,
-            k,
-            params,
+impl Scoring<Norms<'_>> {
+    #[inline]
+    pub(crate) fn distance(self, i: usize, j: usize, dot: f32) -> f32 {
+        match self {
+            Self::InnerProduct => -dot,
+            Self::L2(n) => (n.a[i] + n.b[j]) - 2.0 * dot,
         }
     }
-}
 
-/// The logical C rows touched by one tile, with padded A metadata.
-pub(crate) struct Rows<'a> {
-    c: &'a mut [Candidate],
-    kth: &'a mut [f32],
-    a_norms: &'a [f32],
-    metric: Metric,
-    width: usize,
-    valid: usize,
-}
-
-impl<'a> Rows<'a> {
-    pub(crate) fn new(
-        c: &'a mut [Candidate],
-        kth: &'a mut [f32],
-        a_norms: &'a [f32],
-        metric: Metric,
+    pub(crate) fn params<const MR: usize, const NR: usize>(
+        self,
+        cache: Cache,
+        dim: usize,
         width: usize,
-    ) -> Self {
-        Self {
-            valid: c.len() / width,
-            c,
-            kth,
-            a_norms,
-            metric,
-            width,
-        }
-    }
-
-    /// Borrow from a valid row, retaining padding only in thresholds and norms.
-    #[inline(always)]
-    fn sub_rows(&mut self, first: usize, padded_rows: usize) -> Rows<'_> {
-        let valid = (self.valid - first).min(padded_rows);
-        Rows {
-            c: &mut self.c[first * self.width..(first + valid) * self.width],
-            kth: &mut self.kth[first..first + padded_rows],
-            a_norms: if self.metric == Metric::L2 {
-                &self.a_norms[first..first + padded_rows]
-            } else {
-                &[]
-            },
-            metric: self.metric,
-            width: self.width,
-            valid,
-        }
+    ) -> Option<Params> {
+        let norm = if matches!(self, Self::L2(_)) {
+            size_of::<f32>()
+        } else {
+            0
+        };
+        let codes = dim.checked_mul(size_of::<f32>())?;
+        let row = codes
+            .checked_add(width.checked_mul(size_of::<Candidate>())?)?
+            .checked_add(norm)?;
+        Params::try_new(
+            cache,
+            Bytes::new(MR.checked_mul(row)?),
+            Bytes::new(codes.checked_add(norm)?),
+            NR,
+        )
     }
 }
 
 pub(crate) trait Kernel<const MR: usize>: ExtraWide<MR> + Architecture {
-    fn offer<const K: usize>(self, dots: Self::Wide, rows: &mut Rows<'_>, b_norm: f32, id: u32);
-}
-
-/// Visit selected lanes of one native kernel vector. SIMD representation and
-/// mask traversal remain private to this kernel.
-#[inline(always)]
-fn for_each_eligible<V, const N: usize>(values: V, mut mask: u64, mut offer: impl FnMut(usize, f32))
-where
-    V: SIMDVector<Scalar = f32, ConstLanes = diskann_wide::Const<N>>,
-{
-    assert!(N > 0 && N <= u64::BITS as usize);
-    mask &= u64::MAX >> (u64::BITS as usize - N);
-    if mask == 0 {
-        return;
-    }
-    let mut distances = [0.0; N];
-    // SAFETY: the vector stores exactly the `N` elements of the local array.
-    unsafe { values.store_simd(distances.as_mut_ptr()) };
-    while mask != 0 {
-        let lane = mask.trailing_zeros() as usize;
-        mask &= mask - 1;
-        offer(lane, distances[lane]);
-    }
-}
-
-#[inline(always)]
-#[expect(
-    clippy::expect_used,
-    reason = "fixed widths are selected before the tile scan"
-)]
-fn offer<V, const N: usize, const K: usize>(
-    arch: V::Arch,
-    dot: V,
-    rows: &mut Rows<'_>,
-    b_norm: f32,
-    id: u32,
-) where
-    V: SIMDFloat<Scalar = f32, ConstLanes = diskann_wide::Const<N>>,
-    u64: From<<<V::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
-{
-    assert_eq!(V::LANES, N);
-    // SAFETY: The driver provides padded thresholds covering all native lanes.
-    let thresholds = unsafe { V::load_simd(arch, rows.kth.as_ptr()) };
-    let distances = match rows.metric {
-        Metric::InnerProduct => V::splat(arch, -1.0) * dot,
-        Metric::L2 => {
-            // SAFETY: L2 A norms have the same padded extent as the thresholds.
-            let a_norm = unsafe { V::load_simd(arch, rows.a_norms.as_ptr()) };
-            (a_norm + V::splat(arch, b_norm)) - V::splat(arch, 2.0) * dot
-        }
-        _ => unreachable!("the TopK factory validates the metric"),
-    };
-    let mask = u64::from(distances.lt_simd(thresholds).bitmask().to_underlying())
-        & ((1u64 << rows.valid) - 1);
-    for_each_eligible::<V, N>(distances, mask, |lane, distance| {
-        let nearest = &mut rows.c[lane * rows.width..(lane + 1) * rows.width];
-        let candidate = Candidate::new(id, distance);
-        rows.kth[lane] = if K == 0 {
-            insert_sorted(nearest, candidate)
-        } else {
-            let nearest: &mut [Candidate; K] = nearest.try_into().expect("fixed TopK width");
-            insert_sorted(nearest, candidate)
-        };
-    });
+    fn unpack(column: Self::Wide) -> [f32; MR];
 }
 
 macro_rules! kernel {
-    ($arch:ty, $mr:literal, $lanes:literal, $vector:ty) => {
+    ($arch:ty, $mr:literal) => {
         impl Kernel<$mr> for $arch {
             #[inline(always)]
-            fn offer<const K: usize>(
-                self,
-                dots: Self::Wide,
-                rows: &mut Rows<'_>,
-                b_norm: f32,
-                id: u32,
-            ) {
-                for (group, dot) in dots.into_iter().enumerate() {
-                    let first = group * $lanes;
-                    if first >= rows.valid {
-                        continue;
-                    }
-                    let mut group_rows = rows.sub_rows(first, $lanes);
-                    offer::<$vector, $lanes, K>(self, dot, &mut group_rows, b_norm, id);
-                }
+            fn unpack(column: Self::Wide) -> [f32; $mr] {
+                let groups = column.map(SIMDVector::to_array);
+                std::array::from_fn(|i| groups.as_flattened()[i])
             }
         }
     };
 }
 
-kernel!(Scalar, 8, 4, f32x4<Scalar>);
-
+kernel!(diskann_wide::arch::Scalar, 8);
 #[cfg(target_arch = "x86_64")]
-mod x86_64 {
-    use super::*;
-    use diskann_wide::arch::x86_64::{V3, V4};
-
-    kernel!(V3, 16, 8, f32x8<V3>);
-    kernel!(V4, 32, 16, f32x16<V4>);
-}
-
+kernel!(diskann_wide::arch::x86_64::V3, 16);
+#[cfg(target_arch = "x86_64")]
+kernel!(diskann_wide::arch::x86_64::V4, 32);
 #[cfg(target_arch = "aarch64")]
-mod aarch64 {
-    use super::*;
-    use diskann_wide::arch::aarch64::Neon;
+kernel!(diskann_wide::arch::aarch64::Neon, 8);
 
-    kernel!(Neon, 8, 4, f32x4<Neon>);
-}
-
-struct Visitor<'a, A, const MR: usize, const K: usize> {
+/// The output is a nonempty-width view of the logical rows in this A panel.
+struct Tile<'a, A, const MR: usize> {
     arch: A,
     a: packed::Panel<'a, f32, MR>,
-    rows: Rows<'a>,
-    b_norms: &'a [f32],
-    b_base: usize,
-    k: DimK,
+    output: rowmajor::Mut<'a, Candidate>,
+    width: NonZeroUsize,
+    score: Scoring<Norms<'a>>,
+    first_a: usize,
+    first_b: usize,
+    dim: DimK,
 }
 
-impl<A: Kernel<MR>, const MR: usize, const NR: usize, const K: usize>
-    unpacked::PanelVisitor<f32, NR> for Visitor<'_, A, MR, K>
+impl<A: Kernel<MR>, const MR: usize, const NR: usize> unpacked::PanelVisitor<f32, NR>
+    for &mut Tile<'_, A, MR>
 {
     #[inline(always)]
     fn visit(&mut self, b: unpacked::Panel<'_, f32, NR>, start: usize) {
-        // SAFETY: All panel views come from the validated driver with dimension `k`.
-        let dots = unsafe { dot_tile(self.arch, self.a, b, self.k) };
-        for (column, dot) in dots.into_iter().enumerate() {
-            let id = self.b_base + start + column;
-            let norm = if self.rows.metric == Metric::L2 {
-                self.b_norms[id]
-            } else {
-                0.0
-            };
-            self.arch.offer::<K>(dot, &mut self.rows, norm, id as u32);
+        // SAFETY: compute derives both panels from matrices with the same checked dim.
+        let dots = unsafe { dot_tile(self.arch, self.a, b, self.dim) }.map(A::unpack);
+        let last = self.width.get() - 1;
+        let first_b = self.first_b + start;
+        for (i, row) in self.output.rows_mut().enumerate() {
+            let mut kth = row[last].distance;
+            for (j, col) in dots.iter().enumerate() {
+                let id = first_b + j;
+                let distance = self.score.distance(self.first_a + i, id, col[i]);
+                if distance < kth {
+                    kth = insert_sorted(row, Candidate::new(id as u32, distance));
+                }
+            }
         }
     }
 }
 
-struct Entry<'a, 'b, A, const MR: usize, const NR: usize>(&'a mut Driver<'b, A, MR, NR>);
-
-impl<A: Kernel<MR>, const MR: usize, const NR: usize, const K: usize>
-    unpacked::PanelVisitor<f32, NR> for &mut Visitor<'_, A, MR, K>
-{
-    #[inline(always)]
-    fn visit(&mut self, panel: unpacked::Panel<'_, f32, NR>, start: usize) {
-        (**self).visit(panel, start);
+/// Nonempty scan. Check the logical shapes before erasing dimensions in the panel views.
+#[expect(
+    clippy::expect_used,
+    reason = "nonempty checked matrices and in-bounds panel ranges"
+)]
+pub(crate) fn compute<A: Kernel<MR>, const MR: usize, const NR: usize>(
+    arch: A,
+    a: BlockTransposedRef<'_, f32, MR>,
+    b: rowmajor::Ref<'_, f32>,
+    mut output: rowmajor::Mut<'_, Candidate>,
+    score: Scoring<Norms<'_>>,
+    params: Params,
+) {
+    const { assert!(NR != 0) };
+    assert_eq!(a.ncols(), b.ncols());
+    assert_eq!(a.nrows(), output.nrows());
+    assert_eq!(output.nrows().div_ceil(MR), a.num_blocks());
+    let width = NonZeroUsize::new(output.ncols()).expect("nonempty TopK scan");
+    assert!(b.nrows() <= u32::MAX as usize);
+    if let Scoring::L2(norms) = score {
+        assert_eq!(norms.a.len(), a.nrows(), "one norm per A row");
+        assert_eq!(norms.b.len(), b.nrows(), "one norm per B row");
     }
-}
+    let dim = DimK::new(NonZeroUsize::new(a.ncols()).expect("nonempty dimension"));
+    let a = packed::View::from_block_transposed(a).expect("nonempty query");
+    let b = unpacked::View::from_matrix_view(b).expect("nonempty documents");
 
-impl<A: Kernel<MR>, const MR: usize, const NR: usize> driver::Drive for Driver<'_, A, MR, NR> {
-    fn drive(&mut self) {
-        self.arch.run(Entry(self));
-    }
-}
-
-impl<A: Kernel<MR>, const MR: usize, const NR: usize> diskann_wide::arch::Target<A, ()>
-    for Entry<'_, '_, A, MR, NR>
-{
-    #[inline(always)]
-    fn run(self, _: A) {
-        // K = 0 selects the runtime-width path; other output widths remain supported.
-        match self.0.c.width {
-            1 => self.0.scan::<1>(),
-            2 => self.0.scan::<2>(),
-            3 => self.0.scan::<3>(),
-            8 => self.0.scan::<8>(),
-            10 => self.0.scan::<10>(),
-            _ => self.0.scan::<0>(),
-        }
-    }
-}
-
-impl<A: Kernel<MR>, const MR: usize, const NR: usize> Driver<'_, A, MR, NR> {
-    #[inline(always)]
-    fn scan<const K: usize>(&mut self) {
-        let arch = self.arch;
-        let k = self.k;
-        let rows = &mut self.c;
-        let b_norms = self.b_norms;
-        // SAFETY: The constructor requires matching contraction dimensions.
-        unsafe {
-            visit_tiles(
-                self.a,
-                self.b,
-                self.params,
-                k,
-                #[inline(always)]
-                |a_panel, b_view, a_block, b_base| {
-                    let mut visitor = Visitor::<A, MR, K> {
-                        arch,
-                        a: a_panel,
-                        rows: rows.sub_rows(a_block * MR, MR),
-                        b_norms,
-                        b_base,
-                        k,
-                    };
-                    if let Some(tail) = b_view.visit_panels::<NR>(k, &mut visitor) {
-                        let start = tail.start();
-                        if let Some(panel) = tail.try_as_panel::<1>() {
-                            visitor.visit(panel, start);
+    output.as_mut_slice().fill(Candidate::EMPTY);
+    arch.run(
+        #[inline(always)]
+        || {
+            // SAFETY: dim is the common contraction dimension of a and b. All visited
+            // subviews (including the remainder) preserve it. Only logical rows reach selection.
+            unsafe {
+                visit_tiles(
+                    a,
+                    b,
+                    params,
+                    dim,
+                    #[inline(always)]
+                    |a, b, block, first_b| {
+                        let first_a = block * MR;
+                        let end = (first_a + MR).min(output.nrows());
+                        let mut tile = Tile {
+                            arch,
+                            a,
+                            // A row subview preserves the parent's exact, nonzero width.
+                            output: output.subview_mut(first_a..end).expect("valid A panel"),
+                            width,
+                            score,
+                            first_a,
+                            first_b,
+                            dim,
+                        };
+                        if let Some(tail) = b.visit_panels::<NR>(dim, &mut tile) {
+                            tile.first_b += tail.start();
+                            let complete =
+                                tail.into_view().visit_panels::<1>(dim, &mut tile).is_none();
+                            debug_assert!(complete);
                         }
-                        if NR == 6 {
-                            if let Some(panel) = tail.try_as_panel::<2>() {
-                                visitor.visit(panel, start);
-                            }
-                            if let Some(panel) = tail.try_as_panel::<3>() {
-                                visitor.visit(panel, start);
-                            }
-                            if let Some(panel) = tail.try_as_panel::<4>() {
-                                visitor.visit(panel, start);
-                            }
-                            if let Some(panel) = tail.try_as_panel::<5>() {
-                                visitor.visit(panel, start);
-                            }
-                        }
-                    }
-                },
-            );
-        }
-    }
+                    },
+                );
+            }
+        },
+    );
 }
 
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroUsize;
-
     use super::*;
     use crate::multi_vector::BlockTransposed;
     use diskann_vector::{Norm, norm::FastL2NormSquared};
+    use diskann_wide::arch::Scalar;
 
-    #[cfg(target_arch = "aarch64")]
-    use diskann_wide::arch::aarch64::Neon;
-    #[cfg(target_arch = "x86_64")]
-    use diskann_wide::arch::x86_64::{V3, V4};
-
-    fn check_top_k_blocks<A: Kernel<MR>, const MR: usize, const NR: usize>(arch: A) {
+    fn check_blocks<A: Kernel<MR>, const MR: usize, const NR: usize>(arch: A) {
         let rows = 2 * MR + 1;
-        let dim = 17;
+        let dim = if cfg!(miri) { 2 } else { 17 };
         let count = 19;
-        let q: Vec<_> = (0..rows * dim)
-            .map(|i| 18.0 + (i / dim) as f32 / 32.0)
-            .collect();
-        let d: Vec<_> = (0..count * dim).map(|i| (i / dim) as f32).collect();
-        let q_view = diskann_utils::views::rowmajor::Ref::try_from_data(&q[..], rows, dim).unwrap();
-        let d_view =
-            diskann_utils::views::rowmajor::Ref::try_from_data(&d[..], count, dim).unwrap();
-        let packed = BlockTransposed::<f32, MR>::from_matrix_view(q_view);
-        let mut q_norms: Vec<f32> = q
-            .chunks_exact(dim)
-            .map(|r| FastL2NormSquared.evaluate(r))
-            .collect();
-        q_norms.resize(packed.padded_nrows(), 0.0);
-        let d_norms: Vec<f32> = d
-            .chunks_exact(dim)
-            .map(|r| FastL2NormSquared.evaluate(r))
-            .collect();
-        for metric in [Metric::InnerProduct, Metric::L2] {
-            for width in [1, 2, 3, 4, 8, 10, 21] {
-                for b_block in [1, 5, 6, 7] {
-                    let mut output = vec![Candidate::EMPTY; rows * width];
-                    let mut kth = vec![f32::INFINITY; packed.padded_nrows()];
-                    let k = DimK::new(NonZeroUsize::new(dim).unwrap());
-                    // SAFETY: Views come from checked storage; norms/thresholds are padded,
-                    // output has rows * width slots, and count fits the candidate ID range.
-                    let mut driver = unsafe {
-                        Driver::<A, MR, NR>::new(
-                            arch,
-                            packed::View::from_block_transposed(packed.as_view()).unwrap(),
-                            unpacked::View::from_matrix_view(d_view).unwrap(),
-                            Rows::new(&mut output, &mut kth, &q_norms, metric, width),
-                            &d_norms,
-                            k,
-                            Params {
-                                a_panels_in_l2: NonZeroUsize::new(1).unwrap(),
-                                b_cols_in_l1: NonZeroUsize::new(b_block).unwrap(),
-                            },
-                        )
-                    };
-                    driver::Drive::drive(&mut driver);
-                    for (i, row) in output.chunks_exact(width).enumerate() {
-                        let x = f64::from(q[i * dim]);
+        let q = rowmajor::Owned::from_fn(rows, dim, |pos| 18.0 + pos.row as f32 / 32.0);
+        let d = rowmajor::Owned::from_fn(count, dim, |pos| pos.row as f32);
+        let packed = BlockTransposed::<f32, MR>::try_from_matrix_view(q.as_view()).unwrap();
+        let norms = |row: &[f32]| FastL2NormSquared.evaluate(row);
+        let a: Vec<_> = q.rows().map(norms).collect();
+        let b: Vec<_> = d.rows().map(norms).collect();
+        // Under the interpreter retain a partial A panel, B remainders and multiple B blocks.
+        let (widths, blocks): (&[usize], &[usize]) = if cfg!(miri) {
+            (&[3], &[7])
+        } else {
+            (&[1, 2, 3, 4, 8, 10, 21], &[1, 5, 6, 7])
+        };
+        for score in [Scoring::InnerProduct, Scoring::L2(Norms { a: &a, b: &b })] {
+            for &width in widths {
+                for &b_block in blocks {
+                    let mut out = rowmajor::Owned::from_element(rows, width, Candidate::EMPTY);
+                    compute::<_, MR, NR>(
+                        arch,
+                        packed.as_view(),
+                        d.as_view(),
+                        out.as_view_mut(),
+                        score,
+                        Params {
+                            a_panels_in_l2: NonZeroUsize::new(1).unwrap(),
+                            b_cols_in_l1: NonZeroUsize::new(b_block).unwrap(),
+                        },
+                    );
+                    for (i, row) in out.rows().enumerate() {
+                        let x = f64::from(q.row(i)[0]);
                         let mut expected: Vec<_> = (0..count)
-                            .map(|id| {
-                                let y = id as f64;
-                                let distance = if metric == Metric::L2 {
-                                    dim as f64 * (x - y).powi(2)
-                                } else {
-                                    -(dim as f64 * x * y)
+                            .map(|j| {
+                                let y = j as f64;
+                                let dist = match score {
+                                    Scoring::InnerProduct => -(dim as f64 * x * y),
+                                    Scoring::L2(_) => dim as f64 * (x - y).powi(2),
                                 };
-                                Candidate::new(id as u32, distance as f32)
+                                Candidate::new(j as u32, dist as f32)
                             })
                             .collect();
                         expected.sort_by(|a, b| a.distance.total_cmp(&b.distance));
-                        expected.truncate(width);
                         expected.resize(width, Candidate::EMPTY);
-                        assert_eq!(row, expected, "row={i}, k={width}, B block={b_block}");
+                        assert_eq!(row, expected);
                     }
                 }
             }
@@ -438,28 +252,56 @@ mod tests {
 
     #[test]
     fn top_k_accumulates_across_cache_blocks_with_global_ids() {
-        check_top_k_blocks::<_, 8, 2>(Scalar::new());
+        check_blocks::<_, 8, 2>(Scalar::new());
+        // A non-production width exercises multi-column remainders independently of ISA.
+        check_blocks::<_, 8, 4>(Scalar::new());
         #[cfg(target_arch = "x86_64")]
         {
-            if let Some(arch) = V3::new_checked() {
-                check_top_k_blocks::<_, 16, 6>(arch);
+            if let Some(arch) = diskann_wide::arch::x86_64::V3::new_checked() {
+                check_blocks::<_, 16, 6>(arch);
             }
-            if let Some(arch) = V4::new_checked() {
-                check_top_k_blocks::<_, 32, 6>(arch);
+            if let Some(arch) = diskann_wide::arch::x86_64::V4::new_checked() {
+                check_blocks::<_, 32, 6>(arch);
             }
         }
         #[cfg(target_arch = "aarch64")]
-        if let Some(arch) = Neon::new_checked() {
-            check_top_k_blocks::<_, 8, 6>(arch);
+        if let Some(arch) = diskann_wide::arch::aarch64::Neon::new_checked() {
+            check_blocks::<_, 8, 6>(arch);
         }
+    }
+
+    #[test]
+    #[should_panic(expected = "one norm per A row")]
+    fn top_k_rejects_missing_norm_for_partial_panel() {
+        let a = BlockTransposed::<f32, 8>::try_new(9, 1).unwrap();
+        let b = rowmajor::Ref::column_vector(&[1.0f32]);
+        let mut output = rowmajor::Owned::from_element(9, 2, Candidate::EMPTY);
+        let score = Scoring::L2(Norms {
+            a: &[0.0; 8],
+            b: &[1.0],
+        });
+        let params = score.params::<8, 2>(Cache::detect(), 1, 2).unwrap();
+        compute::<_, 8, 2>(
+            Scalar::new(),
+            a.as_view(),
+            b,
+            output.as_view_mut(),
+            score,
+            params,
+        );
     }
 
     #[test]
     fn top_k_working_set_arithmetic_is_checked() {
         let cache = Cache::detect();
-        assert!(params(cache, 17, 10, 32, 6, Metric::L2).is_some());
-        assert!(params(cache, usize::MAX, 1, 32, 6, Metric::L2).is_none());
-        assert!(params(cache, 1, usize::MAX, 32, 6, Metric::InnerProduct).is_none());
-        assert!(params(cache, isize::MAX as usize / 4, 1, 32, 6, Metric::L2).is_none());
+        let score = Scoring::InnerProduct;
+        assert!(score.params::<32, 6>(cache, 17, 10).is_some());
+        assert!(score.params::<1, 1>(cache, usize::MAX, 1).is_none());
+        assert!(score.params::<1, 1>(cache, 1, usize::MAX).is_none());
+        assert!(
+            score
+                .params::<1, 1>(cache, isize::MAX as usize / 4, 1)
+                .is_none()
+        );
     }
 }

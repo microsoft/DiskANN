@@ -1152,7 +1152,7 @@ mod tests {
                 maxsim::test::generate_f32(total_a_rows, k.value().get(), total_b_cols, rng);
 
             // Massage the input data in the form needed by the kernel.
-            let a_bt = BlockTransposed::<f32, MR>::from_matrix_view(ref_a.as_view());
+            let a_bt = BlockTransposed::<f32, MR>::try_from_matrix_view(ref_a.as_view()).unwrap();
             let b = ref_b.transpose();
 
             let mut c = vec![f32::NAN; a_bt.nrows()];
