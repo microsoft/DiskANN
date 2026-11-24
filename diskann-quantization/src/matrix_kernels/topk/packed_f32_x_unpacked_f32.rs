@@ -4,12 +4,17 @@
  */
 
 //! Consume complete dot tiles into sorted nearest sets instead of max reductions.
+//! Contiguous cutoffs permit SIMD rejection without reading strided candidate rows.
 
 use std::num::NonZeroUsize;
 
 use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
 use diskann_vector::topk::{Candidate, insert_sorted};
-use diskann_wide::{Architecture, SIMDVector};
+use diskann_wide::{Architecture, SIMDFloat, SIMDMask, arch::Scalar};
+
+diskann_wide::alias!(f32x4<A> = f32x4);
+diskann_wide::alias!(f32x8<A> = f32x8);
+diskann_wide::alias!(f32x16<A> = f32x16);
 
 use crate::{
     matrix_kernels::{
@@ -56,6 +61,7 @@ impl Scoring<Norms<'_>> {
         let codes = dim.checked_mul(size_of::<f32>())?;
         let row = codes
             .checked_add(width.checked_mul(size_of::<Candidate>())?)?
+            .checked_add(size_of::<f32>())?
             .checked_add(norm)?;
         Params::try_new(
             cache,
@@ -67,37 +73,159 @@ impl Scoring<Norms<'_>> {
 }
 
 pub(crate) trait Kernel<const MR: usize>: ExtraWide<MR> + Architecture {
-    fn unpack(column: Self::Wide) -> [f32; MR];
+    fn offer(
+        self,
+        column: Self::Wide,
+        rows: &mut SelectionRows<'_>,
+        score: Scoring<(&[f32], f32)>,
+        id: u32,
+    );
+}
+
+/// Candidate rows and their contiguous cutoffs are initialized and updated together.
+/// Subviews retain a whole number of nonempty rows and padding only in cutoffs.
+/// Each logical cutoff equals its candidate row's last distance; padded cutoffs stay infinite.
+pub(crate) struct SelectionRows<'a> {
+    candidates: &'a mut [Candidate],
+    cutoffs: &'a mut [f32],
+    width: NonZeroUsize,
+    valid: usize,
+}
+
+impl<'a> SelectionRows<'a> {
+    #[expect(
+        clippy::expect_used,
+        reason = "a nonempty TopK scan has positive width"
+    )]
+    fn new(mut output: rowmajor::Mut<'a, Candidate>, cutoffs: &'a mut [f32]) -> Self {
+        let width = NonZeroUsize::new(output.ncols()).expect("nonempty TopK scan");
+        let valid = output.nrows();
+        assert!(cutoffs.len() >= valid, "cutoffs cover all logical rows");
+        output.as_mut_slice().fill(Candidate::EMPTY);
+        cutoffs.fill(f32::INFINITY);
+        Self {
+            candidates: output.into_mut_slice(),
+            cutoffs,
+            width,
+            valid,
+        }
+    }
+
+    #[inline(always)]
+    fn sub_rows(&mut self, first: usize, padded_rows: usize) -> SelectionRows<'_> {
+        let valid = (self.valid - first).min(padded_rows);
+        let width = self.width.get();
+        SelectionRows {
+            candidates: &mut self.candidates[first * width..(first + valid) * width],
+            cutoffs: &mut self.cutoffs[first..first + padded_rows],
+            width: self.width,
+            valid,
+        }
+    }
+
+    #[inline(always)]
+    fn insert(&mut self, lane: usize, candidate: Candidate) {
+        let width = self.width.get();
+        let row = &mut self.candidates[lane * width..(lane + 1) * width];
+        self.cutoffs[lane] = insert_sorted(row, candidate);
+    }
+}
+
+#[inline(always)]
+fn offer<V, const N: usize>(
+    arch: V::Arch,
+    dot: V,
+    rows: &mut SelectionRows<'_>,
+    score: Scoring<(&[f32], f32)>,
+    id: u32,
+) where
+    V: SIMDFloat<Scalar = f32, ConstLanes = diskann_wide::Const<N>>,
+    diskann_wide::Const<N>: diskann_wide::SupportedLaneCount,
+    u64: From<<<V::Mask as SIMDMask>::BitMask as SIMDMask>::Underlying>,
+{
+    const { assert!(N > 0 && N <= u64::BITS as usize) };
+    assert_eq!(rows.cutoffs.len(), N);
+    // SAFETY: sub_rows provides exactly N initialized cutoffs, including padded lanes.
+    let thresholds = unsafe { V::load_simd(arch, rows.cutoffs.as_ptr()) };
+    let distances = match score {
+        Scoring::InnerProduct => V::splat(arch, -1.0) * dot,
+        Scoring::L2((norms, b)) => {
+            assert_eq!(norms.len(), N);
+            // SAFETY: the checked norm slice covers all N lanes, including padding.
+            let a = unsafe { V::load_simd(arch, norms.as_ptr()) };
+            (a + V::splat(arch, b)) - V::splat(arch, 2.0) * dot
+        }
+    };
+    let mut mask = u64::from(distances.lt_simd(thresholds).bitmask().to_underlying())
+        & (u64::MAX >> (u64::BITS as usize - rows.valid));
+    if mask == 0 {
+        return;
+    }
+    let distances = distances.to_array();
+    while mask != 0 {
+        let lane = mask.trailing_zeros() as usize;
+        mask &= mask - 1;
+        rows.insert(lane, Candidate::new(id, distances[lane]));
+    }
 }
 
 macro_rules! kernel {
-    ($arch:ty, $mr:literal) => {
+    ($arch:ty, $mr:literal, $lanes:literal, $vector:ty) => {
         impl Kernel<$mr> for $arch {
             #[inline(always)]
-            fn unpack(column: Self::Wide) -> [f32; $mr] {
-                let groups = column.map(SIMDVector::to_array);
-                std::array::from_fn(|i| groups.as_flattened()[i])
+            fn offer(
+                self,
+                column: Self::Wide,
+                rows: &mut SelectionRows<'_>,
+                score: Scoring<(&[f32], f32)>,
+                id: u32,
+            ) {
+                for (group, dot) in column.into_iter().enumerate() {
+                    let first = group * $lanes;
+                    if first >= rows.valid {
+                        break;
+                    }
+                    let mut group_rows = rows.sub_rows(first, $lanes);
+                    let score = match score {
+                        Scoring::InnerProduct => Scoring::InnerProduct,
+                        Scoring::L2((a, b)) => Scoring::L2((&a[first..first + $lanes], b)),
+                    };
+                    offer::<$vector, $lanes>(self, dot, &mut group_rows, score, id);
+                }
             }
         }
     };
 }
 
-kernel!(diskann_wide::arch::Scalar, 8);
+kernel!(Scalar, 8, 4, f32x4<Scalar>);
 #[cfg(target_arch = "x86_64")]
-kernel!(diskann_wide::arch::x86_64::V3, 16);
+kernel!(
+    diskann_wide::arch::x86_64::V3,
+    16,
+    8,
+    f32x8<diskann_wide::arch::x86_64::V3>
+);
 #[cfg(target_arch = "x86_64")]
-kernel!(diskann_wide::arch::x86_64::V4, 32);
+kernel!(
+    diskann_wide::arch::x86_64::V4,
+    32,
+    16,
+    f32x16<diskann_wide::arch::x86_64::V4>
+);
 #[cfg(target_arch = "aarch64")]
-kernel!(diskann_wide::arch::aarch64::Neon, 8);
+kernel!(
+    diskann_wide::arch::aarch64::Neon,
+    8,
+    4,
+    f32x4<diskann_wide::arch::aarch64::Neon>
+);
 
 /// The output is a nonempty-width view of the logical rows in this A panel.
 struct Tile<'a, A, const MR: usize> {
     arch: A,
     a: packed::Panel<'a, f32, MR>,
-    output: rowmajor::Mut<'a, Candidate>,
-    width: NonZeroUsize,
+    selection: SelectionRows<'a>,
     score: Scoring<Norms<'a>>,
-    first_a: usize,
     first_b: usize,
     dim: DimK,
 }
@@ -108,18 +236,16 @@ impl<A: Kernel<MR>, const MR: usize, const NR: usize> unpacked::PanelVisitor<f32
     #[inline(always)]
     fn visit(&mut self, b: unpacked::Panel<'_, f32, NR>, start: usize) {
         // SAFETY: compute derives both panels from matrices with the same checked dim.
-        let dots = unsafe { dot_tile(self.arch, self.a, b, self.dim) }.map(A::unpack);
-        let last = self.width.get() - 1;
+        let dots = unsafe { dot_tile(self.arch, self.a, b, self.dim) };
         let first_b = self.first_b + start;
-        for (i, row) in self.output.rows_mut().enumerate() {
-            let mut kth = row[last].distance;
-            for (j, col) in dots.iter().enumerate() {
-                let id = first_b + j;
-                let distance = self.score.distance(self.first_a + i, id, col[i]);
-                if distance < kth {
-                    kth = insert_sorted(row, Candidate::new(id as u32, distance));
-                }
-            }
+        for (j, column) in dots.into_iter().enumerate() {
+            let id = first_b + j;
+            let score = match self.score {
+                Scoring::InnerProduct => Scoring::InnerProduct,
+                Scoring::L2(norms) => Scoring::L2((norms.a, norms.b[id])),
+            };
+            self.arch
+                .offer(column, &mut self.selection, score, id as u32);
         }
     }
 }
@@ -133,7 +259,7 @@ pub(crate) fn compute<A: Kernel<MR>, const MR: usize, const NR: usize>(
     arch: A,
     a: BlockTransposedRef<'_, f32, MR>,
     b: rowmajor::Ref<'_, f32>,
-    mut output: rowmajor::Mut<'_, Candidate>,
+    output: rowmajor::Mut<'_, Candidate>,
     score: Scoring<Norms<'_>>,
     params: Params,
 ) {
@@ -141,17 +267,32 @@ pub(crate) fn compute<A: Kernel<MR>, const MR: usize, const NR: usize>(
     assert_eq!(a.ncols(), b.ncols());
     assert_eq!(a.nrows(), output.nrows());
     assert_eq!(output.nrows().div_ceil(MR), a.num_blocks());
-    let width = NonZeroUsize::new(output.ncols()).expect("nonempty TopK scan");
     assert!(b.nrows() <= u32::MAX as usize);
     if let Scoring::L2(norms) = score {
         assert_eq!(norms.a.len(), a.nrows(), "one norm per A row");
         assert_eq!(norms.b.len(), b.nrows(), "one norm per B row");
     }
     let dim = DimK::new(NonZeroUsize::new(a.ncols()).expect("nonempty dimension"));
+    let padded_norms;
+    let score = match score {
+        Scoring::L2(norms) if norms.a.len() != a.padded_nrows() => {
+            padded_norms = {
+                let mut padded = norms.a.to_vec();
+                padded.resize(a.padded_nrows(), 0.0);
+                padded
+            };
+            Scoring::L2(Norms {
+                a: &padded_norms,
+                b: norms.b,
+            })
+        }
+        _ => score,
+    };
+    let mut cutoffs = vec![0.0; a.padded_nrows()];
+    let mut selection = SelectionRows::new(output, &mut cutoffs);
     let a = packed::View::from_block_transposed(a).expect("nonempty query");
     let b = unpacked::View::from_matrix_view(b).expect("nonempty documents");
 
-    output.as_mut_slice().fill(Candidate::EMPTY);
     arch.run(
         #[inline(always)]
         || {
@@ -166,15 +307,18 @@ pub(crate) fn compute<A: Kernel<MR>, const MR: usize, const NR: usize>(
                     #[inline(always)]
                     |a, b, block, first_b| {
                         let first_a = block * MR;
-                        let end = (first_a + MR).min(output.nrows());
+                        let score = match score {
+                            Scoring::InnerProduct => Scoring::InnerProduct,
+                            Scoring::L2(norms) => Scoring::L2(Norms {
+                                a: &norms.a[first_a..first_a + MR],
+                                b: norms.b,
+                            }),
+                        };
                         let mut tile = Tile {
                             arch,
                             a,
-                            // A row subview preserves the parent's exact, nonzero width.
-                            output: output.subview_mut(first_a..end).expect("valid A panel"),
-                            width,
+                            selection: selection.sub_rows(first_a, MR),
                             score,
-                            first_a,
                             first_b,
                             dim,
                         };
@@ -197,6 +341,35 @@ mod tests {
     use crate::multi_vector::BlockTransposed;
     use diskann_vector::{Norm, norm::FastL2NormSquared};
     use diskann_wide::arch::Scalar;
+
+    #[test]
+    fn selection_subviews_keep_cutoffs_in_sync_and_ignore_padding() {
+        let mut output = rowmajor::Owned::from_element(5, 2, Candidate::new(99, -10.0));
+        let mut cutoffs = [0.0; 8];
+        {
+            let mut rows = SelectionRows::new(output.as_view_mut(), &mut cutoffs);
+            {
+                let mut tail = rows.sub_rows(4, 4);
+                tail.insert(0, Candidate::new(1, 3.0));
+                tail.insert(0, Candidate::new(2, 1.0));
+                tail.insert(0, Candidate::new(3, 2.0));
+                assert_eq!(
+                    tail.cutoffs,
+                    &[2.0, f32::INFINITY, f32::INFINITY, f32::INFINITY]
+                );
+                assert_eq!(
+                    tail.candidates,
+                    &[Candidate::new(2, 1.0), Candidate::new(3, 2.0)]
+                );
+            }
+            assert!(rows.candidates[..8].iter().all(|c| *c == Candidate::EMPTY));
+            let mut first = rows.sub_rows(0, 4);
+            first.insert(1, Candidate::new(4, -1.0));
+            assert_eq!(first.cutoffs[1], f32::INFINITY);
+        }
+        assert_eq!(cutoffs[4], 2.0);
+        assert!(cutoffs[..4].iter().all(|&x| x == f32::INFINITY));
+    }
 
     fn check_blocks<A: Kernel<MR>, const MR: usize, const NR: usize>(arch: A) {
         let rows = 2 * MR + 1;
