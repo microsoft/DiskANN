@@ -13,22 +13,6 @@ use diskann_wide::{SIMDMask, SIMDPartialOrd, SIMDVector};
 
 use super::Neighbor;
 
-/// Strategy for finding the first queue entry at or above a candidate's distance.
-#[derive(Debug, Clone, Copy, Default)]
-pub enum LowerBoundMethod {
-    /// SIMD scan on x86-64, scalar scan on other architectures.
-    #[default]
-    Linear,
-    /// Binary search over the current queue contents.
-    Binary,
-    /// Scan below the configured queue size; use binary search at or above it.
-    Hybrid {
-        /// Compare against the current size, not capacity or search L.
-        /// Zero selects binary search for every lookup.
-        binary_search_threshold: usize,
-    },
-}
-
 /// Shared trait for the generic `I` parameter used by `NeighborQueue`.
 pub trait NeighborPriorityQueueIdType: Eq + Clone + Copy + Debug + Display + Send + Sync {}
 
@@ -115,8 +99,6 @@ pub struct NeighborPriorityQueue<I: NeighborPriorityQueueIdType> {
 
     // Search parameter L: search stops once we have explored the L best candidates.
     search_param_l: usize,
-
-    lower_bound_method: LowerBoundMethod,
 }
 
 impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
@@ -132,7 +114,6 @@ impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
             distances: Vec::with_capacity(search_param_l),
             auto_resizable: false,
             search_param_l,
-            lower_bound_method: LowerBoundMethod::Linear,
         }
     }
 
@@ -146,17 +127,7 @@ impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
             distances: Vec::with_capacity(search_param_l),
             auto_resizable: true,
             search_param_l,
-            lower_bound_method: LowerBoundMethod::Linear,
         }
-    }
-
-    /// Select insertion-point lookup for individual inserts and batch prefix lookup.
-    ///
-    /// Both constructors default to [`LowerBoundMethod::Linear`]. This does not change
-    /// tie ordering or the batch top-L partition.
-    pub fn with_lower_bound_method(mut self, lower_bound_method: LowerBoundMethod) -> Self {
-        self.lower_bound_method = lower_bound_method;
-        self
     }
 
     /// Inserts item with order.
@@ -250,16 +221,14 @@ impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
             return;
         }
 
-        // Later equal-distance candidates must precede earlier ones.
-        neighbors.reverse();
-        neighbors.sort_by(super::ord::fast_distance);
+        neighbors.sort_by(super::ord::reverse(super::ord::fast_distance));
 
         self.merge_sorted(neighbors);
         neighbors.clear();
     }
 
-    /// Merge a nonempty, NaN-free batch sorted by ascending distance.
-    /// Candidates precede old entries on ties; ties within the batch keep its order.
+    /// Merge a nonempty, NaN-free batch sorted by descending distance.
+    /// Candidates precede old entries on ties; ties within the batch reverse its order.
     fn merge_sorted(&mut self, neighbors: &[Neighbor<I>]) {
         let merged_size = self.capacity.min(self.size + neighbors.len());
         let mut old_end = self.count_old_in_top_l(neighbors, merged_size);
@@ -270,15 +239,21 @@ impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
             .resize(merged_size, (neighbors[0].id, false));
         self.distances.resize(merged_size, 0.0);
 
-        for (new_index, neighbor) in neighbors[..new_count].iter().enumerate().rev() {
-            let run_end = old_end;
-            old_end = Self::lower_bound_from_end(&self.distances[..run_end], neighbor.distance);
+        let mut pending = neighbors[neighbors.len() - new_count..].iter();
+        while let Some(neighbor) = pending.next() {
+            let old_before = self.distances[..old_end].partition_point(|&d| d < neighbor.distance);
 
-            // The unread old entries and earlier candidates go before this one.
-            let write = old_end + new_index;
-            self.move_old_entries(old_end..run_end, write + 1);
+            // The remaining candidates precede this one in the output.
+            let write = old_before + pending.len();
+            if old_before < old_end {
+                let source = old_before..old_end;
+                let destination = write + 1;
+                self.distances.copy_within(source.clone(), destination);
+                self.id_visiteds.copy_within(source, destination);
+            }
             self.id_visiteds[write] = (neighbor.id, false);
             self.distances[write] = neighbor.distance;
+            old_end = old_before;
         }
 
         self.size = merged_size;
@@ -289,45 +264,15 @@ impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
         }
     }
 
-    /// Find the first distance at least as large as `target` in a sorted, NaN-free slice.
-    fn lower_bound_from_end(distances: &[f32], target: f32) -> usize {
-        let Some(&last) = distances.last() else {
-            return 0;
-        };
-        if last < target {
-            return distances.len();
-        }
-
-        // `upper` is at or after the lower bound. Double each step toward the front.
-        let mut upper = distances.len() - 1;
-        let mut step = 1;
-        while upper > 0 {
-            let probe = upper.saturating_sub(step);
-            if distances[probe] < target {
-                let start = probe + 1;
-                return start + distances[start..upper].partition_point(|&d| d < target);
-            }
-            upper = probe;
-            step *= 2;
-        }
-        0
-    }
-
-    fn move_old_entries(&mut self, source: std::ops::Range<usize>, destination: usize) {
-        if !source.is_empty() {
-            self.distances.copy_within(source.clone(), destination);
-            self.id_visiteds.copy_within(source, destination);
-        }
-    }
-
     fn count_old_in_top_l(&self, neighbors: &[Neighbor<I>], merged_size: usize) -> usize {
         let mut min_old = merged_size.saturating_sub(neighbors.len());
         let mut max_old = self.size.min(merged_size);
         while min_old < max_old {
             let old_count = min_old + (max_old - min_old) / 2;
             let new_count = merged_size - old_count;
-            // Take the next old entry only if it precedes the last selected new entry.
-            if self.distances[old_count] < neighbors[new_count - 1].distance {
+            let worst_kept_new = neighbors[neighbors.len() - new_count].distance;
+            // On ties, keep the new entry.
+            if self.distances[old_count] < worst_kept_new {
                 min_old = old_count + 1;
             } else {
                 max_old = old_count;
@@ -392,32 +337,8 @@ impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
     /// Get the lower bound of the neighbor - the index of the first neighbor
     /// that has a distance greater than or equal to the target neighbor
     /// PERFORMANCE: This function is performance critical - please benchmark any changes
-    fn get_lower_bound(&mut self, nbr: &Neighbor<I>) -> usize {
-        match self.lower_bound_method {
-            LowerBoundMethod::Linear => self.get_lower_bound_linear(nbr),
-            LowerBoundMethod::Binary => self.get_lower_bound_binary(nbr),
-            LowerBoundMethod::Hybrid {
-                binary_search_threshold,
-            } => {
-                if self.size < binary_search_threshold {
-                    self.get_lower_bound_linear(nbr)
-                } else {
-                    self.get_lower_bound_binary(nbr)
-                }
-            }
-        }
-    }
-
-    fn get_lower_bound_binary(&self, nbr: &Neighbor<I>) -> usize {
-        if nbr.distance.is_nan() {
-            return self.size;
-        }
-        self.distances
-            .partition_point(|distance| *distance < nbr.distance)
-    }
-
     #[cfg(target_arch = "x86_64")]
-    fn get_lower_bound_linear(&mut self, nbr: &Neighbor<I>) -> usize {
+    fn get_lower_bound(&mut self, nbr: &Neighbor<I>) -> usize {
         diskann_wide::alias!(f32s = f32x8);
         let target = f32s::splat(diskann_wide::ARCH, nbr.distance);
 
@@ -470,8 +391,11 @@ impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
         self.size
     }
 
+    /// Get the lower bound of the neighbor - the index of the first neighbor
+    /// that has a distance greater than or equal to the target neighbor
+    /// PERFORMANCE: This function is performance critical - please benchmark any changes
     #[cfg(not(target_arch = "x86_64"))]
-    fn get_lower_bound_linear(&mut self, nbr: &Neighbor<I>) -> usize {
+    fn get_lower_bound(&mut self, nbr: &Neighbor<I>) -> usize {
         let target = nbr.distance;
 
         for (i, d) in self.distances.iter().take(self.size).enumerate() {
@@ -830,48 +754,13 @@ mod neighbor_priority_queue_test {
     }
 
     #[test]
-    fn lower_bound_methods_match_linear() {
-        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
-        for size in [0, 1, 7, 8, 15, 16, 17, 65] {
-            let mut queue = NeighborPriorityQueue::new(128);
-            for id in 0..size {
-                queue.insert(Neighbor::new(id, rng.random_range(-8..=8) as f32));
-            }
-            let targets: Vec<_> = (0..32)
-                .map(|_| rng.random_range(-20..=20) as f32 / 2.0)
-                .chain(queue.distances.iter().copied())
-                .chain([f32::NEG_INFINITY, -0.0, 0.0, f32::INFINITY, f32::NAN])
-                .collect();
-            for method in [
-                LowerBoundMethod::Binary,
-                LowerBoundMethod::Hybrid {
-                    binary_search_threshold: 16,
-                },
-                LowerBoundMethod::Hybrid {
-                    binary_search_threshold: 0,
-                },
-            ] {
-                queue = queue.with_lower_bound_method(method);
-                for &target in &targets {
-                    let neighbor = Neighbor::new(0, target);
-                    let expected = queue.get_lower_bound_linear(&neighbor);
-                    assert_eq!(
-                        queue.get_lower_bound(&neighbor),
-                        expected,
-                        "{method:?}, size={size}, target={target}",
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
     fn batch_insert_matches_sequential_insertion() {
         let cases: &[(usize, usize, usize, &[f32])] = &[
             (16, 0, 0, &[2.0, 1.0]),
             (16, 7, 3, &[4.5, 1.5, 8.0]),
             (4, 4, 2, &[3.5, -1.0, 1.5, 8.0, 2.5]),
             (4, 4, 1, &[0.0, -0.0, 1.0, 1.0]),
+            (4, 4, 1, &[1.0, 0.0, 1.0, 1.0, 0.0, 1.0]),
             (16, 16, 16, &[f32::NAN, 7.5]),
             (
                 16,
