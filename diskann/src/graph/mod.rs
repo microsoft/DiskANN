@@ -4,6 +4,7 @@
  */
 
 pub mod algorithms;
+pub mod compat;
 
 pub mod search_output_buffer;
 pub use search_output_buffer::{

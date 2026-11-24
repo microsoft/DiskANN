@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use std::{fmt::Debug, future::Future};
+use std::{borrow::BorrowMut, fmt::Debug, future::Future, marker::PhantomData};
 
 use diskann::default_post_processor;
 use diskann::{
@@ -11,14 +11,15 @@ use diskann::{
     error::IntoANNResult,
     graph::{
         AdjacencyList, SearchOutputBuffer,
-        glue::{
-            self, DefaultPostProcessor, InplaceDeleteStrategy, InsertStrategy, PruneStrategy,
-            SearchStrategy,
+        compat::{
+            DefaultContext, ExecutionContext, InplaceDeleteStrategy, InsertStrategy,
+            MultiInsertStrategy, PruneStrategy, SearchStrategy,
         },
+        glue::{self, DefaultPostProcessor},
         workingset,
     },
     neighbor::{self, Neighbor},
-    provider::{DefaultContext, ExecutionContext, HasId},
+    provider::HasId,
     utils::{IntoUsize, VectorRepr},
 };
 
@@ -149,7 +150,7 @@ where
         Ok((self, &self.distance))
     }
 
-    fn neighbors(&mut self) -> Self::Neighbors<'_> {
+    fn neighbors(&mut self) -> impl BorrowMut<Self::Neighbors<'_>> + Send {
         self.neighbors
     }
 }
@@ -345,25 +346,28 @@ pub trait GetFullPrecision {
     fn as_full_precision(&self) -> &FastMemoryVectorProviderAsync<Self::Repr>;
 }
 
+pub trait GetQuery<T> {
+    fn get_query(&self) -> &[T];
+}
+
 /// A [`glue::SearchPostProcess`] implementation that:
 ///
 /// 1. Filters out deleted ids from being returned.
 /// 2. Reranks a candidate stream using full-precision distances.
 /// 3. Copies back the results to the output buffer.
 #[derive(Debug, Default, Clone, Copy)]
-pub struct Rerank;
+pub struct Rerank<T>(PhantomData<T>);
 
-impl<'a, A, T> glue::SearchPostProcess<A, &'a [T]> for Rerank
+impl<A, T> glue::SearchPostProcess<A> for Rerank<T>
 where
     T: VectorRepr,
-    A: HasId<Id = u32> + GetFullPrecision<Repr = T> + AsDeletionCheck,
+    A: HasId<Id = u32> + GetQuery<T> + GetFullPrecision<Repr = T> + AsDeletionCheck,
 {
     type Error = Panics;
 
     fn post_process<I, B>(
         &self,
         accessor: &mut A,
-        query: &'a [T],
         candidates: I,
         output: &mut B,
     ) -> impl Future<Output = Result<usize, Self::Error>> + Send
@@ -373,6 +377,7 @@ where
     {
         let full = accessor.as_full_precision();
         let checker = accessor.as_deletion_check();
+        let query = accessor.get_query();
         let f = full.distance();
 
         // Filter before computing the full precision distances.
@@ -414,16 +419,15 @@ impl DeterminantDiversity {
     }
 }
 
-impl<'a, A> glue::SearchPostProcess<A, &'a [f32], A::Id> for DeterminantDiversity
+impl<A> glue::SearchPostProcess<A, A::Id> for DeterminantDiversity
 where
-    A: HasId<Id = u32> + GetFullPrecision<Repr = f32> + Send + Sync,
+    A: HasId<Id = u32> + GetQuery<f32> + GetFullPrecision<Repr = f32> + Send + Sync,
 {
     type Error = ANNError;
 
     fn post_process<I, B>(
         &self,
         accessor: &mut A,
-        query: &'a [f32],
         candidates: I,
         output: &mut B,
     ) -> impl Future<Output = Result<usize, Self::Error>> + Send
@@ -431,6 +435,7 @@ where
         I: Iterator<Item = Neighbor<A::Id>> + Send,
         B: SearchOutputBuffer<A::Id> + Send + ?Sized,
     {
+        let query = accessor.get_query();
         let candidates: Vec<Neighbor<A::Id>> = candidates.collect();
         let candidate_count = candidates.len();
         let store: &FullPrecisionStore<f32> = accessor.as_full_precision();
@@ -496,8 +501,7 @@ where
     }
 }
 
-impl<'a, T, Q, D, Ctx> DefaultPostProcessor<'a, FullPrecisionProvider<T, Q, D, Ctx>, &'a [T]>
-    for FullPrecision
+impl<T, Q, D, Ctx> DefaultPostProcessor<u32> for FullAccessor<'_, T, Q, D, Ctx>
 where
     T: VectorRepr,
     Q: AsyncFriendly,
@@ -560,8 +564,7 @@ where
     }
 }
 
-impl<T, Q, D, Ctx, B> glue::MultiInsertStrategy<FullPrecisionProvider<T, Q, D, Ctx>, B>
-    for FullPrecision
+impl<T, Q, D, Ctx, B> MultiInsertStrategy<FullPrecisionProvider<T, Q, D, Ctx>, B> for FullPrecision
 where
     T: VectorRepr,
     Q: AsyncFriendly,

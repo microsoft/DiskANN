@@ -39,7 +39,11 @@ pub trait Access: HasId + Send {
     /// [`AdjacencyList::retain`] for this purpose.
     ///
     /// Out-of-bounds IDs may be considered as deleted.
-    fn keep_live(&mut self, ids: &mut AdjacencyList<Self::Id>);
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if liveness cannot be determined due to an infrastructure failure.
+    fn keep_live(&mut self, ids: &mut AdjacencyList<Self::Id>) -> impl SendFuture<ANNResult<()>>;
 }
 
 pub trait TopKAccess: Access {
@@ -95,78 +99,84 @@ where
         }
     }
 
-    pub async fn one_hop<A>(
+    pub fn one_hop<A>(
         &mut self,
         one_hop: &OneHop,
         accessor: &mut A,
         id: A::Id,
         config: &Config,
-    ) -> ANNResult<()>
+    ) -> impl SendFuture<ANNResult<()>>
     where
         A: Access<Id = I>,
     {
-        one_hop.discover(accessor, id, self).await?;
+        async move {
+            one_hop.discover(accessor, id, self).await?;
 
-        add_edges_and_drop(
-            accessor.prune_accessor().borrow_mut(),
-            id,
-            config,
-            &self.edges,
-            &mut self.prune,
-        )
-        .await?;
+            add_edges_and_drop(
+                accessor.prune_accessor().borrow_mut(),
+                id,
+                config,
+                &self.edges,
+                &mut self.prune,
+            )
+            .await?;
 
-        Ok(())
+            Ok(())
+        }
     }
 
-    pub async fn two_hop_and_one_hop<A>(
+    pub fn two_hop_and_one_hop<A>(
         &mut self,
         two_hop: &TwoHopAndOneHop,
         accessor: &mut A,
         id: A::Id,
         config: &Config,
-    ) -> ANNResult<()>
+    ) -> impl SendFuture<ANNResult<()>>
     where
         A: Access<Id = I>,
     {
-        two_hop.discover(accessor, id, self).await?;
+        async move {
+            two_hop.discover(accessor, id, self).await?;
 
-        add_edges_and_drop(
-            accessor.prune_accessor().borrow_mut(),
-            id,
-            config,
-            &self.edges,
-            &mut self.prune,
-        )
-        .await?;
+            add_edges_and_drop(
+                accessor.prune_accessor().borrow_mut(),
+                id,
+                config,
+                &self.edges,
+                &mut self.prune,
+            )
+            .await?;
 
-        Ok(())
+            Ok(())
+        }
     }
 
-    pub async fn visited_and_topk<A>(
+    pub fn visited_and_topk<A>(
         &mut self,
         visited_and_topk: &VisitedAndTopK,
         accessor: &mut A,
         id: A::Id,
         config: &Config,
-    ) -> ANNResult<()>
+    ) -> impl SendFuture<ANNResult<()>>
     where
         A: TopKAccess<Id = I>,
     {
-        visited_and_topk
-            .discover(accessor, id, config, self)
+        async move {
+            visited_and_topk
+                .discover(accessor, id, config, self)
+                .await?;
+
+            add_edges_and_drop(
+                accessor.prune_accessor().borrow_mut(),
+                id,
+                config,
+                &self.edges,
+                &mut self.prune,
+            )
             .await?;
 
-        add_edges_and_drop(
-            accessor.prune_accessor().borrow_mut(),
-            id,
-            config,
-            &self.edges,
-            &mut self.prune,
-        )
-        .await?;
-
-        Ok(())
+            Ok(())
+        }
     }
 
     pub(crate) fn delta(&self) -> &HashMap<I, BackedgeBuffer<I>> {
@@ -236,7 +246,7 @@ impl OneHop {
             .get_neighbors(id, scratch.out_neighbors.as_empty())
             .await?;
 
-        accessor.keep_live(&mut scratch.out_neighbors);
+        accessor.keep_live(&mut scratch.out_neighbors).await?;
 
         scratch.in_neighbors.clear();
         scratch
@@ -314,7 +324,7 @@ impl TwoHopAndOneHop {
             .get_neighbors(id, scratch.out_neighbors.as_empty())
             .await?;
 
-        accessor.keep_live(&mut scratch.out_neighbors);
+        accessor.keep_live(&mut scratch.out_neighbors).await?;
 
         let set = &mut scratch.set;
         set.clear();
@@ -419,10 +429,10 @@ impl VisitedAndTopK {
             .await?;
 
         if !accessor.hint_deleted_already_excluded() {
-            accessor.keep_live(&mut scratch.replace);
+            accessor.keep_live(&mut scratch.replace).await?;
         }
 
-        accessor.keep_live(&mut scratch.out_neighbors);
+        accessor.keep_live(&mut scratch.out_neighbors).await?;
 
         scratch.in_neighbors.clear();
         scratch.in_neighbors.overwrite_trusted(&scratch.replace);

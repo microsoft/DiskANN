@@ -86,8 +86,9 @@ impl<'a> diskann::graph::algorithms::inplace_delete::Access for InplaceDelete<'a
         &mut self.prune
     }
 
-    fn keep_live(&mut self, ids: &mut AdjacencyList<u32>) {
-        self.prune.partition_live(ids, None)
+    async fn keep_live(&mut self, ids: &mut AdjacencyList<u32>) -> ANNResult<()> {
+        self.prune.partition_live(ids, None);
+        Ok(())
     }
 }
 

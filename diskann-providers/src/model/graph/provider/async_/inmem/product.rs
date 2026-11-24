@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use std::future::Future;
+use std::{borrow::BorrowMut, future::Future};
 
 use diskann::default_post_processor;
 use diskann::{
@@ -11,13 +11,14 @@ use diskann::{
     error::IntoANNResult,
     graph::{
         AdjacencyList,
-        glue::{
-            self, DefaultPostProcessor, InplaceDeleteStrategy, InsertStrategy, PruneStrategy,
-            SearchStrategy,
+        compat::{
+            ExecutionContext, InplaceDeleteStrategy, InsertStrategy, MultiInsertStrategy,
+            PruneStrategy, SearchStrategy,
         },
+        glue::{self, DefaultPostProcessor},
         workingset,
     },
-    provider::{ExecutionContext, HasId},
+    provider::HasId,
     utils::{IntoUsize, VectorRepr},
 };
 use diskann_utils::future::AsyncFriendly;
@@ -32,7 +33,8 @@ use crate::model::{
         },
         distances,
         inmem::{
-            DefaultProvider, FullPrecisionProvider, FullPrecisionStore, GetFullPrecision, Rerank,
+            DefaultProvider, FullPrecisionProvider, FullPrecisionStore, GetFullPrecision, GetQuery,
+            Rerank,
         },
         postprocess::{AsDeletionCheck, DeletionCheck, RemoveDeletedIdsAndCopy},
     },
@@ -124,7 +126,7 @@ impl glue::PruneAccessor for PruneAccessor<'_> {
         Ok((self, &self.distance))
     }
 
-    fn neighbors(&mut self) -> Self::Neighbors<'_> {
+    fn neighbors(&mut self) -> impl BorrowMut<Self::Neighbors<'_>> + Send {
         self.neighbors
     }
 }
@@ -198,7 +200,7 @@ where
         Ok((self, &self.distance))
     }
 
-    fn neighbors(&mut self) -> Self::Neighbors<'_> {
+    fn neighbors(&mut self) -> impl BorrowMut<Self::Neighbors<'_>> + Send {
         self.neighbors
     }
 }
@@ -232,27 +234,41 @@ where
 ///////////////////
 
 /// An accessor that retrieves the quantized portion of the [`DefaultProvider`].
-pub struct QuantAccessor<'a, V, D, Ctx> {
+pub struct QuantAccessor<'a, V, D, Ctx, T> {
     provider: &'a DefaultProvider<V, DefaultQuant, D, Ctx>,
     computer: pq::distance::QueryComputer<'a>,
+    query: &'a [T],
 }
 
-impl<'a, V, D, Ctx> QuantAccessor<'a, V, D, Ctx>
+impl<'a, V, D, Ctx, T> QuantAccessor<'a, V, D, Ctx, T>
 where
     V: AsyncFriendly,
     D: AsyncFriendly,
     Ctx: ExecutionContext,
+    T: VectorRepr,
 {
     pub(crate) fn new(
         provider: &'a DefaultProvider<V, DefaultQuant, D, Ctx>,
-        query: &[f32],
+        query: &'a [T],
     ) -> ANNResult<Self> {
-        let computer = provider.aux_vectors.query_computer(query)?;
-        Ok(Self { provider, computer })
+        let computer = provider
+            .aux_vectors
+            .query_computer(&*T::as_f32(query).into_ann_result()?)?;
+        Ok(Self {
+            provider,
+            computer,
+            query,
+        })
     }
 }
 
-impl<T, D, Ctx> GetFullPrecision for QuantAccessor<'_, FullPrecisionStore<T>, D, Ctx>
+impl<V, D, Ctx, T> GetQuery<T> for QuantAccessor<'_, V, D, Ctx, T> {
+    fn get_query(&self) -> &[T] {
+        self.query
+    }
+}
+
+impl<T, D, Ctx> GetFullPrecision for QuantAccessor<'_, FullPrecisionStore<T>, D, Ctx, T>
 where
     T: VectorRepr,
 {
@@ -262,15 +278,16 @@ where
     }
 }
 
-impl<V, D, Ctx> HasId for QuantAccessor<'_, V, D, Ctx> {
+impl<V, D, Ctx, T> HasId for QuantAccessor<'_, V, D, Ctx, T> {
     type Id = u32;
 }
 
-impl<V, D, Ctx> glue::SearchAccessor for QuantAccessor<'_, V, D, Ctx>
+impl<V, D, Ctx, T> glue::SearchAccessor for QuantAccessor<'_, V, D, Ctx, T>
 where
     V: AsyncFriendly,
     D: AsyncFriendly,
     Ctx: ExecutionContext,
+    T: AsyncFriendly,
 {
     fn starting_points(&self) -> impl Future<Output = ANNResult<Vec<u32>>> {
         std::future::ready(self.provider.starting_points())
@@ -341,7 +358,7 @@ where
 // In-mem Extensions //
 //-------------------//
 
-impl<'a, V, D, Ctx> AsDeletionCheck for QuantAccessor<'a, V, D, Ctx>
+impl<'a, V, D, Ctx, T> AsDeletionCheck for QuantAccessor<'a, V, D, Ctx, T>
 where
     V: AsyncFriendly,
     D: AsyncFriendly + DeletionCheck,
@@ -369,7 +386,7 @@ where
     D: AsyncFriendly + DeletionCheck,
     Ctx: ExecutionContext,
 {
-    type SearchAccessor = QuantAccessor<'a, FullPrecisionStore<T>, D, Ctx>;
+    type SearchAccessor = QuantAccessor<'a, FullPrecisionStore<T>, D, Ctx, T>;
     type SearchAccessorError = ANNError;
 
     fn search_accessor(
@@ -378,21 +395,20 @@ where
         _context: &'a Ctx,
         query: &'a [T],
     ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
-        let as_f32 = T::as_f32(query).into_ann_result()?;
-        QuantAccessor::new(provider, &as_f32)
+        QuantAccessor::new(provider, query)
     }
 }
 
 /// Starting points are filtered out of the final results and results are reranked using
 /// the full-precision data.
-impl<'a, T, D, Ctx>
-    DefaultPostProcessor<'a, FullPrecisionProvider<T, DefaultQuant, D, Ctx>, &'a [T]> for Hybrid
+impl<'a, T, D, Ctx> DefaultPostProcessor<u32>
+    for QuantAccessor<'a, FullPrecisionStore<T>, D, Ctx, T>
 where
     T: VectorRepr,
     D: AsyncFriendly + DeletionCheck,
     Ctx: ExecutionContext,
 {
-    default_post_processor!(glue::Pipeline<glue::FilterStartPoints, Rerank>);
+    default_post_processor!(glue::Pipeline<glue::FilterStartPoints, Rerank<T>>);
 }
 
 impl<T, D, Ctx> PruneStrategy<FullPrecisionProvider<T, DefaultQuant, D, Ctx>> for Hybrid
@@ -438,7 +454,7 @@ where
     D: AsyncFriendly + DeletionCheck,
     Ctx: ExecutionContext,
 {
-    type SearchAccessor = QuantAccessor<'a, FullPrecisionStore<T>, D, Ctx>;
+    type SearchAccessor = QuantAccessor<'a, FullPrecisionStore<T>, D, Ctx, T>;
     type SearchAccessorError = ANNError;
 
     type PruneStrategy = Self;
@@ -457,8 +473,7 @@ where
     }
 }
 
-impl<T, D, Ctx, B> glue::MultiInsertStrategy<FullPrecisionProvider<T, DefaultQuant, D, Ctx>, B>
-    for Hybrid
+impl<T, D, Ctx, B> MultiInsertStrategy<FullPrecisionProvider<T, DefaultQuant, D, Ctx>, B> for Hybrid
 where
     T: VectorRepr,
     D: AsyncFriendly + DeletionCheck,
@@ -517,8 +532,8 @@ where
     type DeleteElement<'a> = &'a [T];
     type DeleteElementGuard = Box<[T]>;
     type PruneStrategy = Self;
-    type DeleteSearchAccessor<'a> = QuantAccessor<'a, FullPrecisionStore<T>, D, Ctx>;
-    type SearchPostProcessor = Rerank;
+    type DeleteSearchAccessor<'a> = QuantAccessor<'a, FullPrecisionStore<T>, D, Ctx, T>;
+    type SearchPostProcessor = Rerank<T>;
     type SearchStrategy = Self;
     fn search_strategy(&self) -> Self::SearchStrategy {
         *self
@@ -529,7 +544,7 @@ where
     }
 
     fn search_post_processor(&self) -> Self::SearchPostProcessor {
-        Rerank
+        Rerank::<T>::default()
     }
 
     async fn get_delete_element<'a>(
@@ -556,22 +571,20 @@ where
     D: AsyncFriendly + DeletionCheck,
     Ctx: ExecutionContext,
 {
-    type SearchAccessor = QuantAccessor<'a, NoStore, D, Ctx>;
+    type SearchAccessor = QuantAccessor<'a, NoStore, D, Ctx, T>;
     type SearchAccessorError = ANNError;
 
     fn search_accessor(
         &'a self,
         provider: &'a DefaultProvider<NoStore, DefaultQuant, D, Ctx>,
         _context: &'a Ctx,
-        query: &[T],
+        query: &'a [T],
     ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
-        let as_f32 = T::as_f32(query).into_ann_result()?;
-        QuantAccessor::new(provider, &as_f32)
+        QuantAccessor::new(provider, query)
     }
 }
 
-impl<'a, T, D, Ctx>
-    DefaultPostProcessor<'a, DefaultProvider<NoStore, DefaultQuant, D, Ctx>, &'a [T]> for Quantized
+impl<'a, T, D, Ctx> DefaultPostProcessor<u32> for QuantAccessor<'a, NoStore, D, Ctx, T>
 where
     T: VectorRepr,
     D: AsyncFriendly + DeletionCheck,
@@ -610,7 +623,7 @@ where
     D: AsyncFriendly + DeletionCheck,
     Ctx: ExecutionContext,
 {
-    type SearchAccessor = QuantAccessor<'a, NoStore, D, Ctx>;
+    type SearchAccessor = QuantAccessor<'a, NoStore, D, Ctx, T>;
     type SearchAccessorError = ANNError;
     type PruneStrategy = Self;
 
@@ -628,8 +641,7 @@ where
     }
 }
 
-impl<D, Ctx, B> glue::MultiInsertStrategy<DefaultProvider<NoStore, DefaultQuant, D, Ctx>, B>
-    for Quantized
+impl<D, Ctx, B> MultiInsertStrategy<DefaultProvider<NoStore, DefaultQuant, D, Ctx>, B> for Quantized
 where
     D: AsyncFriendly + DeletionCheck,
     Ctx: ExecutionContext,

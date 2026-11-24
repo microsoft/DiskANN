@@ -5,20 +5,19 @@
 
 //! A provider/accessor interface for spherical quantization.
 
-use std::{future::Future, sync::Mutex};
+use std::{borrow::BorrowMut, future::Future, sync::Mutex};
 
 use diskann::{
     ANNError, ANNResult, convert_error, default_post_processor,
-    error::IntoANNResult,
     graph::{
         AdjacencyList,
-        glue::{
-            self, DefaultPostProcessor, FilterStartPoints, InsertStrategy, Pipeline, PruneStrategy,
-            SearchStrategy,
+        compat::{
+            ExecutionContext, InsertStrategy, MultiInsertStrategy, PruneStrategy, SearchStrategy,
         },
+        glue::{self, DefaultPostProcessor, FilterStartPoints, Pipeline},
         workingset,
     },
-    provider::{ExecutionContext, HasId},
+    provider::HasId,
     utils::{IntoUsize, VectorRepr},
 };
 use diskann_quantization::{
@@ -30,7 +29,7 @@ use diskann_utils::future::AsyncFriendly;
 use diskann_vector::{PreprocessedDistanceFunction, distance::Metric};
 use thiserror::Error;
 
-use super::{GetFullPrecision, Rerank};
+use super::{GetFullPrecision, GetQuery, Rerank};
 use crate::{
     common::IgnoreLockPoison,
     model::graph::provider::async_::{
@@ -302,7 +301,7 @@ impl glue::PruneAccessor for PruneAccessor<'_> {
         Ok((self, &self.distance))
     }
 
-    fn neighbors(&mut self) -> Self::Neighbors<'_> {
+    fn neighbors(&mut self) -> impl BorrowMut<Self::Neighbors<'_>> + Send {
         self.neighbors
     }
 }
@@ -324,21 +323,23 @@ impl workingset::View<u32> for &PruneAccessor<'_> {
 // Accessor //
 //////////////
 
-pub struct QuantAccessor<'a, V, D, Ctx> {
+pub struct QuantAccessor<'a, V, D, Ctx, T> {
     provider: &'a DefaultProvider<V, SphericalStore, D, Ctx>,
     computer: spherical::iface::QueryComputer,
     id_buffer: AdjacencyList<u32>,
+    query: &'a [T],
 }
 
-impl<'a, V, D, Ctx> QuantAccessor<'a, V, D, Ctx>
+impl<'a, V, D, Ctx, T> QuantAccessor<'a, V, D, Ctx, T>
 where
     V: AsyncFriendly,
     D: AsyncFriendly,
     Ctx: ExecutionContext,
+    T: VectorRepr,
 {
     pub(crate) fn new(
         provider: &'a DefaultProvider<V, SphericalStore, D, Ctx>,
-        query: &[f32],
+        query: &'a [T],
         layout: spherical::iface::QueryLayout,
         is_search: bool,
     ) -> ANNResult<Self> {
@@ -351,6 +352,7 @@ where
             provider,
             computer,
             id_buffer: AdjacencyList::with_capacity(32),
+            query,
         })
     }
 
@@ -360,7 +362,13 @@ where
     }
 }
 
-impl<T, D, Ctx> GetFullPrecision for QuantAccessor<'_, FullPrecisionStore<T>, D, Ctx>
+impl<V, D, Ctx, T> GetQuery<T> for QuantAccessor<'_, V, D, Ctx, T> {
+    fn get_query(&self) -> &[T] {
+        self.query
+    }
+}
+
+impl<T, D, Ctx> GetFullPrecision for QuantAccessor<'_, FullPrecisionStore<T>, D, Ctx, T>
 where
     T: VectorRepr,
 {
@@ -370,15 +378,16 @@ where
     }
 }
 
-impl<V, D, Ctx> HasId for QuantAccessor<'_, V, D, Ctx> {
+impl<V, D, Ctx, T> HasId for QuantAccessor<'_, V, D, Ctx, T> {
     type Id = u32;
 }
 
-impl<V, D, Ctx> glue::SearchAccessor for QuantAccessor<'_, V, D, Ctx>
+impl<V, D, Ctx, T> glue::SearchAccessor for QuantAccessor<'_, V, D, Ctx, T>
 where
     V: AsyncFriendly,
     D: AsyncFriendly,
     Ctx: ExecutionContext,
+    T: AsyncFriendly,
 {
     fn starting_points(&self) -> impl Future<Output = ANNResult<Vec<u32>>> {
         std::future::ready(self.provider.starting_points())
@@ -459,7 +468,7 @@ where
     }
 }
 
-impl<V, D, Ctx> AsDeletionCheck for QuantAccessor<'_, V, D, Ctx>
+impl<V, D, Ctx, T> AsDeletionCheck for QuantAccessor<'_, V, D, Ctx, T>
 where
     V: AsyncFriendly,
     D: AsyncFriendly + DeletionCheck,
@@ -513,7 +522,7 @@ where
     D: AsyncFriendly + DeletionCheck,
     Ctx: ExecutionContext,
 {
-    type SearchAccessor = QuantAccessor<'a, FullPrecisionStore<T>, D, Ctx>;
+    type SearchAccessor = QuantAccessor<'a, FullPrecisionStore<T>, D, Ctx, T>;
     type SearchAccessorError = ANNError;
 
     fn search_accessor(
@@ -522,20 +531,17 @@ where
         _context: &'a Ctx,
         query: &'a [T],
     ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
-        let as_f32 = T::as_f32(query).into_ann_result()?;
-        QuantAccessor::new(provider, &as_f32, self.layout, self.is_search)
+        QuantAccessor::new(provider, query, self.layout, self.is_search)
     }
 }
 
-impl<'a, D, Ctx, T>
-    DefaultPostProcessor<'a, FullPrecisionProvider<T, SphericalStore, D, Ctx>, &'a [T]>
-    for Quantized
+impl<D, Ctx, T> DefaultPostProcessor<u32> for QuantAccessor<'_, FullPrecisionStore<T>, D, Ctx, T>
 where
     T: VectorRepr,
     D: AsyncFriendly + DeletionCheck,
     Ctx: ExecutionContext,
 {
-    default_post_processor!(Pipeline<FilterStartPoints, Rerank>);
+    default_post_processor!(Pipeline<FilterStartPoints, Rerank<T>>);
 }
 
 /// SearchStrategy for quantized search when only the quantized store is present.
@@ -548,23 +554,19 @@ where
     D: AsyncFriendly + DeletionCheck,
     Ctx: ExecutionContext,
 {
-    type SearchAccessor = QuantAccessor<'a, NoStore, D, Ctx>;
+    type SearchAccessor = QuantAccessor<'a, NoStore, D, Ctx, T>;
     type SearchAccessorError = ANNError;
 
     fn search_accessor(
         &'a self,
         provider: &'a DefaultProvider<NoStore, SphericalStore, D, Ctx>,
         _context: &'a Ctx,
-        query: &[T],
+        query: &'a [T],
     ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
-        let as_f32 = T::as_f32(query).into_ann_result()?;
-        QuantAccessor::new(provider, &as_f32, self.layout, self.is_search)
+        QuantAccessor::new(provider, query, self.layout, self.is_search)
     }
 }
-
-impl<'a, D, Ctx, T>
-    DefaultPostProcessor<'a, DefaultProvider<NoStore, SphericalStore, D, Ctx>, &'a [T]>
-    for Quantized
+impl<D, Ctx, T> DefaultPostProcessor<u32> for QuantAccessor<'_, NoStore, D, Ctx, T>
 where
     T: VectorRepr,
     D: AsyncFriendly + DeletionCheck,
@@ -610,11 +612,12 @@ where
             'a,
             DefaultProvider<V, SphericalStore, D, Ctx>,
             &'a [T],
-            SearchAccessor = QuantAccessor<'a, V, D, Ctx>,
+            SearchAccessor = QuantAccessor<'a, V, D, Ctx, T>,
             SearchAccessorError = ANNError,
         >,
+    T: AsyncFriendly,
 {
-    type SearchAccessor = QuantAccessor<'a, V, D, Ctx>;
+    type SearchAccessor = QuantAccessor<'a, V, D, Ctx, T>;
     type SearchAccessorError = ANNError;
     type PruneStrategy = Self;
 
@@ -632,8 +635,7 @@ where
     }
 }
 
-impl<V, D, Ctx, B> glue::MultiInsertStrategy<DefaultProvider<V, SphericalStore, D, Ctx>, B>
-    for Quantized
+impl<V, D, Ctx, B> MultiInsertStrategy<DefaultProvider<V, SphericalStore, D, Ctx>, B> for Quantized
 where
     V: AsyncFriendly,
     D: AsyncFriendly + DeletionCheck,

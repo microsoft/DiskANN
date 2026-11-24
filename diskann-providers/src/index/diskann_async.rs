@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use diskann::{
     ANNResult,
-    graph::{Config, DiskANNIndex},
+    graph::{Config, compat::DiskANNIndex},
     utils::VectorRepr,
 };
 use diskann_utils::{future::AsyncFriendly, views::rowmajor::Matrix};
@@ -106,7 +106,7 @@ where
 {
     let fp_precursor = CreateFullPrecision::new(params.dim, params.prefetch_cache_line_level);
     let data_provider = DefaultProvider::new_empty(params, fp_precursor, NoStore, deleter)?;
-    Ok(Arc::new(DiskANNIndex::new(config, data_provider, None)))
+    Ok(Arc::new(DiskANNIndex::new(data_provider, config)))
 }
 
 pub fn new_quant_index<T, Q, D>(
@@ -124,7 +124,7 @@ where
 {
     let fp_precursor = CreateFullPrecision::new(params.dim, params.prefetch_cache_line_level);
     let data_provider = DefaultProvider::new_empty(params, fp_precursor, quant, deleter)?;
-    Ok(Arc::new(DiskANNIndex::new(config, data_provider, None)))
+    Ok(Arc::new(DiskANNIndex::new(data_provider, config)))
 }
 
 ///////////
@@ -144,20 +144,19 @@ pub(crate) mod tests {
     use diskann::{
         graph::{
             self, AdjacencyList, InplaceDeleteMethod, StartPointStrategy,
+            compat::{
+                DataProvider, DefaultContext, Delete, ExecutionContext, Guard,
+                InplaceDeleteStrategy, InsertStrategy, MultiInsertStrategy, SearchStrategy,
+                SetElement,
+            },
             config::IntraBatchCandidates,
             ext::labeled::QueryLabelProvider,
-            glue::{
-                self, DefaultSearchStrategy, InplaceDeleteStrategy, InsertStrategy,
-                MultiInsertStrategy, SearchStrategy,
-            },
+            glue::{self, DefaultPostProcessor},
             search::Range,
             search_output_buffer,
         },
         neighbor::{self, Neighbor},
-        provider::{
-            DataProvider, DefaultContext, Delete, ExecutionContext, Guard, NeighborAccessor,
-            NeighborAccessorMut, SetElement,
-        },
+        provider::{NeighborAccessor, NeighborAccessorMut},
         utils::{IntoUsize, ONE},
     };
     use diskann_quantization::scalar::train::ScalarQuantizationParameters;
@@ -324,7 +323,12 @@ pub(crate) mod tests {
         mut checker: Checker,
     ) where
         DP: DataProvider<InternalId = u32>,
-        S: DefaultSearchStrategy<'a, DP, Q, SearchAccessor: glue::SearchAccessor>,
+        S: SearchStrategy<
+                'a,
+                DP,
+                Q,
+                SearchAccessor: glue::SearchAccessor + DefaultPostProcessor<u32>,
+            >,
         Q: Copy + std::fmt::Debug + Send + Sync + 'a,
         Checker: FnMut(usize, (u32, f32)) -> Result<(), Box<dyn std::fmt::Display>>,
     {
@@ -420,11 +424,19 @@ pub(crate) mod tests {
         quant_strategy: QS,
     ) where
         DP: DataProvider<InternalId = u32, Context: Default>,
-        FS: for<'a> DefaultSearchStrategy<'a, DP, &'a [T], SearchAccessor: glue::SearchAccessor>
-            + Clone
+        FS: for<'a> SearchStrategy<
+                'a,
+                DP,
+                &'a [T],
+                SearchAccessor: glue::SearchAccessor + DefaultPostProcessor<u32>,
+            > + Clone
             + 'static,
-        QS: for<'a> DefaultSearchStrategy<'a, DP, &'a [T], SearchAccessor: glue::SearchAccessor>
-            + Clone
+        QS: for<'a> SearchStrategy<
+                'a,
+                DP,
+                &'a [T],
+                SearchAccessor: glue::SearchAccessor + DefaultPostProcessor<u32>,
+            > + Clone
             + 'static,
         T: Default + Clone + Send + Sync + std::fmt::Debug + 'static,
     {
@@ -601,7 +613,7 @@ pub(crate) mod tests {
 
         let index = new_quant_index::<f32, _, _>(config, parameters, table, NoDeletes).unwrap();
         let neighbor_accessor = &mut index.provider().neighbors();
-        populate_data(&index.data_provider, &DefaultContext, &vectors).await;
+        populate_data(index.provider(), &DefaultContext, &vectors).await;
         populate_graph(neighbor_accessor, &adjacency_lists).await;
 
         // The corpus of actual vectors consists of all but the last point, which we use
@@ -847,11 +859,11 @@ pub(crate) mod tests {
     ) where
         T: VectorRepr + GenerateSphericalData + Into<f32>,
         S: for<'a> InsertStrategy<'a, FullPrecisionProvider<T, DefaultQuant>, &'a [T]>
-            + for<'a> DefaultSearchStrategy<
+            + for<'a> SearchStrategy<
                 'a,
                 FullPrecisionProvider<T, DefaultQuant>,
                 &'a [T],
-                SearchAccessor: glue::SearchAccessor,
+                SearchAccessor: glue::SearchAccessor + DefaultPostProcessor<u32>,
             > + Clone
             + 'static,
         rand::distr::StandardUniform: Distribution<T>,
@@ -977,11 +989,11 @@ pub(crate) mod tests {
     ) where
         T: VectorRepr + GenerateSphericalData + Into<f32>,
         S: for<'a> InsertStrategy<'a, FullPrecisionProvider<T, DefaultQuant>, &'a [T]>
-            + for<'a> DefaultSearchStrategy<
+            + for<'a> SearchStrategy<
                 'a,
                 FullPrecisionProvider<T, DefaultQuant>,
                 &'a [T],
-                SearchAccessor: glue::SearchAccessor,
+                SearchAccessor: glue::SearchAccessor + DefaultPostProcessor<u32>,
             > + Clone
             + 'static,
         rand::distr::StandardUniform: Distribution<T>,
@@ -1062,7 +1074,7 @@ pub(crate) mod tests {
 
         let index = new_quant_index::<f32, _, _>(config, parameters, table, NoDeletes).unwrap();
         let neighbor_accessor = &mut index.provider().neighbors();
-        populate_data(&index.data_provider, &DefaultContext, &vectors).await;
+        populate_data(index.provider(), &DefaultContext, &vectors).await;
         populate_graph(neighbor_accessor, &adjacency_lists).await;
 
         let beta = 0.5;
@@ -1205,7 +1217,7 @@ pub(crate) mod tests {
 
         let ctx = DefaultContext;
         populate_graph(neighbor_accessor, &adjacency_lists).await;
-        populate_data(&index.data_provider, &ctx, &vectors).await;
+        populate_data(index.provider(), &ctx, &vectors).await;
 
         index
             .inplace_delete(
@@ -1224,7 +1236,7 @@ pub(crate) mod tests {
         // Check that the vertex was marked as deleted.
         assert!(
             index
-                .data_provider
+                .provider()
                 .status_by_internal_id(&ctx, 3)
                 .await
                 .unwrap()
@@ -1241,35 +1253,35 @@ pub(crate) mod tests {
         // vertex 3 should be dropped
         {
             let mut list = AdjacencyList::new();
-            neighbor_accessor.get_neighbors(4, &mut list).await.unwrap();
+            neighbor_accessor.get_neighbors(4, list.as_empty()).await.unwrap();
             list.sort();
             assert_eq!(&*list, &[0, 1, 2]);
         }
 
         {
             let mut list = AdjacencyList::new();
-            neighbor_accessor.get_neighbors(2, &mut list).await.unwrap();
+            neighbor_accessor.get_neighbors(2, list.as_empty()).await.unwrap();
             list.sort();
             assert_eq!(&*list, &[0, 1, 4]);
         }
 
         {
             let mut list = AdjacencyList::new();
-            neighbor_accessor.get_neighbors(0, &mut list).await.unwrap();
+            neighbor_accessor.get_neighbors(0, list.as_empty()).await.unwrap();
             list.sort();
             assert_eq!(&*list, &[1, 2, 4]);
         }
 
         {
             let mut list = AdjacencyList::new();
-            neighbor_accessor.get_neighbors(1, &mut list).await.unwrap();
+            neighbor_accessor.get_neighbors(1, list.as_empty()).await.unwrap();
             list.sort();
             assert_eq!(&*list, &[0, 2, 4]);
         }
 
         {
             let mut list = AdjacencyList::new();
-            neighbor_accessor.get_neighbors(3, &mut list).await.unwrap();
+            neighbor_accessor.get_neighbors(3, list.as_empty()).await.unwrap();
             assert!(list.is_empty());
         }
     }
@@ -1321,7 +1333,7 @@ pub(crate) mod tests {
 
         let ctx = DefaultContext;
         populate_graph(neighbor_accessor, &adjacency_lists).await;
-        populate_data(&index.data_provider, &ctx, &vectors).await;
+        populate_data(index.provider(), &ctx, &vectors).await;
 
         let starting_point_ids = index.provider().starting_points().unwrap();
         assert!(starting_point_ids.contains(&4));
@@ -1329,7 +1341,7 @@ pub(crate) mod tests {
 
         // delete id number 3
         index
-            .data_provider
+            .provider()
             .delete(&ctx, &3_u32)
             .await
             .expect("Error in delete");
@@ -1351,28 +1363,28 @@ pub(crate) mod tests {
         // vertex 4 (the start point) has its edge to 3 deleted
         {
             let mut list = AdjacencyList::new();
-            neighbor_accessor.get_neighbors(0, &mut list).await.unwrap();
+            neighbor_accessor.get_neighbors(0, list.as_empty()).await.unwrap();
             list.sort();
             assert_eq!(&*list, &[1, 2, 4]);
         }
 
         {
             let mut list = AdjacencyList::new();
-            neighbor_accessor.get_neighbors(1, &mut list).await.unwrap();
+            neighbor_accessor.get_neighbors(1, list.as_empty()).await.unwrap();
             list.sort();
             assert_eq!(&*list, &[0, 2, 4]);
         }
 
         {
             let mut list = AdjacencyList::new();
-            neighbor_accessor.get_neighbors(2, &mut list).await.unwrap();
+            neighbor_accessor.get_neighbors(2, list.as_empty()).await.unwrap();
             list.sort();
             assert_eq!(&*list, &[0, 1, 4]);
         }
 
         {
             let mut list = AdjacencyList::new();
-            neighbor_accessor.get_neighbors(4, &mut list).await.unwrap();
+            neighbor_accessor.get_neighbors(4, list.as_empty()).await.unwrap();
             list.sort();
             assert_eq!(&*list, &[0, 1, 2]);
         }
@@ -1596,7 +1608,7 @@ pub(crate) mod tests {
         C: FnOnce(Arc<rowmajor::Owned<f32>>, &[f32]) -> Arc<DiskANNIndex<DP>>,
         B: AsyncFnOnce(Arc<DiskANNIndex<DP>>, Arc<rowmajor::Owned<f32>>),
         DP: DataProvider<Context = DefaultContext, ExternalId = u32>
-            + for<'a> diskann::provider::SetElement<&'a [f32]>,
+            + for<'a> SetElement<&'a [f32]>,
     {
         let storage = VirtualStorageProvider::new_overlay(test_data_root());
         let mut reader = storage.open_reader(file).unwrap();
@@ -1617,7 +1629,7 @@ pub(crate) mod tests {
         data: Arc<rowmajor::Owned<f32>>,
     ) where
         DP: DataProvider<Context = DefaultContext, ExternalId = u32>
-            + for<'a> diskann::provider::SetElement<&'a [f32]>,
+            + for<'a> SetElement<&'a [f32]>,
         Quantized: for<'a> InsertStrategy<'a, DP, &'a [f32]> + Clone + Send + Sync,
     {
         let ctx = &DefaultContext;
@@ -1862,7 +1874,7 @@ pub(crate) mod tests {
         for id in itr {
             let mut adj_list = AdjacencyList::new();
             accessor
-                .get_neighbors(id, &mut adj_list)
+                .get_neighbors(id, adj_list.as_empty())
                 .await
                 .expect("Error in get_neighbors");
             assert!(!adj_list.contains(id));
@@ -2066,7 +2078,7 @@ pub(crate) mod tests {
         for id in 0..points_to_delete {
             assert!(
                 index
-                    .data_provider
+                    .provider()
                     .status_by_external_id(ctx, &id)
                     .await
                     .unwrap()
@@ -2102,7 +2114,7 @@ pub(crate) mod tests {
         let mut adj_list = AdjacencyList::new();
         for id in 0..points_to_delete {
             neighbor_accessor
-                .get_neighbors(id, &mut adj_list)
+                .get_neighbors(id, adj_list.as_empty())
                 .await
                 .expect("Error in get_neighbors");
             assert!(adj_list.is_empty());
@@ -2111,7 +2123,7 @@ pub(crate) mod tests {
         // check that the graph has no self-loops or repeated vertices
         check_graph_for_self_loops_or_duplicates(
             neighbor_accessor,
-            (&index.data_provider).into_iter(),
+            (&index.provider()).into_iter(),
         )
         .await;
     }
@@ -2176,7 +2188,7 @@ pub(crate) mod tests {
         for id in 0..points_to_delete {
             assert!(
                 index
-                    .data_provider
+                    .provider()
                     .status_by_external_id(ctx, &id)
                     .await
                     .unwrap()
@@ -2186,7 +2198,7 @@ pub(crate) mod tests {
 
         // drop deleted neighbors from every point in the index
         let num_start_points = index
-            .data_provider
+            .provider()
             .starting_points()
             .expect("Error in get_starting_point_ids")
             .len();
@@ -2212,7 +2224,7 @@ pub(crate) mod tests {
         let mut adj_list = AdjacencyList::new();
         for id in 0..points_to_delete {
             neighbor_accessor
-                .get_neighbors(id, &mut adj_list)
+                .get_neighbors(id, adj_list.as_empty())
                 .await
                 .expect("Error in get_neighbors");
             assert!(adj_list.is_empty());
@@ -2221,7 +2233,7 @@ pub(crate) mod tests {
         // check that the graph has no self-loops or repeated vertices
         check_graph_for_self_loops_or_duplicates(
             neighbor_accessor,
-            (&index.data_provider).into_iter(),
+            (&index.provider()).into_iter(),
         )
         .await;
     }
@@ -2253,7 +2265,7 @@ pub(crate) mod tests {
 
         for id in 0..points_to_delete {
             index
-                .data_provider
+                .provider()
                 .delete(ctx, &id)
                 .await
                 .expect("Error in delete");
@@ -2263,7 +2275,7 @@ pub(crate) mod tests {
         for id in 0..points_to_delete {
             assert!(
                 index
-                    .data_provider
+                    .provider()
                     .status_by_external_id(ctx, &id)
                     .await
                     .unwrap()
@@ -2299,7 +2311,7 @@ pub(crate) mod tests {
         // check that the graph has no self-loops or repeated vertices
         check_graph_for_self_loops_or_duplicates(
             neighbor_accessor,
-            (&index.data_provider).into_iter(),
+            (&index.provider()).into_iter(),
         )
         .await;
     }
@@ -2475,21 +2487,21 @@ pub(crate) mod tests {
         .await;
 
         // Check that the adjacency lists formed for the two indexes are the same.
-        let iter = (&quant_index.data_provider).into_iter();
+        let iter = (&quant_index.provider()).into_iter();
         let mut from_quant = AdjacencyList::new();
         let mut from_full = AdjacencyList::new();
         for id in iter {
             quant_index
-                .data_provider
+                .provider()
                 .neighbors()
-                .get_neighbors(id, &mut from_quant)
+                .get_neighbors(id, from_quant.as_empty())
                 .await
                 .unwrap();
 
             full_index
-                .data_provider
+                .provider()
                 .neighbors()
-                .get_neighbors(id, &mut from_full)
+                .get_neighbors(id, from_full.as_empty())
                 .await
                 .unwrap();
 

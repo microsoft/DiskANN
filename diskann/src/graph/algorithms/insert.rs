@@ -75,7 +75,19 @@ where
         }
     }
 
-    pub async fn run<A>(&mut self, accessor: &mut A, id: A::Id, config: &Config) -> ANNResult<()>
+    pub fn run<A>(
+        &mut self,
+        accessor: &mut A,
+        id: A::Id,
+        config: &Config,
+    ) -> impl SendFuture<ANNResult<()>>
+    where
+        A: Access<Id = I>,
+    {
+        self.run_inner(accessor, id, config)
+    }
+
+    async fn run_inner<A>(&mut self, accessor: &mut A, id: A::Id, config: &Config) -> ANNResult<()>
     where
         A: Access<Id = I>,
     {

@@ -3,11 +3,11 @@
  * Licensed under the MIT license.
  */
 
-use std::num::NonZeroUsize;
-
 use super::{StorageReadProvider, StorageWriteProvider};
 use diskann::{
-    ANNError, ANNResult, graph::DiskANNIndex, provider::DataProvider, utils::VectorRepr,
+    ANNError, ANNResult,
+    graph::compat::{DataProvider, DiskANNIndex},
+    utils::VectorRepr,
 };
 use diskann_utils::{future::AsyncFriendly, lazy_format};
 
@@ -34,9 +34,9 @@ where
     where
         P: StorageWriteProvider,
     {
-        let start_id = get_and_validate_single_starting_point(&self.data_provider)?;
+        let start_id = get_and_validate_single_starting_point(&self.provider())?;
 
-        self.data_provider
+        self.provider()
             .save_with(provider, &(start_id, ctx_prefix.clone()))
             .await?;
 
@@ -73,12 +73,7 @@ where
         let pq_context = create_load_context(path, index_config)?;
 
         let data_provider = DP::load_with(provider, &pq_context).await?;
-        let num_threads = index_config.num_threads;
-        Ok(Self::new(
-            index_config.config.clone(),
-            data_provider,
-            NonZeroUsize::new(num_threads),
-        ))
+        Ok(Self::new(data_provider, index_config.config.clone()))
     }
 }
 
@@ -193,8 +188,11 @@ mod tests {
 
     use crate::storage::VirtualStorageProvider;
     use diskann::{
-        graph::{AdjacencyList, config, glue::InsertStrategy},
-        provider::SetElement,
+        graph::{
+            AdjacencyList,
+            compat::{InsertStrategy, SetElement},
+            config,
+        },
         utils::{IntoUsize, ONE},
     };
     use diskann_utils::{
@@ -311,7 +309,7 @@ mod tests {
             .unwrap(),
         );
 
-        let id_iter = index.data_provider.iter();
+        let id_iter = index.provider().iter();
 
         // Without Quant, With Delete Set.
         {
@@ -319,7 +317,7 @@ mod tests {
                 .await
                 .unwrap();
 
-            assert_eq!(id_iter, reloaded.data_provider.iter());
+            assert_eq!(id_iter, reloaded.provider().iter());
             index
                 .provider()
                 .base_vectors
@@ -338,7 +336,7 @@ mod tests {
                 .await
                 .unwrap();
 
-            assert_eq!(id_iter, reloaded.data_provider.iter());
+            assert_eq!(id_iter, reloaded.provider().iter());
             index
                 .provider()
                 .base_vectors
@@ -358,7 +356,7 @@ mod tests {
                     .await
                     .unwrap();
 
-            assert_eq!(id_iter, reloaded.data_provider.iter());
+            assert_eq!(id_iter, reloaded.provider().iter());
             index
                 .provider()
                 .base_vectors
@@ -381,7 +379,7 @@ mod tests {
                 .await
                 .unwrap();
 
-            assert_eq!(id_iter, reloaded.data_provider.iter());
+            assert_eq!(id_iter, reloaded.provider().iter());
             index
                 .provider()
                 .base_vectors
@@ -428,14 +426,14 @@ mod tests {
         // Test case 1: Single start point should succeed
         {
             let index = create_test_index(1);
-            let result = get_and_validate_single_starting_point(&index.data_provider);
+            let result = get_and_validate_single_starting_point(&index.provider());
             assert!(result.is_ok(), "Failed to validate single start point");
         }
 
         // Test case 2: Multiple start points should fail
         {
             let index = create_test_index(2);
-            let result = get_and_validate_single_starting_point(&index.data_provider);
+            let result = get_and_validate_single_starting_point(&index.provider());
             assert!(result.is_err());
             assert!(
                 result

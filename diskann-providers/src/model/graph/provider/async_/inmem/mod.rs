@@ -22,7 +22,7 @@ mod full_precision;
 pub(super) use full_precision::Rerank;
 pub use full_precision::{
     CreateFullPrecision, DeterminantDiversity, FullAccessor, FullPrecisionProvider,
-    FullPrecisionStore, GetFullPrecision,
+    FullPrecisionStore, GetFullPrecision, GetQuery,
 };
 
 #[cfg(test)]

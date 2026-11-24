@@ -3,6 +3,6 @@
  * Licensed under the MIT license.
  */
 
-//! Extensions for search.
+//! Graph integration extensions.
 
 pub mod labeled;

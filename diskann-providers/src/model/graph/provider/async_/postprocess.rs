@@ -37,7 +37,7 @@ pub(crate) trait DeletionCheck {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct RemoveDeletedIdsAndCopy;
 
-impl<A, T> glue::SearchPostProcess<A, T> for RemoveDeletedIdsAndCopy
+impl<A> glue::SearchPostProcess<A, u32> for RemoveDeletedIdsAndCopy
 where
     A: HasId<Id = u32> + AsDeletionCheck,
 {
@@ -46,7 +46,6 @@ where
     fn post_process<I, B>(
         &self,
         accessor: &mut A,
-        _query: T,
         candidates: I,
         output: &mut B,
     ) -> impl std::future::Future<Output = Result<usize, Self::Error>> + Send

@@ -489,7 +489,7 @@ impl Provider {
     }
 
     /// Return a search accesor.
-    pub(crate) fn search_accessor(&self, query: &[f32]) -> Result<Accessor<'_>, DimMismatch> {
+    pub fn search_accessor(&self, query: &[f32]) -> Result<Accessor<'_>, DimMismatch> {
         Accessor::new(self, query)
     }
 
@@ -960,8 +960,9 @@ impl<'a> algorithms::inplace_delete::Access for InplaceDelete<'a> {
         &mut self.prune
     }
 
-    fn keep_live(&mut self, ids: &mut AdjacencyList<u32>) {
-        self.prune.provider().partition_live(ids, None)
+    async fn keep_live(&mut self, ids: &mut AdjacencyList<u32>) -> ANNResult<()> {
+        self.prune.provider().partition_live(ids, None);
+        Ok(())
     }
 }
 
@@ -992,8 +993,8 @@ impl<'a> algorithms::inplace_delete::Access for TopKInplaceDelete<'a> {
         self.inplace.prune_accessor()
     }
 
-    fn keep_live(&mut self, ids: &mut AdjacencyList<u32>) {
-        self.inplace.keep_live(ids)
+    async fn keep_live(&mut self, ids: &mut AdjacencyList<u32>) -> ANNResult<()> {
+        self.inplace.keep_live(ids).await
     }
 }
 

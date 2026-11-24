@@ -8,11 +8,14 @@ use std::{fmt::Debug, future::Future, num::NonZeroUsize};
 use crate::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann::{
     ANNError, ANNResult,
-    graph::AdjacencyList,
-    provider::{
-        DataProvider, DefaultAccessor, DefaultContext, Delete, ElementStatus, ExecutionContext,
-        NeighborAccessor, NeighborAccessorMut, NoopGuard, SetElement,
+    graph::{
+        adjacencylist::Empty,
+        compat::{
+            DataProvider, DefaultContext, Delete, ElementStatus, ExecutionContext, NoopGuard,
+            SetElement,
+        },
     },
+    provider::{NeighborAccessor, NeighborAccessorMut},
     utils::{IntoUsize, ONE, VectorRepr},
 };
 use diskann_utils::{future::AsyncFriendly, lazy_format};
@@ -607,9 +610,9 @@ impl NeighborAccessor for &SimpleNeighborProviderAsync {
     async fn get_neighbors(
         &mut self,
         id: Self::Id,
-        neighbors: &mut AdjacencyList<Self::Id>,
+        neighbors: Empty<'_, Self::Id>,
     ) -> ANNResult<()> {
-        self.get_neighbors_sync(id.into_usize(), neighbors)?;
+        self.get_neighbors_sync(id.into_usize(), neighbors.take())?;
         Ok(())
     }
 }
@@ -623,19 +626,6 @@ impl NeighborAccessorMut for &SimpleNeighborProviderAsync {
     async fn append_vector(&mut self, id: u32, new_neighbor_ids: &[u32]) -> ANNResult<()> {
         self.append_vector_sync(id.into_usize(), new_neighbor_ids)?;
         Ok(())
-    }
-}
-
-impl<U, V, D, Ctx> DefaultAccessor for DefaultProvider<U, V, D, Ctx>
-where
-    U: AsyncFriendly,
-    V: AsyncFriendly,
-    D: AsyncFriendly,
-    Ctx: ExecutionContext,
-{
-    type Accessor<'a> = &'a SimpleNeighborProviderAsync;
-    fn default_accessor(&self) -> Self::Accessor<'_> {
-        self.neighbors()
     }
 }
 
@@ -687,6 +677,8 @@ mod tests {
         common::{NoStore, TableBasedDeletes},
         inmem::CreateFullPrecision,
     };
+
+    use diskann::graph::AdjacencyList;
 
     #[tokio::test]
     async fn test_data_provider_and_delete_interface() {
@@ -755,7 +747,7 @@ mod tests {
             let mut neighbors = AdjacencyList::new();
             provider
                 .neighbors()
-                .get_neighbors(i, &mut neighbors)
+                .get_neighbors(i, neighbors.as_empty())
                 .await
                 .unwrap();
             assert!(neighbors.to_vec().is_empty());

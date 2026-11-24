@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use std::{future::Future, sync::Mutex};
+use std::{borrow::BorrowMut, future::Future, sync::Mutex};
 
 use crate::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann::{
@@ -11,13 +11,13 @@ use diskann::{
     error::IntoANNResult,
     graph::{
         AdjacencyList,
-        glue::{
-            self, DefaultPostProcessor, FilterStartPoints, InsertStrategy, Pipeline, PruneStrategy,
-            SearchStrategy,
+        compat::{
+            ExecutionContext, InsertStrategy, MultiInsertStrategy, PruneStrategy, SearchStrategy,
         },
+        glue::{self, DefaultPostProcessor, FilterStartPoints, Pipeline},
         workingset,
     },
-    provider::{ExecutionContext, HasId},
+    provider::HasId,
     utils::{IntoUsize, VectorRepr},
 };
 use diskann_quantization::{
@@ -34,7 +34,7 @@ use diskann_utils::{Reborrow, ReborrowMut, future::AsyncFriendly};
 use diskann_vector::{DistanceFunction, PreprocessedDistanceFunction, distance::Metric};
 use thiserror::Error;
 
-use super::{DefaultProvider, GetFullPrecision, Rerank};
+use super::{DefaultProvider, GetFullPrecision, GetQuery, Rerank};
 use crate::{
     common::IgnoreLockPoison,
     model::graph::provider::async_::{
@@ -421,7 +421,7 @@ where
         Ok((self, &self.distance))
     }
 
-    fn neighbors(&mut self) -> Self::Neighbors<'_> {
+    fn neighbors(&mut self) -> impl BorrowMut<&SimpleNeighborProviderAsync> + Send {
         self.neighbors
     }
 }
@@ -447,38 +447,52 @@ where
 //////////////
 
 /// The accessor for SQ.
-pub struct QuantAccessor<'a, const NBITS: usize, V, D, Ctx>
+pub struct QuantAccessor<'a, const NBITS: usize, V, D, Ctx, T>
 where
     Unsigned: Representation<NBITS>,
 {
     provider: &'a DefaultProvider<V, SQStore<NBITS>, D, Ctx>,
     computer: QueryComputer<NBITS>,
     id_buffer: AdjacencyList<u32>,
+    query: &'a [T],
 }
 
-impl<'a, const NBITS: usize, V, D, Ctx> QuantAccessor<'a, NBITS, V, D, Ctx>
+impl<'a, const NBITS: usize, V, D, Ctx, T> QuantAccessor<'a, NBITS, V, D, Ctx, T>
 where
     V: AsyncFriendly,
     D: AsyncFriendly,
     Ctx: ExecutionContext,
     Unsigned: Representation<NBITS>,
+    T: VectorRepr,
 {
     pub(crate) fn new(
         provider: &'a DefaultProvider<V, SQStore<NBITS>, D, Ctx>,
-        query: &[f32],
+        query: &'a [T],
         is_search: bool,
     ) -> ANNResult<Self> {
-        let computer = provider.aux_vectors.query_computer(query, is_search)?;
+        let computer = provider
+            .aux_vectors
+            .query_computer(&*T::as_f32(query).into_ann_result()?, is_search)?;
         Ok(Self {
             provider,
             computer,
             id_buffer: AdjacencyList::with_capacity(32),
+            query,
         })
     }
 }
 
+impl<V, const NBITS: usize, D, Ctx, T> GetQuery<T> for QuantAccessor<'_, NBITS, V, D, Ctx, T>
+where
+    Unsigned: Representation<NBITS>,
+{
+    fn get_query(&self) -> &[T] {
+        self.query
+    }
+}
+
 impl<T, const NBITS: usize, D, Ctx> GetFullPrecision
-    for QuantAccessor<'_, NBITS, FullPrecisionStore<T>, D, Ctx>
+    for QuantAccessor<'_, NBITS, FullPrecisionStore<T>, D, Ctx, T>
 where
     T: VectorRepr,
     Unsigned: Representation<NBITS>,
@@ -489,20 +503,22 @@ where
     }
 }
 
-impl<const NBITS: usize, V, D, Ctx> HasId for QuantAccessor<'_, NBITS, V, D, Ctx>
+impl<const NBITS: usize, V, D, Ctx, T> HasId for QuantAccessor<'_, NBITS, V, D, Ctx, T>
 where
     Unsigned: Representation<NBITS>,
 {
     type Id = u32;
 }
 
-impl<const NBITS: usize, V, D, Ctx> glue::SearchAccessor for QuantAccessor<'_, NBITS, V, D, Ctx>
+impl<const NBITS: usize, V, D, Ctx, T> glue::SearchAccessor
+    for QuantAccessor<'_, NBITS, V, D, Ctx, T>
 where
     V: AsyncFriendly,
     D: AsyncFriendly,
     Ctx: ExecutionContext,
     Unsigned: Representation<NBITS>,
     QueryComputer<NBITS>: for<'a> PreprocessedDistanceFunction<CVRef<'a, NBITS>, f32>,
+    T: AsyncFriendly,
 {
     fn starting_points(&self) -> impl Future<Output = ANNResult<Vec<u32>>> {
         std::future::ready(self.provider.starting_points())
@@ -578,12 +594,13 @@ where
     }
 }
 
-impl<const NBITS: usize, V, D, Ctx> AsDeletionCheck for QuantAccessor<'_, NBITS, V, D, Ctx>
+impl<const NBITS: usize, V, D, Ctx, T> AsDeletionCheck for QuantAccessor<'_, NBITS, V, D, Ctx, T>
 where
     V: AsyncFriendly,
     D: AsyncFriendly + DeletionCheck,
     Ctx: ExecutionContext,
     Unsigned: Representation<NBITS>,
+    T: AsyncFriendly,
 {
     type Checker = D;
     fn as_deletion_check(&self) -> &D {
@@ -607,7 +624,7 @@ where
     Unsigned: Representation<NBITS>,
     QueryComputer<NBITS>: for<'b> PreprocessedDistanceFunction<CVRef<'b, NBITS>, f32>,
 {
-    type SearchAccessor = QuantAccessor<'a, NBITS, FullPrecisionStore<T>, D, Ctx>;
+    type SearchAccessor = QuantAccessor<'a, NBITS, FullPrecisionStore<T>, D, Ctx, T>;
     type SearchAccessorError = ANNError;
 
     fn search_accessor(
@@ -616,14 +633,12 @@ where
         _context: &'a Ctx,
         query: &'a [T],
     ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
-        let as_f32 = T::as_f32(query).into_ann_result()?;
-        QuantAccessor::new(provider, &as_f32, true)
+        QuantAccessor::new(provider, query, true)
     }
 }
 
-impl<'a, const NBITS: usize, D, Ctx, T>
-    DefaultPostProcessor<'a, FullPrecisionProvider<T, SQStore<NBITS>, D, Ctx>, &'a [T]>
-    for Quantized
+impl<'a, const NBITS: usize, D, Ctx, T> DefaultPostProcessor<u32>
+    for QuantAccessor<'_, NBITS, FullPrecisionStore<T>, D, Ctx, T>
 where
     T: VectorRepr,
     D: AsyncFriendly + DeletionCheck,
@@ -631,7 +646,7 @@ where
     Unsigned: Representation<NBITS>,
     QueryComputer<NBITS>: for<'b> PreprocessedDistanceFunction<CVRef<'b, NBITS>, f32>,
 {
-    default_post_processor!(Pipeline<FilterStartPoints, Rerank>);
+    default_post_processor!(Pipeline<FilterStartPoints, Rerank<T>>);
 }
 
 /// SearchStrategy for quantized search when only the quantized store is present.
@@ -646,7 +661,7 @@ where
     Unsigned: Representation<NBITS>,
     QueryComputer<NBITS>: for<'b> PreprocessedDistanceFunction<CVRef<'b, NBITS>, f32>,
 {
-    type SearchAccessor = QuantAccessor<'a, NBITS, NoStore, D, Ctx>;
+    type SearchAccessor = QuantAccessor<'a, NBITS, NoStore, D, Ctx, T>;
     type SearchAccessorError = ANNError;
 
     fn search_accessor(
@@ -655,20 +670,18 @@ where
         _context: &'a Ctx,
         query: &'a [T],
     ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
-        let as_f32 = T::as_f32(query).into_ann_result()?;
-        QuantAccessor::new(provider, &as_f32, true)
+        QuantAccessor::new(provider, query, true)
     }
 }
 
-impl<'a, const NBITS: usize, D, Ctx, T>
-    DefaultPostProcessor<'a, DefaultProvider<NoStore, SQStore<NBITS>, D, Ctx>, &'a [T]>
-    for Quantized
+impl<'a, const NBITS: usize, D, Ctx, T> DefaultPostProcessor<u32>
+    for QuantAccessor<'_, NBITS, NoStore, D, Ctx, T>
 where
-    T: VectorRepr,
     D: AsyncFriendly + DeletionCheck,
     Ctx: ExecutionContext,
     Unsigned: Representation<NBITS>,
     QueryComputer<NBITS>: for<'b> PreprocessedDistanceFunction<CVRef<'b, NBITS>, f32>,
+    T: AsyncFriendly,
 {
     default_post_processor!(Pipeline<FilterStartPoints, RemoveDeletedIdsAndCopy>);
 }
@@ -709,11 +722,11 @@ where
             'a,
             DefaultProvider<V, SQStore<NBITS>, D, Ctx>,
             &'a [T],
-            SearchAccessor = QuantAccessor<'a, NBITS, V, D, Ctx>,
+            SearchAccessor = QuantAccessor<'a, NBITS, V, D, Ctx, T>,
             SearchAccessorError = ANNError,
         >,
 {
-    type SearchAccessor = QuantAccessor<'a, NBITS, V, D, Ctx>;
+    type SearchAccessor = QuantAccessor<'a, NBITS, V, D, Ctx, T>;
     type SearchAccessorError = ANNError;
 
     type PruneStrategy = Self;
@@ -733,7 +746,7 @@ where
 }
 
 impl<const NBITS: usize, V, D, Ctx, B>
-    glue::MultiInsertStrategy<DefaultProvider<V, SQStore<NBITS>, D, Ctx>, B> for Quantized
+    MultiInsertStrategy<DefaultProvider<V, SQStore<NBITS>, D, Ctx>, B> for Quantized
 where
     V: AsyncFriendly,
     D: AsyncFriendly + DeletionCheck,

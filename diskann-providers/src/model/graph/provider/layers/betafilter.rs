@@ -20,11 +20,12 @@ use diskann::{
     error::StandardError,
     graph::{
         SearchOutputBuffer,
+        compat::{DataProvider, SearchStrategy},
         ext::labeled::QueryLabelProvider,
-        glue::{self, SearchPostProcessStep, SearchStrategy},
+        glue::{self, SearchPostProcessStep},
     },
     neighbor::Neighbor,
-    provider::{DataProvider, HasId},
+    provider::HasId,
     utils::VectorId,
 };
 
@@ -64,7 +65,7 @@ impl<Strategy, I> BetaFilter<Strategy, I> {
 pub struct Unwrap;
 
 /// Delegate post-processing to the inner strategy's post-processing routine.
-impl<A, T, O> SearchPostProcessStep<BetaAccessor<A>, T, O> for Unwrap
+impl<A, O> SearchPostProcessStep<BetaAccessor<A>, O> for Unwrap
 where
     A: HasId,
 {
@@ -79,16 +80,15 @@ where
         &self,
         next: &Next,
         accessor: &mut BetaAccessor<A>,
-        query: T,
         candidates: I,
         output: &mut B,
     ) -> impl Future<Output = Result<usize, Next::Error>> + Send
     where
         I: Iterator<Item = Neighbor<A::Id>> + Send,
         B: SearchOutputBuffer<O> + Send + ?Sized,
-        Next: glue::SearchPostProcess<Self::NextAccessor, T, O>,
+        Next: glue::SearchPostProcess<Self::NextAccessor, O>,
     {
-        next.post_process(&mut accessor.inner, query, candidates, output)
+        next.post_process(&mut accessor.inner, candidates, output)
     }
 }
 
@@ -131,18 +131,15 @@ where
 
 /// [`glue::DefaultPostProcessor`] delegation for [`BetaFilter`]. The processor is composed by
 /// wrapping the inner strategy's processor with [`Unwrap`] via [`glue::Pipeline`].
-impl<'a, Provider, Strategy, T, I, O> glue::DefaultPostProcessor<'a, Provider, T, O>
-    for BetaFilter<Strategy, I>
+impl<A, O> glue::DefaultPostProcessor<O> for BetaAccessor<A>
 where
-    I: VectorId,
+    A: glue::DefaultPostProcessor<O>,
     O: Send,
-    Provider: DataProvider<InternalId = I>,
-    Strategy: glue::DefaultPostProcessor<'a, Provider, T, O>,
 {
-    type Processor = glue::Pipeline<Unwrap, Strategy::Processor>;
+    type Processor = glue::Pipeline<Unwrap, A::Processor>;
 
-    fn default_post_processor(&'a self) -> Self::Processor {
-        glue::Pipeline::new(Unwrap, self.strategy.default_post_processor())
+    fn default_post_processor(&self) -> Self::Processor {
+        glue::Pipeline::new(Unwrap, self.inner.default_post_processor())
     }
 }
 
@@ -163,6 +160,14 @@ impl<Inner> BetaAccessor<Inner>
 where
     Inner: HasId,
 {
+    /// Construct a new [`BetaAccessor`].
+    pub fn new(inner: Inner, labels: Arc<dyn QueryLabelProvider<Inner::Id>>, beta: f32) -> Self {
+        Self {
+            inner,
+            filter: Filter { labels, beta },
+        }
+    }
+
     /// Return a mutable reference to the inner accessor.
     pub fn inner(&mut self) -> &mut Inner {
         &mut self.inner
@@ -284,11 +289,8 @@ mod tests {
         // +---------------
         //
         let provider = test_provider::Provider::grid(Grid::Two, 4).unwrap();
-        let context = test_provider::Context::new();
 
         let beta: f32 = 0.25;
-
-        let strategy = BetaFilter::new(test_provider::Strategy::new(), Arc::new(ThreeFilter), beta);
 
         let start_point_ids: Vec<_> = provider.start_point_ids().collect();
         assert_eq!(
@@ -306,9 +308,11 @@ mod tests {
         let mut visited = HashSet::new();
         let mut buf = Vec::new();
 
-        let mut accessor = strategy
-            .search_accessor(&provider, &context, &[0.0, 0.0])
-            .unwrap();
+        let mut accessor = BetaAccessor::new(
+            provider.search_accessor(&[0.0, 0.0]).unwrap(),
+            Arc::new(ThreeFilter),
+            beta,
+        );
 
         assert_eq!(
             &*accessor.starting_points().await.unwrap(),
