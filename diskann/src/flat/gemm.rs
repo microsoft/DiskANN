@@ -3,27 +3,56 @@
  * Licensed under the MIT license.
  */
 
-//! Dense FP32 inner-product search using blocked GEMM and an explicit thread pool.
+//! Tiled flat search with common filtering, selection, and metric semantics.
 //!
-//! Database partitions are scanned in parallel, with one collector per query per
-//! partition. Only a query tile and database tile's scores are materialized at a time.
-//! The scalar visitor API remains appropriate for streaming or filtered providers.
+//! Dense inputs use an explicit pool. Streaming sources can overlap asynchronous
+//! reads with bounded CPU work and reuse the ordinary search post-processor.
+//!
+//! # Example
+//! ```rust
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! use diskann::flat::gemm::{self, AllCandidates, BatchOptions, Dataset, Selection};
+//! use diskann_utils::views::rowmajor::{self, Matrix};
+//! use diskann_vector::distance::Metric;
+//! use std::num::NonZeroUsize;
+//!
+//! let data = rowmajor::Owned::from_element(8, 4, 1.0f32);
+//! let queries = rowmajor::Owned::from_element(2, 4, 1.0f32);
+//! let ids = [80u64, 10, 70, 20, 60, 30, 50, 40];
+//! let database = Dataset::new(data.as_view(), &ids)?
+//!     .select(Selection::Rows(&[3, 0, 7]))?;
+//! let pool = rayon::ThreadPoolBuilder::new().num_threads(2).build()?;
+//! let results = gemm::knn_search(database, queries.as_view(),
+//!     NonZeroUsize::new(2).unwrap(), Metric::Cosine, &AllCandidates,
+//!     &BatchOptions::default(), &pool)?;
+//! assert_eq!(*results[0].neighbors[0].id(), 40); // later candidate wins a tie
+//! # Ok(())
+//! # }
+//! ```
 
-use std::{cmp::Ordering, num::NonZeroUsize, ops::Range};
+use std::{cmp::Ordering, num::NonZeroUsize};
 
-use diskann_linalg::{Transpose, sgemm};
 use diskann_utils::views::rowmajor::{self, Matrix};
+use diskann_vector::distance::Metric;
 use rayon::ThreadPool;
 
-use super::{SearchOptions, topk::BatchCollector};
-use crate::{ANNError, ANNResult, neighbor::Neighbor};
+use super::SearchOptions;
+use crate::{ANNError, ANNResult, neighbor::Neighbor, utils::VectorId};
 
-/// Tile sizes bound score scratch space per worker to the product of the two
-/// block sizes, in floats, independent of the corpus size.
+mod input;
+mod kernel;
+mod stream;
+
+pub use input::{AllCandidates, CandidateFilter, Dataset, GemmElement, Selection};
+pub use stream::{
+    BatchSource, BlockResult, MemorySource, OwnedBlock, knn_search_batch,
+    knn_search_batch_with_contexts,
+};
+
+/// Bounds score scratch space per worker independently of corpus size.
 #[derive(Debug, Clone, Copy)]
 pub struct GemmOptions {
-    /// Maximum workers used by one request, capped by the pool size and database
-    /// row count. Defaults to one; batching still uses GEMM with this limit.
+    /// Per-request worker limit, capped by pool size. Defaults to one.
     pub max_workers: NonZeroUsize,
     pub query_block_size: NonZeroUsize,
     pub database_block_size: NonZeroUsize,
@@ -31,10 +60,7 @@ pub struct GemmOptions {
 }
 
 impl Default for GemmOptions {
-    #[expect(
-        clippy::unwrap_used,
-        reason = "the default block sizes are nonzero literals"
-    )]
+    #[expect(clippy::unwrap_used, reason = "nonzero literals")]
     fn default() -> Self {
         Self {
             max_workers: NonZeroUsize::MIN,
@@ -54,26 +80,142 @@ impl GemmOptions {
     }
 }
 
-/// Exhaustively search each query using negative inner product (smaller is better).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Engine {
+    /// Select per tile, including the cost of packing and the filter density.
+    #[default]
+    Auto,
+    /// Use the original VectorRepr distance kernel on eligible pairs only.
+    Direct,
+    /// Use GEMM; exceptional or ill-conditioned scores may still be recomputed.
+    Gemm,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct BatchOptions {
+    pub engine: Engine,
+    pub gemm: GemmOptions,
+    /// Maximum rows per async read. Independent of compute tiles to amortize
+    /// scheduling; at most two such blocks are retained by the streaming driver.
+    pub read_block_size: NonZeroUsize,
+    /// Minimum query-count times dimension for Auto. Packing doubles this threshold.
+    pub gemm_threshold: usize,
+    /// Minimum eligible fraction of a tile for Auto, in [0, 1].
+    pub min_gemm_density: f32,
+}
+
+impl Default for BatchOptions {
+    #[expect(clippy::unwrap_used, reason = "nonzero literal")]
+    fn default() -> Self {
+        Self {
+            engine: Engine::Auto,
+            gemm: GemmOptions::default(),
+            read_block_size: NonZeroUsize::new(4096).unwrap(),
+            gemm_threshold: 4096,
+            min_gemm_density: 0.25,
+        }
+    }
+}
+
+impl BatchOptions {
+    #[track_caller]
+    fn validate(&self) -> ANNResult<()> {
+        if !(0.0..=1.0).contains(&self.min_gemm_density) {
+            return Err(ANNError::message("minimum GEMM density must be in [0, 1]"));
+        }
+        Ok(())
+    }
+
+    fn use_gemm<T: GemmElement>(&self, nq: usize, nb: usize, dim: usize, eligible: usize) -> bool {
+        if eligible == 0 {
+            return false;
+        }
+        match self.engine {
+            Engine::Direct => false,
+            Engine::Gemm => true,
+            Engine::Auto => {
+                let threshold =
+                    self.gemm_threshold
+                        .saturating_mul(if T::NEEDS_PACKING { 2 } else { 1 });
+                nb >= 32
+                    && nq.saturating_mul(dim) >= threshold
+                    && eligible as f64 >= self.min_gemm_density as f64 * nq as f64 * nb as f64
+            }
+        }
+    }
+}
+
+/// Per-query counts. No narrowing to the legacy u32 SearchStats is performed.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct BatchStats {
+    /// Evaluated vector pairs, including masked GEMM pairs and direct recomputations.
+    pub cmps: u64,
+    /// Candidates admitted by the filter, including ones whose score is NaN.
+    pub eligible_candidates: u64,
+    pub result_count: u64,
+    pub gemm_tiles: u64,
+    pub direct_tiles: u64,
+    pub recomputations: u64,
+}
+
+impl BatchStats {
+    #[track_caller]
+    fn accumulate(&mut self, other: Self) -> ANNResult<()> {
+        macro_rules! add {
+            ($($field:ident),*) => { $(self.$field = self.$field.checked_add(other.$field)
+                .ok_or_else(|| ANNError::message("flat search statistics overflow"))?;)* };
+        }
+        add!(
+            cmps,
+            eligible_candidates,
+            gemm_tiles,
+            direct_tiles,
+            recomputations
+        );
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub struct SearchResult<I> {
+    pub neighbors: Vec<Neighbor<I>>,
+    pub stats: BatchStats,
+}
+
+/// Search selected rows using the same smaller-is-better metrics as the visitor.
+/// Filtering precedes Top-k; equal scores prefer later selection positions.
 ///
-/// IDs are database row numbers. Results follow query order, with at most k
-/// neighbors per query sorted by distance, then by descending row ID for ties.
-/// NaN scores are ignored. Empty databases return an empty result for each query;
-/// zero-dimensional vectors all have distance -0.0.
-///
-/// All work runs in the supplied pool, subject to the per-request worker limit.
-/// Individual GEMMs are sequential to avoid nested thread pools.
-/// Local top-k results are merged only after every
-/// partition completes. Memory includes the final results, per-worker tile scores
-/// and per-worker top-k collectors. No full query-by-database matrix is allocated.
-///
-/// GEMM may accumulate products in a different order than scalar distance kernels.
-/// Distances, and rankings near a floating-point tie, can consequently differ.
+/// Norms may be cached on Dataset for L2/cosine. GEMM changes accumulation order:
+/// scores and rankings near a floating-point tie need not be bit-identical to Direct.
+/// Direct preserves the original type's kernel, including integer cosine behavior.
 ///
 /// # Errors
+/// Returns an error for mismatched dimensions, invalid options, size/statistics
+/// overflow, or a failed GEMM. All work executes in the supplied pool.
+#[track_caller]
+pub fn knn_search<T, I, F>(
+    data: Dataset<'_, T, I>,
+    queries: rowmajor::Ref<'_, T>,
+    k: NonZeroUsize,
+    metric: Metric,
+    filter: &F,
+    options: &BatchOptions,
+    pool: &ThreadPool,
+) -> ANNResult<Vec<SearchResult<I>>>
+where
+    T: GemmElement,
+    I: VectorId,
+    F: CandidateFilter<I> + ?Sized,
+{
+    kernel::search(data, queries, k, metric, filter, options, pool, 0)
+        .map(|results| results.into_iter().map(Partial::finish).collect())
+}
+
+/// Compatibility entry point: dense FP32 negative inner product and u32 row IDs.
 ///
-/// Returns an error for mismatched dimensions, more database rows than fit in a
-/// u32, or overflowing scratch dimensions. GEMM errors are propagated.
+/// # Errors
+/// Returns an error for mismatched dimensions, row IDs exceeding u32, invalid
+/// scratch sizes, or a failed GEMM. The worker limit defaults to one.
 #[track_caller]
 pub fn knn_inner_product(
     data: rowmajor::Ref<'_, f32>,
@@ -82,77 +224,69 @@ pub fn knn_inner_product(
     options: &GemmOptions,
     pool: &ThreadPool,
 ) -> ANNResult<Vec<Vec<Neighbor<u32>>>> {
-    if data.ncols() != queries.ncols() {
-        return Err(ANNError::message("database and query dimensions differ"));
-    }
     if data.nrows() > u32::MAX as usize {
         return Err(ANNError::message("database row IDs must fit in u32"));
     }
-    let Some(rows) = NonZeroUsize::new(data.nrows()) else {
-        return Ok((0..queries.nrows()).map(|_| Vec::new()).collect());
-    };
-    if queries.nrows() == 0 {
-        return Ok(Vec::new());
+    knn_search(
+        Dataset::sequential(data),
+        queries,
+        k,
+        Metric::InnerProduct,
+        &AllCandidates,
+        &BatchOptions {
+            engine: Engine::Gemm,
+            gemm: *options,
+            ..Default::default()
+        },
+        pool,
+    )
+    .map(|results| results.into_iter().map(|r| r.neighbors).collect())
+}
+
+#[derive(Debug)]
+struct Partial<I> {
+    // Ordinals survive partitioning and streaming. IDs are deliberately not tie keys.
+    neighbors: Vec<Neighbor<(usize, I)>>,
+    stats: BatchStats,
+}
+
+impl<I: Copy> Partial<I> {
+    fn empty() -> Self {
+        Self {
+            neighbors: Vec::new(),
+            stats: BatchStats::default(),
+        }
     }
 
-    // Clamp before allocating so k larger than the database does not overallocate.
-    let k = k.min(rows);
-    let workers = options.worker_count(pool, rows);
-    scratch_len(
-        options.query_block_size.get().min(queries.nrows()),
-        options
-            .database_block_size
-            .get()
-            .min(data.nrows().div_ceil(workers)),
-    )?;
-    let mut output = Vec::with_capacity(queries.nrows());
-    for q0 in (0..queries.nrows()).step_by(options.query_block_size.get()) {
-        let nq = options.query_block_size.get().min(queries.nrows() - q0);
-        let dim = data.ncols();
-        let query_tile = &queries.as_slice()[q0 * dim..(q0 + nq) * dim];
-        if workers == 1 {
-            // A single partition already contains the sorted global top-k.
-            output.extend(
-                pool.install(|| scan_partition(data, query_tile, nq, 0..data.nrows(), k, options))?,
-            );
-            continue;
+    fn merge(&mut self, other: Self, k: usize) -> ANNResult<()> {
+        self.stats.accumulate(other.stats)?;
+        self.neighbors.extend(other.neighbors);
+        if self.neighbors.len() > k {
+            self.neighbors.select_nth_unstable_by(k - 1, compare);
+            self.neighbors.truncate(k);
         }
-        let mut partials: Vec<ANNResult<Vec<Vec<Neighbor<u32>>>>> =
-            (0..workers).map(|_| Ok(Vec::new())).collect();
-        pool.scope(|scope| {
-            for (worker, result) in partials.iter_mut().enumerate() {
-                let begin = partition_start(data.nrows(), workers, worker);
-                let end = partition_start(data.nrows(), workers, worker + 1);
-                scope.spawn(move |_| {
-                    *result = scan_partition(data, query_tile, nq, begin..end, k, options);
-                });
-            }
-        });
-
-        let mut merged: Vec<Vec<Neighbor<u32>>> = (0..nq).map(|_| Vec::new()).collect();
-        for result in partials {
-            for (dst, candidates) in merged.iter_mut().zip(result?) {
-                dst.extend(candidates);
-            }
-        }
-        // Every global top-k candidate belongs to its partition's local top-k.
-        // Global row IDs recover the scan-order tie rule regardless of task order.
-        for neighbors in &mut merged {
-            let compare = |a: &Neighbor<u32>, b: &Neighbor<u32>| {
-                a.distance()
-                    .partial_cmp(b.distance())
-                    .unwrap_or(Ordering::Equal)
-                    .then_with(|| b.id().cmp(a.id()))
-            };
-            if neighbors.len() > k.get() {
-                neighbors.select_nth_unstable_by(k.get() - 1, compare);
-                neighbors.truncate(k.get());
-            }
-            neighbors.sort_unstable_by(compare);
-        }
-        output.extend(merged);
+        Ok(())
     }
-    Ok(output)
+
+    fn finish(mut self) -> SearchResult<I> {
+        self.neighbors.sort_unstable_by(compare);
+        self.stats.result_count = self.neighbors.len() as u64;
+        SearchResult {
+            neighbors: self
+                .neighbors
+                .into_iter()
+                .map(|n| Neighbor::new(n.id().1, *n.distance()))
+                .collect(),
+            stats: self.stats,
+        }
+    }
+}
+
+fn compare<I>(a: &Neighbor<(usize, I)>, b: &Neighbor<(usize, I)>) -> Ordering {
+    a.distance()
+        .partial_cmp(b.distance())
+        .unwrap_or(Ordering::Equal)
+        .then_with(|| b.id().0.cmp(&a.id().0))
 }
 
 fn partition_start(rows: usize, workers: usize, worker: usize) -> usize {
@@ -161,60 +295,23 @@ fn partition_start(rows: usize, workers: usize, worker: usize) -> usize {
 
 #[track_caller]
 fn scratch_len(queries: usize, vectors: usize) -> ANNResult<usize> {
-    queries
+    let len = queries
         .checked_mul(vectors)
-        .filter(|&len| len <= isize::MAX as usize / size_of::<f32>())
-        .ok_or_else(|| ANNError::message("GEMM scratch dimensions overflow"))
+        .ok_or_else(|| ANNError::message("GEMM scratch dimensions overflow"))?;
+    check_len::<f32>(len)?;
+    Ok(len)
 }
 
-fn scan_partition(
-    data: rowmajor::Ref<'_, f32>,
-    queries: &[f32],
-    nq: usize,
-    range: Range<usize>,
-    k: NonZeroUsize,
-    options: &GemmOptions,
-) -> ANNResult<Vec<Vec<Neighbor<u32>>>> {
-    let Some(rows) = NonZeroUsize::new(range.len()) else {
-        return Ok((0..nq).map(|_| Vec::new()).collect());
-    };
-    let block = options.database_block_size.get().min(range.len());
-    let mut scores = vec![0.0; scratch_len(nq, block)?];
-    let mut ids = vec![0; block];
-    let local_k = k.min(rows);
-    let mut collectors: Vec<_> = (0..nq)
-        .map(|_| BatchCollector::new(local_k, options.collection.reservoir_min_k))
-        .collect();
-    let dim = data.ncols();
-    for start in range.clone().step_by(block) {
-        let len = block.min(range.end - start);
-        let scores = &mut scores[..nq * len];
-        if dim == 0 {
-            scores.fill(-0.0);
-        } else {
-            sgemm(
-                Transpose::None,
-                Transpose::Ordinary,
-                nq,
-                len,
-                dim,
-                -1.0,
-                queries,
-                &data.as_slice()[start * dim..(start + len) * dim],
-                None,
-                scores,
-            )
-            .map_err(|error| ANNError::new(error).context("flat inner-product GEMM"))?;
-        }
-        for (offset, id) in ids[..len].iter_mut().enumerate() {
-            *id = (start + offset) as u32;
-        }
-        for (collector, distances) in collectors.iter_mut().zip(scores.chunks_exact(len)) {
-            collector.add_batch(&ids[..len], distances);
-        }
+#[track_caller]
+fn check_len<T>(len: usize) -> ANNResult<()> {
+    if len > isize::MAX as usize / size_of::<T>().max(1) {
+        return Err(ANNError::message("GEMM scratch dimensions overflow"));
     }
-    Ok(collectors.into_iter().map(BatchCollector::finish).collect())
+    Ok(())
 }
+
+#[cfg(test)]
+mod batch_tests;
 
 #[cfg(test)]
 mod tests {
