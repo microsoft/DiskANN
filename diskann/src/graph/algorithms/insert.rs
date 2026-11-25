@@ -130,6 +130,44 @@ where
         Ok(())
     }
 
+    #[doc(hidden)]
+    pub async fn prune_node<A>(
+        &mut self,
+        accessor: &mut A,
+        id: I,
+        config: &Config,
+    ) -> ANNResult<()>
+    where
+        A: PruneAccessor<Id = I>,
+    {
+        let mut neighbors = AdjacencyList::new();
+        accessor
+            .neighbors()
+            .borrow_mut()
+            .get_neighbors(id, neighbors.as_empty())
+            .await?;
+
+        if neighbors.len() <= config.pruned_degree().get() {
+            return Ok(());
+        }
+
+        let options = prune::Options {
+            force_saturate: false,
+        };
+
+        robust_prune_list(accessor, id, &neighbors, &mut self.prune, options, config)
+            .await
+            .escalate("targeted prune does not support transient errors")?;
+
+        accessor
+            .neighbors()
+            .borrow_mut()
+            .set_neighbors(id, self.candidates())
+            .await?;
+
+        Ok(())
+    }
+
     /// Return the candidates discovered during search.
     ///
     /// This is only valid after a successful run of [`Self::find_insert_candidates`].

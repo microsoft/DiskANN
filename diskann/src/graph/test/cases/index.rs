@@ -66,51 +66,46 @@ async fn test_count_unreachable_isolated_nodes() {
     assert_eq!(count, 1);
 }
 
-// #[tokio::test(flavor = "current_thread")]
-// async fn test_get_degree_stats() {
-//     let adjacency_list = generate_2d_square_adjacency_list();
-//     let index = setup_2d_square(adjacency_list, 4);
-//     let mut accessor = index.provider().neighbors();
-//     let stats = index
-//         .get_degree_stats(&mut accessor, index.provider().non_start_points_ids())
-//         .await
-//         .unwrap();
-//     let expected = DegreeStats {
-//         max_degree: 2,
-//         avg_degree: 2.0,
-//         min_degree: 2,
-//         cnt_less_than_two: 0,
-//     };
-//     assert_eq_verbose!(expected, stats);
-// }
-//
-// #[tokio::test(flavor = "current_thread")]
-// async fn test_prune_range() {
-//     let adjacency_list = generate_2d_square_adjacency_list();
-//     let index = setup_2d_square(adjacency_list, 1);
-//     let strat = test::index::Options::new();
-//
-//     index.prune_range(&strat, &ctx, 0..4).await.unwrap();
-//
-//     let mut accessor = index.provider().neighbors();
-//     let mut list = AdjacencyList::new();
-//     for node in 0u32..4 {
-//         accessor.get_neighbors(node, &mut list).await.unwrap();
-//         assert!(
-//             list.len() <= 1,
-//             "node {node} should have degree <= 1 after prune, got {}",
-//             list.len()
-//         );
-//     }
-//
-//     // Start node (4) is outside the pruned range — should be unchanged.
-//     accessor.get_neighbors(4, &mut list).await.unwrap();
-//     assert_eq!(
-//         list.len(),
-//         4,
-//         "start node should be untouched by prune_range(0..4)"
-//     );
-// }
+fn test_get_degree_stats() {
+    let adjacency_list = generate_2d_square_adjacency_list();
+    let index = setup_2d_square(adjacency_list, 4);
+    let stats = index.degree_stats();
+
+    assert_eq!(stats.maximum(), 2);
+    assert_eq!(stats.average(), 2.0);
+    assert_eq!(stats.minimum(), 2);
+    assert_eq!(stats.count_less_than_two(), 0);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn test_prune_range() {
+    let adjacency_list = generate_2d_square_adjacency_list();
+    let index = setup_2d_square(adjacency_list, 1);
+    let options = test::index::Options::new();
+
+    for i in 0..4 {
+        index.prune_id(i).await.unwrap();
+    }
+
+    let mut accessor = index.neighbors();
+    let mut list = AdjacencyList::new();
+    for node in 0u32..4 {
+        accessor.get_neighbors(node, list.as_empty()).await.unwrap();
+        assert!(
+            list.len() <= 1,
+            "node {node} should have degree <= 1 after prune, got {}",
+            list.len()
+        );
+    }
+
+    // Start node (4) is outside the pruned range — should be unchanged.
+    accessor.get_neighbors(4, list.as_empty()).await.unwrap();
+    assert_eq!(
+        list.len(),
+        4,
+        "start node should be untouched by prune_range(0..4)"
+    );
+}
 
 /// Multiple start points should union their reachable sets.
 #[tokio::test(flavor = "current_thread")]

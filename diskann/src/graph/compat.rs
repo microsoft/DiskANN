@@ -567,6 +567,35 @@ impl<DP> DiskANNIndex<DP> {
         }
     }
 
+    pub fn prune_range<S, I>(
+        &self,
+        strategy: &S,
+        context: &DP::Context,
+        ids: I,
+    ) -> impl SendFuture<ANNResult<()>>
+    where
+        DP: DataProvider,
+        S: PruneStrategy<DP>,
+        I: IntoIterator<Item = DP::InternalId, IntoIter: Send> + Send,
+    {
+        async move {
+            let mut accessor = strategy
+                .prune_accessor(
+                    self.provider(),
+                    context,
+                    self.config.max_occlusion_size().get(),
+                )
+                .into_ann_result()?;
+            let mut workspace = algorithms::insert::Workspace::new();
+            for id in ids {
+                workspace
+                    .prune_node(&mut accessor, id, &self.config)
+                    .await?;
+            }
+            Ok(())
+        }
+    }
+
     //--------//
     // Insert //
     //--------//

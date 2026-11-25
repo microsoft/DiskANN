@@ -506,7 +506,6 @@ where
         //
         // For some quantization schemes, it could avoid compressing the vector twice.
         let internal = self.set(vector, id)?;
-
         let mut access = self.insert_access(vector)?;
         let fut =
             diskann::graph::algorithms::insert::insert(&mut access, internal, &self.index.graph);

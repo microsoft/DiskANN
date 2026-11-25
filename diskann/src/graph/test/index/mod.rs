@@ -362,6 +362,11 @@ impl Index {
         self.config.metric
     }
 
+    /// Return the current [`DegreeStats`].
+    pub fn degree_stats(&self) -> graph::stats::DegreeStats {
+        self.terms.iter().map(|ref_multi| ref_multi.value().neighbors.len()).collect()
+    }
+
     /// Return `true` is `id` is a start point. Otherwise, return `false`.
     pub(crate) fn is_start_point(&self, id: u32) -> bool {
         self.config.start_points.contains_key(&id)
@@ -719,6 +724,13 @@ impl Index {
         // Release our protection on the items we've inserted.
         guards.into_iter().for_each(|guard| guard.finish());
         Ok(SpawnCount(counter.value()))
+    }
+
+    pub(super) async fn prune_id(&self, id: u32) -> ANNResult<()> {
+        let mut workspace = algorithms::insert::Workspace::new();
+        let options = Options::default();
+        let mut accessor = self.prune_accessor(&options, None);
+        workspace.prune_node(&mut accessor, id, &self.config.graph).await
     }
 
     //--------//
