@@ -14,7 +14,7 @@ use diskann_utils::{future::AsyncFriendly, lazy_format};
 ///
 /// The [`crate::build::Build`] trait uses indices in a range `0..N` to refer to items
 /// for insertion. This trait provides a bridge between these indices and the actual external
-/// ID type used by a [`diskann::provider::DataProvider`].
+/// ID type used by a [`diskann::graph::compat::DataProvider`].
 pub trait ToId<T>: std::fmt::Debug + AsyncFriendly {
     /// Convert the given implicit index `i` to an external ID of type `T`.
     fn to_id(&self, i: usize) -> ANNResult<T>;

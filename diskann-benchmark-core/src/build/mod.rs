@@ -87,17 +87,18 @@
 //!
 //! ## Graph Index
 //!
-//! * [`graph::SingleInsert`] - A builder for inserting items into a [`diskann::graph::DiskANNIndex`]
-//!   using [`diskann::graph::DiskANNIndex::insert`].
+//! * [`graph::SingleInsert`] - A builder for inserting items into a [`diskann::graph::compat::DiskANNIndex`]
+//!   using [`diskann::graph::compat::DiskANNIndex::insert`].
 //!
-//! * [`graph::MultiInsert`] - A builder for inserting items into a [`diskann::graph::DiskANNIndex`]
-//!   using [`diskann::graph::DiskANNIndex::multi_insert`].
+//! * [`graph::MultiInsert`] - A builder for inserting items into a [`diskann::graph::compat::DiskANNIndex`]
+//!   using [`diskann::graph::compat::DiskANNIndex::multi_insert`].
 
 mod api;
 pub use api::{
     AsProgress, BatchResult, Build, BuildResults, Parallelism, Progress, build, build_tracked,
 };
 
+pub mod graph;
 pub mod ids;
 
 #[cfg(feature = "sync")]

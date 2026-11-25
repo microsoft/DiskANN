@@ -144,10 +144,10 @@
 //!
 //! ## Graph Index
 //!
-//! * [`graph::KNN`]: K-nearest neighbors search for [`diskann::graph::DiskANNIndex`].
-//! * [`graph::Range`]: Range search for [`diskann::graph::DiskANNIndex`].
-//! * [`graph::FilteredRange`]: Filtered range search for [`diskann::graph::DiskANNIndex`].
-//! * [`graph::MultiHop`]: Multi-hop filtered search for [`diskann::graph::DiskANNIndex`].
+//! * [`graph::KNN`]: K-nearest neighbors search for [`diskann::graph::compat::DiskANNIndex`].
+//! * [`graph::Range`]: Range search for [`diskann::graph::compat::DiskANNIndex`].
+//! * [`graph::FilteredRange`]: Filtered range search for [`diskann::graph::compat::DiskANNIndex`].
+//! * [`graph::MultiHop`]: Multi-hop filtered search for [`diskann::graph::compat::DiskANNIndex`].
 
 pub(crate) mod ids;
 pub use ids::ResultIds;
@@ -161,4 +161,4 @@ pub use api::{
 #[cfg_attr(docsrs, doc(cfg(feature = "sync")))]
 pub mod sync;
 
-// pub mod graph;
+pub mod graph;

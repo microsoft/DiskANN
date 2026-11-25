@@ -9,7 +9,7 @@
 //!
 //! The purpose of this crate is to create abstractions and implementations for benchmarking
 //! DiskANN vector indexing operations. We try to facilitate infrastructure that can be
-//! shared across a range of [`diskann::provider::DataProvider`]s with stable APIs to enable
+//! shared across a range of [`diskann::graph::compat::DataProvider`]s with stable APIs to enable
 //!
 //! * A tight benchmarking loop for developers performing performance optimization.
 //! * Creating standalone binaries for CI benchmarking jobs.
@@ -18,16 +18,16 @@
 //! # Algorithms
 //!
 //! - [`build`]: Tools for running parallelized index builds.
-//!   - [`build::graph`]: Built-in utilities for working with [`diskann::graph::DiskANNIndex`].
+//!   - [`build::graph`]: Built-in utilities for working with [`diskann::graph::compat::DiskANNIndex`].
 //!
 //! - [`search`]: Tools for running parallelized search operations.
-//!   - [`search::graph`]: Built-in utilities for working with [`diskann::graph::DiskANNIndex`].
+//!   - [`search::graph`]: Built-in utilities for working with [`diskann::graph::compat::DiskANNIndex`].
 //!
 //! - [`streaming`]: Tools for running streaming workloads consisting of inserts, deletes,
 //!   replaces, searches, etc.
 //!   - [`streaming::executors`]: Built-in [`streaming::Executor`]s for dynamic operations.
 //!     - [`streaming::executors::bigann`]: BigANN style runbook support.
-//!   - [`streaming::graph`]: Built-in utilities for working with [`diskann::graph::DiskANNIndex`].
+//!   - [`streaming::graph`]: Built-in utilities for working with [`diskann::graph::compat::DiskANNIndex`].
 //!
 //! # Tools
 //!

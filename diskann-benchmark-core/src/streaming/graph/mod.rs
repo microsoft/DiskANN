@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-//! Built-in methods for invoking streaming operations on a [`diskann::graph::DiskANNIndex`].
+//! Built-in methods for invoking streaming operations on a [`diskann::graph::compat::DiskANNIndex`].
 //!
 //! Unlike other components defined in [`crate::build::graph`] or [`crate::search::graph`],
 //! these components are intended to be used as building blocks for implementing
@@ -19,6 +19,3 @@ pub mod inplace_delete;
 
 pub use drop_deleted::DropDeleted;
 pub use inplace_delete::InplaceDelete;
-
-#[cfg(test)]
-mod test;

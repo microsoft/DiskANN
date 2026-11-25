@@ -7,7 +7,7 @@ use std::{fmt::Debug, sync::Arc};
 
 use thiserror::Error;
 
-/// A dynamic strategy (e.g. `diskann::graph::glue::SearchStrategy`) manager for built-in
+/// A dynamic strategy (e.g. `diskann::graph::compat::SearchStrategy`) manager for built-in
 /// searcher such as [`super::KNN`], [`super::Range`], and [`super::MultiHop`].
 ///
 /// This provides an efficient means for either broadcasting a single strategy to all

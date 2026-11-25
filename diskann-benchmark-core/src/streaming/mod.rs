@@ -27,10 +27,9 @@
 //!
 //! ## Built-in Utilities
 //!
-//! - [`graph`]: Tools for working with [`diskann::graph::DiskANNIndex`].
+//! - [`graph`]: Tools for working with [`diskann::graph::compat::DiskANNIndex`].
 //!   - [`graph::InplaceDelete`]: An implementation of [`crate::build::Build`] for invoking
 //!     the inplace delete method. This is meant to be used in a higher-level [`Stream`] implementation.
-//!
 //!   - [`graph::DropDeleted`]: A tool for cleaning up deleted neighbors after deletions.
 //!     Like [`graph::InplaceDelete`], this is a building block for [`Stream`] implementations.
 
@@ -38,4 +37,4 @@ mod api;
 pub use api::{AnyStream, Arguments, Executor, Stream};
 
 pub mod executors;
-// pub mod graph;
+pub mod graph;
