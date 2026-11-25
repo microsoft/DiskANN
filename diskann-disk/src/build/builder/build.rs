@@ -152,7 +152,7 @@ where
         build_graph: impl FnOnce(RayonThreadPoolRef<'_>) -> ANNResult<()>,
     ) -> ANNResult<()> {
         let mut logger = PerfLogger::new_disk_index_build_logger();
-        let pool = create_thread_pool(self.config.shared.num_threads)?;
+        let pool = create_thread_pool(self.config.common.num_threads)?;
         self.generate_compressed_data(metadata, pool.as_ref())?;
         logger.log_checkpoint(DiskIndexBuildCheckpoint::PqConstruction);
         build_graph(pool.as_ref())?;
@@ -170,7 +170,7 @@ where
         metadata: Metadata,
         pool: RayonThreadPoolRef<'_>,
     ) -> ANNResult<()> {
-        let parameters = &self.config.shared;
+        let parameters = &self.config.common;
         let data_path = self.index_writer.get_dataset_file();
         let max_block_size = parameters.compression_chunk_vector_count;
         validate_data_generation_input(self.storage_provider, &data_path, max_block_size)?;
@@ -226,26 +226,26 @@ where
         );
         let backend = Backend::<Data::VectorDataType>::new(
             &self.build_quantization,
-            &builder.config.shared,
+            &builder.config.common,
             metadata.npoints(),
             data_path,
             &builder.index_writer.get_index_path_prefix(),
             builder.storage_provider,
         )?;
-        let runtime = create_runtime(builder.config.shared.num_threads)?;
+        let runtime = create_runtime(builder.config.common.num_threads)?;
         info!(
             "Starting index build: R={} L={} Indexing RAM budget={} T={}",
             self.graph.pruned_degree(),
             self.graph.l_build(),
             self.memory_budget.in_bytes(),
-            builder.config.shared.num_threads
+            builder.config.common.num_threads
         );
         builder.build_with(metadata, |pool| {
             runtime.block_on(async {
                 match determine_build_strategy::<Data>(metadata, self) {
                     IndexBuildStrategy::Merged => {
                         MergedVamanaIndexBuilder::<Data, _>::new(
-                            &builder.config.shared,
+                            &builder.config.common,
                             &builder.index_writer,
                             &backend,
                             builder.storage_provider,
@@ -258,10 +258,10 @@ where
                             self.graph.clone(),
                             inmem_builder::Config::new(
                                 metadata.npoints(),
-                                builder.config.shared.num_threads,
+                                builder.config.common.num_threads,
                                 self.prefetch_lookahead,
                             )?,
-                            builder.config.shared.seed,
+                            builder.config.common.seed,
                             &backend,
                             data_path,
                             &builder.index_writer.get_mem_index_file(),
@@ -294,17 +294,17 @@ where
             self.degree(),
             self.c_max(),
             self.leaf_k(),
-            builder.config.shared.num_threads
+            builder.config.common.num_threads
         );
         builder.build_with(metadata, |pool| {
             let start_id = start_point_from_medoid::<Data::VectorDataType, _>(
                 data_path,
-                builder.config.shared.seed,
+                builder.config.common.seed,
                 builder.storage_provider,
             )?
             .id();
             super::pipnn::build_inmem_index::<Data::VectorDataType, _>(
-                builder.config.shared.metric,
+                builder.config.common.metric,
                 start_id,
                 self,
                 data_path,

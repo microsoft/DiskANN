@@ -368,7 +368,7 @@ mod disk_index_build_tests {
         use crate::{
             build::{
                 builder::{backend::BuildElement, build::DiskIndexBuilder},
-                configuration::{DiskIndexBuildConfig, SharedBuildConfig, VamanaBuildConfig},
+                configuration::{CommonBuildConfig, DiskIndexBuildConfig, VamanaBuildConfig},
             },
             data_model::AdHoc,
             storage::DiskIndexWriter,
@@ -377,7 +377,7 @@ mod disk_index_build_tests {
 
         fn check<T, P>(
             storage: &P,
-            shared: SharedBuildConfig,
+            common: CommonBuildConfig,
             vamana: VamanaBuildConfig,
             writer: DiskIndexWriter,
         ) -> ANNResult<()>
@@ -385,7 +385,7 @@ mod disk_index_build_tests {
             T: VectorRepr + BuildElement,
             P: StorageReadProvider<Reader: Send> + StorageWriteProvider + 'static,
         {
-            let config = DiskIndexBuildConfig::from_shared(shared, vamana);
+            let config = DiskIndexBuildConfig::from_common(common, vamana);
             DiskIndexBuilder::<AdHoc<T>, P>::new(storage, config, writer).build()
         }
 

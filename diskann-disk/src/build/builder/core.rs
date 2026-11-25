@@ -30,7 +30,7 @@ use tracing::info;
 use crate::{
     QuantizationType, SphericalBits,
     build::builder::{backend::Backend, build::build_inmem_index},
-    build::configuration::{SharedBuildConfig, VamanaBuildConfig},
+    build::configuration::{CommonBuildConfig, VamanaBuildConfig},
     disk_index_build_parameter::BYTES_IN_GB,
     storage::DiskIndexWriter,
     utils::instrumentation::{BuildMergedVamanaIndexCheckpoint, PerfLogger},
@@ -77,7 +77,7 @@ where
     Data: GraphDataType<VectorIdType = u32>,
     StorageProvider: StorageReadProvider + StorageWriteProvider,
 {
-    config: &'a SharedBuildConfig,
+    config: &'a CommonBuildConfig,
     index_writer: &'a DiskIndexWriter,
     backend: &'a Backend<Data::VectorDataType>,
     storage_provider: &'a StorageProvider,
@@ -91,7 +91,7 @@ where
     StorageProvider: StorageReadProvider<Reader: Send> + StorageWriteProvider + 'static,
 {
     pub(super) fn new(
-        config: &'a SharedBuildConfig,
+        config: &'a CommonBuildConfig,
         index_writer: &'a DiskIndexWriter,
         backend: &'a Backend<Data::VectorDataType>,
         storage_provider: &'a StorageProvider,

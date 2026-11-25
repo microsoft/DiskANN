@@ -14,11 +14,11 @@ use super::{
     DEFAULT_DATA_COMPRESSION_CHUNK_VECTOR_COUNT, MemoryBudget, NumPQChunks, QuantizationType,
 };
 
-/// Build policies shared across graph construction algorithms.
+/// Build policies common to all graph construction algorithms.
 ///
 /// Dataset shape is read from the input file.
 #[derive(Clone, Copy, Debug)]
-pub struct SharedBuildConfig {
+pub struct CommonBuildConfig {
     /// Dataset metric.
     pub metric: Metric,
     /// Worker count; zero selects the system default.
@@ -31,8 +31,8 @@ pub struct SharedBuildConfig {
     pub seed: Option<u64>,
 }
 
-impl SharedBuildConfig {
-    /// Configures shared disk-build policies with default compression batching
+impl CommonBuildConfig {
+    /// Configures common disk-build policies with default compression batching
     /// and unseeded PQ sampling.
     pub fn new(metric: Metric, num_threads: usize, search_pq_chunks: NumPQChunks) -> Self {
         Self {
@@ -57,11 +57,11 @@ impl SharedBuildConfig {
     }
 }
 
-/// Shared build policies paired with algorithm-specific graph settings `G`.
+/// Common build policies paired with algorithm-specific graph settings `G`.
 #[derive(Clone, Debug)]
 pub struct DiskIndexBuildConfig<G = VamanaBuildConfig> {
-    /// Build policies shared across graph construction algorithms.
-    pub shared: SharedBuildConfig,
+    /// Build policies common to all graph construction algorithms.
+    pub common: CommonBuildConfig,
     /// Parameters used only by the selected graph algorithm.
     pub graph: G,
 }
@@ -88,25 +88,25 @@ impl<G> DiskIndexBuildConfig<G> {
         graph: G,
     ) -> Self {
         Self {
-            shared: SharedBuildConfig::new(metric, num_threads, search_pq_chunks),
+            common: CommonBuildConfig::new(metric, num_threads, search_pq_chunks),
             graph,
         }
     }
 
-    /// Pairs an existing [`SharedBuildConfig`] with algorithm-specific graph settings.
-    pub fn from_shared(shared: SharedBuildConfig, graph: G) -> Self {
-        Self { shared, graph }
+    /// Pairs an existing [`CommonBuildConfig`] with algorithm-specific graph settings.
+    pub fn from_common(common: CommonBuildConfig, graph: G) -> Self {
+        Self { common, graph }
     }
 
     /// Seeds search-PQ training and medoid sampling; graph-specific seeds stay independent.
     pub fn with_seed(mut self, seed: u64) -> Self {
-        self.shared = self.shared.with_seed(seed);
+        self.common = self.common.with_seed(seed);
         self
     }
 
     /// Sets the number of vectors compressed per batch.
     pub fn with_data_compression_chunk_vector_count(mut self, count: usize) -> Self {
-        self.shared = self.shared.with_data_compression_chunk_vector_count(count);
+        self.common = self.common.with_data_compression_chunk_vector_count(count);
         self
     }
 }

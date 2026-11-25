@@ -29,7 +29,7 @@ use tracing::info;
 use crate::{
     QuantizationType, SphericalBits,
     build::builder::inmem_builder::{self, CreateBuilder},
-    build::configuration::SharedBuildConfig,
+    build::configuration::CommonBuildConfig,
     error::{ErrorKind, diskann_error},
 };
 
@@ -56,7 +56,7 @@ use crate::{
 pub trait BuildElement: std::fmt::Debug + Sized + Send + Sync + 'static {
     fn backend<P>(
         quantization: &QuantizationType,
-        config: &SharedBuildConfig,
+        config: &CommonBuildConfig,
         num_points: usize,
         data_path: &str,
         index_path_prefix: &str,
@@ -76,7 +76,7 @@ impl<T> Backend<T> {
     /// Construct a new [`Backend`] using [`BuildElement`].
     pub fn new<P>(
         quantization: &QuantizationType,
-        config: &SharedBuildConfig,
+        config: &CommonBuildConfig,
         num_points: usize,
         data_path: &str,
         index_path_prefix: &str,
@@ -129,7 +129,7 @@ macro_rules! full_precision {
         impl BuildElement for $T {
             fn backend<P>(
                 quantization: &QuantizationType,
-                config: &SharedBuildConfig,
+                config: &CommonBuildConfig,
                 num_points: usize,
                 data_path: &str,
                 index_path_prefix: &str,
@@ -157,7 +157,7 @@ full_precision!(f32, half::f16, u8, i8);
 
 fn full_precision<T, P>(
     quantization: &QuantizationType,
-    config: &SharedBuildConfig,
+    config: &CommonBuildConfig,
     num_points: usize,
     data_path: &str,
     index_path_prefix: &str,
@@ -192,7 +192,7 @@ where
 {
     fn backend<P>(
         quantization: &QuantizationType,
-        config: &SharedBuildConfig,
+        config: &CommonBuildConfig,
         num_points: usize,
         data_path: &str,
         index_path_prefix: &str,
@@ -285,7 +285,7 @@ impl inmem_builder::QuantizedBackend for Product {
 /// Returns `None` if `quantization` is [`QuantizationType::FP`].
 fn train_quantizer<T, StorageProvider>(
     quantization: &QuantizationType,
-    config: &SharedBuildConfig,
+    config: &CommonBuildConfig,
     num_points: usize,
     data_path: &str,
     index_path_prefix: &str,
