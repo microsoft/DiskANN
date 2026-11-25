@@ -185,63 +185,48 @@ pub(super) mod inner {
     }
 }
 
-mod sealed {
-    use std::fmt::Debug;
-
-    use diskann_utils::views::rowmajor;
-    use diskann_vector::{DistanceFunction, distance::Metric};
-
-    pub trait Element: Copy + Debug + Send + Sync + 'static {
-        type Distance: for<'a, 'b> DistanceFunction<&'a [Self], &'b [Self], f32>
-            + Debug
-            + Send
-            + Sync;
-
-        fn distance(metric: Metric, ncols: usize) -> Self::Distance;
-
-        fn gather(data: rowmajor::Ref<'_, Self>, ids: &[u32], output: rowmajor::Mut<'_, f32>);
-    }
-}
-
 /// Scalar element types supported by [`Rows`]: `f32`, [`half::f16`], `u8`, and `i8`.
 ///
-/// Sealed: non-scalar or compressed representations should implement
-/// [`Dataset`] directly with upfront layout validation.
-pub trait Element: sealed::Element {}
-
-impl<T: sealed::Element> Element for T {}
-
-/// Implement [`sealed::Element`] for a scalar type whose values convert to
-/// `f32` one by one and whose distances come from [`DistanceProvider`].
-macro_rules! plain_element {
-    ($T:ty) => {
-        impl sealed::Element for $T {
-            type Distance = Distance<$T, $T>;
-
-            fn distance(metric: Metric, ncols: usize) -> Self::Distance {
-                Self::distance_comparer(metric, Some(ncols))
-            }
-
-            fn gather(
-                data: rowmajor::Ref<'_, Self>,
-                ids: &[u32],
-                mut output: rowmajor::Mut<'_, f32>,
-            ) {
-                for (&id, destination) in ids.iter().zip(output.rows_mut()) {
-                    for (slot, &value) in destination.iter_mut().zip(data.row(id as usize)) {
-                        *slot = value.into();
-                    }
-                }
-            }
-        }
-    };
+/// Non-scalar or compressed representations should implement [`Dataset`]
+/// directly with upfront layout validation.
+pub trait Element: Copy + Debug + DistanceProvider<Self> + Send + Sync + 'static {
+    #[doc(hidden)]
+    fn gather(data: rowmajor::Ref<'_, Self>, ids: &[u32], output: rowmajor::Mut<'_, f32>);
 }
 
 // The baseline x86-64 target has SSE2 instructions that convert `u8` and `i8`
-// to `f32`, so the compiler vectorizes these loops for any target.
-plain_element!(f32);
-plain_element!(u8);
-plain_element!(i8);
+// to `f32`, so the compiler vectorizes this loop for any target.
+fn gather_into<T: Copy + Into<f32>>(
+    data: rowmajor::Ref<'_, T>,
+    ids: &[u32],
+    mut output: rowmajor::Mut<'_, f32>,
+) {
+    for (&id, destination) in ids.iter().zip(output.rows_mut()) {
+        for (slot, &value) in destination.iter_mut().zip(data.row(id as usize)) {
+            *slot = value.into();
+        }
+    }
+}
+
+impl Element for f32 {
+    fn gather(data: rowmajor::Ref<'_, Self>, ids: &[u32], mut output: rowmajor::Mut<'_, f32>) {
+        for (&id, destination) in ids.iter().zip(output.rows_mut()) {
+            destination.copy_from_slice(data.row(id as usize));
+        }
+    }
+}
+
+impl Element for u8 {
+    fn gather(data: rowmajor::Ref<'_, Self>, ids: &[u32], output: rowmajor::Mut<'_, f32>) {
+        gather_into(data, ids, output);
+    }
+}
+
+impl Element for i8 {
+    fn gather(data: rowmajor::Ref<'_, Self>, ids: &[u32], output: rowmajor::Mut<'_, f32>) {
+        gather_into(data, ids, output);
+    }
+}
 
 // `f16` conversion selects the FP16 instructions of the running CPU. The
 // baseline x86-64 target has no `f16` conversion instruction; F16C starts at
@@ -249,13 +234,7 @@ plain_element!(i8);
 // repository's `x86-64-v3` target flag, so a conversion compiled for the build
 // target would run in software, many times slower. `gather` dispatches once for
 // the whole batch, so the selection stays out of the row loop.
-impl sealed::Element for f16 {
-    type Distance = Distance<f16, f16>;
-
-    fn distance(metric: Metric, ncols: usize) -> Self::Distance {
-        Self::distance_comparer(metric, Some(ncols))
-    }
-
+impl Element for f16 {
     fn gather(data: rowmajor::Ref<'_, Self>, ids: &[u32], output: rowmajor::Mut<'_, f32>) {
         arch::dispatch3(GatherFp16, data, ids, output);
     }
@@ -288,7 +267,7 @@ where
 pub struct Rows<'a, T: Element> {
     data: rowmajor::Ref<'a, T>,
     metric: Metric,
-    distance: T::Distance,
+    distance: Distance<T, T>,
 }
 
 impl<'a, T: Element> Rows<'a, T> {
@@ -297,7 +276,7 @@ impl<'a, T: Element> Rows<'a, T> {
         Self {
             data,
             metric,
-            distance: T::distance(metric, data.ncols()),
+            distance: T::distance_comparer(metric, Some(data.ncols())),
         }
     }
 }

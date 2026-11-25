@@ -9,8 +9,6 @@
 //! in-memory index file, so the PQ and disk layout steps of the disk build do
 //! not change.
 
-use std::fmt;
-
 use diskann::{
     ANNResult,
     graph::{AdjacencyList, pipnn},
@@ -38,52 +36,69 @@ use diskann_vector::{PureDistanceFunction, distance::Metric};
 use super::inmem_builder;
 use crate::error::{ErrorKind, diskann_error};
 
-mod sealed {
-    use diskann::{
-        ANNResult,
-        graph::{AdjacencyList, pipnn},
-    };
-    use diskann_utils::views::rowmajor;
-    use diskann_vector::distance::Metric;
+/// Element types supported by the disk PiPNN builder.
+///
+/// Plain scalar types (`f32`, [`half::f16`], `u8`, `i8`) build through
+/// [`pipnn::Rows`]; [`MinMaxElement`] builds through a pre-validated
+/// [`pipnn::Dataset`].
+pub trait PipnnBuildElement: VectorRepr {
+    #[doc(hidden)]
+    fn build_graph(
+        data: rowmajor::Ref<'_, Self>,
+        metric: Metric,
+        config: &pipnn::Config,
+    ) -> ANNResult<Vec<AdjacencyList<u32>>>;
+}
 
-    pub trait PipnnBuildElement: Sized {
-        fn build_graph(
-            data: rowmajor::Ref<'_, Self>,
-            metric: Metric,
-            config: &pipnn::Config,
-        ) -> ANNResult<Vec<AdjacencyList<u32>>>;
+fn build_rows<T: pipnn::Element>(
+    data: rowmajor::Ref<'_, T>,
+    metric: Metric,
+    config: &pipnn::Config,
+) -> ANNResult<Vec<AdjacencyList<u32>>> {
+    pipnn::build_graph(&pipnn::Rows::new(data, metric), config)
+}
+
+impl PipnnBuildElement for f32 {
+    fn build_graph(
+        data: rowmajor::Ref<'_, Self>,
+        metric: Metric,
+        config: &pipnn::Config,
+    ) -> ANNResult<Vec<AdjacencyList<u32>>> {
+        build_rows(data, metric, config)
     }
 }
 
-/// Element types supported by the disk PiPNN builder.
-///
-/// Plain scalar types (`f32`, `half::f16`, `u8`, `i8`) build through
-/// [`pipnn::Rows`]; [`MinMaxElement`] builds through a pre-validated
-/// [`pipnn::Dataset`].
-pub trait PipnnBuildElement: VectorRepr + sealed::PipnnBuildElement {}
-
-impl<T> PipnnBuildElement for T where T: VectorRepr + sealed::PipnnBuildElement {}
-
-macro_rules! plain_pipnn_element {
-    ($($T:ty),+ $(,)?) => {
-        $(
-            impl sealed::PipnnBuildElement for $T {
-                fn build_graph(
-                    data: rowmajor::Ref<'_, Self>,
-                    metric: Metric,
-                    config: &pipnn::Config,
-                ) -> ANNResult<Vec<AdjacencyList<u32>>> {
-                    let rows = pipnn::Rows::new(data, metric);
-                    pipnn::build_graph(&rows, config)
-                }
-            }
-        )+
-    };
+impl PipnnBuildElement for half::f16 {
+    fn build_graph(
+        data: rowmajor::Ref<'_, Self>,
+        metric: Metric,
+        config: &pipnn::Config,
+    ) -> ANNResult<Vec<AdjacencyList<u32>>> {
+        build_rows(data, metric, config)
+    }
 }
 
-plain_pipnn_element!(f32, half::f16, u8, i8);
+impl PipnnBuildElement for u8 {
+    fn build_graph(
+        data: rowmajor::Ref<'_, Self>,
+        metric: Metric,
+        config: &pipnn::Config,
+    ) -> ANNResult<Vec<AdjacencyList<u32>>> {
+        build_rows(data, metric, config)
+    }
+}
 
-impl<const NBITS: usize> sealed::PipnnBuildElement for MinMaxElement<NBITS>
+impl PipnnBuildElement for i8 {
+    fn build_graph(
+        data: rowmajor::Ref<'_, Self>,
+        metric: Metric,
+        config: &pipnn::Config,
+    ) -> ANNResult<Vec<AdjacencyList<u32>>> {
+        build_rows(data, metric, config)
+    }
+}
+
+impl<const NBITS: usize> PipnnBuildElement for MinMaxElement<NBITS>
 where
     Self: VectorRepr,
     Unsigned: Representation<NBITS>,
@@ -108,39 +123,17 @@ where
 /// Construction validates every row's embedded [`MinMaxCompensation`] header
 /// and checks that all rows share one full dimension and canonical byte length,
 /// keeping fallible MinMax metadata decoding out of [`pipnn::Element`].
-struct MinMaxDataset<'a, const NBITS: usize>
-where
-    Unsigned: Representation<NBITS>,
-{
+#[derive(Debug)]
+struct MinMaxDataset<'a, const NBITS: usize> {
     data: rowmajor::Ref<'a, MinMaxElement<NBITS>>,
     dimensions: usize,
     canonical_bytes: usize,
     metric: Metric,
-    distance: fn(DataRef<'_, NBITS>, DataRef<'_, NBITS>) -> f32,
-}
-
-impl<const NBITS: usize> fmt::Debug for MinMaxDataset<'_, NBITS>
-where
-    Unsigned: Representation<NBITS>,
-{
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("MinMaxDataset")
-            .field("nrows", &self.data.nrows())
-            .field("dimensions", &self.dimensions)
-            .field("canonical_bytes", &self.canonical_bytes)
-            .field("metric", &self.metric)
-            .finish()
-    }
 }
 
 impl<'a, const NBITS: usize> MinMaxDataset<'a, NBITS>
 where
     Unsigned: Representation<NBITS>,
-    InnerProduct: for<'x, 'y> PureDistanceFunction<
-            BitSlice<'x, NBITS, Unsigned>,
-            BitSlice<'y, NBITS, Unsigned>,
-            diskann_quantization::distances::MathematicalResult<u32>,
-        >,
 {
     fn new(data: rowmajor::Ref<'a, MinMaxElement<NBITS>>, metric: Metric) -> ANNResult<Self> {
         let (dimensions, canonical_bytes) = match data.get_row(0) {
@@ -202,7 +195,6 @@ where
             dimensions,
             canonical_bytes,
             metric,
-            distance: minmax_distance_fn::<NBITS>(metric),
         })
     }
 
@@ -247,38 +239,14 @@ where
     }
 
     fn distance(&self, source: u32, target: u32) -> f32 {
-        (self.distance)(self.row(source), self.row(target))
-    }
-}
-
-fn evaluate_minmax<D, const NBITS: usize>(x: DataRef<'_, NBITS>, y: DataRef<'_, NBITS>) -> f32
-where
-    Unsigned: Representation<NBITS>,
-    D: for<'a, 'b> PureDistanceFunction<
-            DataRef<'a, NBITS>,
-            DataRef<'b, NBITS>,
-            diskann_quantization::distances::Result<f32>,
-        >,
-{
-    D::evaluate(x, y).expect("MinMaxDataset::new validated uniform row dimensions")
-}
-
-fn minmax_distance_fn<const NBITS: usize>(
-    metric: Metric,
-) -> fn(DataRef<'_, NBITS>, DataRef<'_, NBITS>) -> f32
-where
-    Unsigned: Representation<NBITS>,
-    InnerProduct: for<'a, 'b> PureDistanceFunction<
-            BitSlice<'a, NBITS, Unsigned>,
-            BitSlice<'b, NBITS, Unsigned>,
-            diskann_quantization::distances::MathematicalResult<u32>,
-        >,
-{
-    match metric {
-        Metric::Cosine => evaluate_minmax::<MinMaxCosine, NBITS>,
-        Metric::InnerProduct => evaluate_minmax::<MinMaxIP, NBITS>,
-        Metric::L2 => evaluate_minmax::<MinMaxL2Squared, NBITS>,
-        Metric::CosineNormalized => evaluate_minmax::<MinMaxCosineNormalized, NBITS>,
+        let (x, y) = (self.row(source), self.row(target));
+        match self.metric {
+            Metric::Cosine => MinMaxCosine::evaluate(x, y),
+            Metric::InnerProduct => MinMaxIP::evaluate(x, y),
+            Metric::L2 => MinMaxL2Squared::evaluate(x, y),
+            Metric::CosineNormalized => MinMaxCosineNormalized::evaluate(x, y),
+        }
+        .expect("MinMaxDataset::new validated uniform row dimensions")
     }
 }
 
