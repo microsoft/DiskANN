@@ -205,13 +205,8 @@ impl PartialIndex for di::index::buildonly::Index<repr::Full<f32>> {
         Ok(stats.into())
     }
 
-    fn insert<'a>(
-        &'a self,
-        vector: Slice<'a>,
-        id: u64,
-    ) -> anyhow::Result<()> {
-        let id: u32 =
-            u32::try_from(id).map_err(|_| anyhow::anyhow!("id {id} exceeds u32::MAX"))?;
+    fn insert<'a>(&'a self, vector: Slice<'a>, id: u64) -> anyhow::Result<()> {
+        let id: u32 = u32::try_from(id).map_err(|_| anyhow::anyhow!("id {id} exceeds u32::MAX"))?;
         let vector = vector.try_cast()?;
         self.write()?.insert(vector, id)?;
         Ok(())

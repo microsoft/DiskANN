@@ -93,7 +93,10 @@ where
 ///
 /// This encompasses *everything* required for `Full: repr::Insert` and can be used as
 /// a single bound.
-#[expect(private_bounds, reason = "this is a marker trait for Index functionality")]
+#[expect(
+    private_bounds,
+    reason = "this is a marker trait for Index functionality"
+)]
 pub trait FullPrecision: FullPrecisionImpl {}
 
 /// A configuration struct for [`Full`].
@@ -1100,7 +1103,10 @@ mod tests {
                     reader.read(slot).unwrap(),
                     bytemuck::must_cast_slice::<f32, u8>(start),
                 );
-                assert_eq!(repr::RepresentationImpl::is_readable(&full, slot), Some(true));
+                assert_eq!(
+                    repr::RepresentationImpl::is_readable(&full, slot),
+                    Some(true)
+                );
                 reference.insert(LogicalId(usize::MAX - i), SlotId(slot), start);
             }
         }
@@ -1130,7 +1136,11 @@ mod tests {
         metric: Metric,
         ctx: &dyn std::fmt::Display,
     ) {
-        assert_eq!(repr::RepresentationImpl::id_limit(full), TEST_LIMIT, "{ctx}");
+        assert_eq!(
+            repr::RepresentationImpl::id_limit(full),
+            TEST_LIMIT,
+            "{ctx}"
+        );
 
         let query = [10.0, -10.0];
 
@@ -1292,7 +1302,9 @@ mod tests {
                 Some(false),
             );
 
-            let err = repr::InsertImpl::set(&full, &[-2.0, 1.0]).unwrap_err().to_string();
+            let err = repr::InsertImpl::set(&full, &[-2.0, 1.0])
+                .unwrap_err()
+                .to_string();
             assert_contains!(err, "could not allocate a new slot");
 
             // `reader` gets dropped.
@@ -1500,9 +1512,18 @@ mod tests {
         // Expand Beam - both `evaluate` and `expand_beam` share the same distance computer,
         // so we can just test `evaluate`.
         {
-            let mut expand_beam =
-                <T as FullPrecisionImpl>::make_search_accessor(&full, &query, None, counters.local()).unwrap();
-            let got = expand_beam.get_expand_beam().evaluate(start_id).unwrap().unwrap();
+            let mut expand_beam = <T as FullPrecisionImpl>::make_search_accessor(
+                &full,
+                &query,
+                None,
+                counters.local(),
+            )
+            .unwrap();
+            let got = expand_beam
+                .get_expand_beam()
+                .evaluate(start_id)
+                .unwrap()
+                .unwrap();
             assert!(
                 approx_eq(expected, got),
                 "{ctx} - expected {expected}, got {got}"
@@ -1511,7 +1532,8 @@ mod tests {
 
         // Prune
         {
-            let mut prune = <T as FullPrecisionImpl>::make_prune_accessor(&full, counters.local()).unwrap();
+            let mut prune =
+                <T as FullPrecisionImpl>::make_prune_accessor(&full, counters.local()).unwrap();
             let inner = prune.get_prune();
 
             let query = inner.get(internal_query).unwrap();

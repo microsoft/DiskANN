@@ -16,10 +16,10 @@ use crate::{
     bitvector::BitVector,
     counters::{Counters, LocalCounters},
     epoch,
+    index::{accessors, algorithms},
     num::{Capacity, IdLimit, MaxDegree},
     poll::{poll, ready},
     repr,
-    index::{algorithms, accessors},
 };
 
 #[derive(Debug)]
@@ -55,6 +55,11 @@ where
         self.representation.capacity()
     }
 
+    /// Return the [`IdLimit`] of the index.
+    pub fn id_limit(&self) -> IdLimit {
+        self.representation.id_limit()
+    }
+
     /// Return the maximum number of neighbors that can be stored in the provider's graph.
     pub fn max_degree(&self) -> MaxDegree {
         self.representation.max_degree()
@@ -82,8 +87,7 @@ where
     }
 }
 
-impl<R> Index<R>
-{
+impl<R> Index<R> {
     /// Return a snapshot of the current event counters.
     #[cfg(feature = "integration-test")]
     pub fn counters(&self) -> crate::integration::counters::CounterSnapshot {
@@ -163,10 +167,7 @@ impl glue::SearchPostProcess<accessors::Search<'_>, u32> for PostProcess {
         let work = || {
             let mut count = 0;
             let mut push = |neighbor: Neighbor<u32>| -> bool {
-                if output
-                    .push(neighbor)
-                    .is_available()
-                {
+                if output.push(neighbor).is_available() {
                     count += 1;
                     true
                 } else {
@@ -289,7 +290,7 @@ mod tests {
     };
     use diskann_vector::distance::Metric;
 
-    use crate::{num::Range};
+    use crate::num::Range;
 
     /// The true tests live in the integration tests for this repo.
     ///
@@ -346,16 +347,12 @@ mod tests {
 
         // We cannot insert at index 25 because that is where we requested the start point
         // be located.
-        let err = write
-            .insert(data.row(0), start_id)
-            .unwrap_err();
+        let err = write.insert(data.row(0), start_id).unwrap_err();
 
         assert_contains!(err.to_string(), "could not allocate a new slot");
 
         // If we insert a new ID but the vector is too long - the slot should be unclaimed.
-        let err = write
-            .insert(&[10.0, 10.0, 10.0], 0)
-            .unwrap_err();
+        let err = write.insert(&[10.0, 10.0, 10.0], 0).unwrap_err();
         assert_contains!(err.to_string(), "expected slice of length 2");
 
         for (i, data) in data.rows().enumerate() {
@@ -378,10 +375,6 @@ mod tests {
         assert_eq!(neighbors[3].as_tuple(), (6, 2.0));
 
         // We can't insert an existing ID.
-        assert!(
-            write
-                .insert(&[10.0, 10.0], 1)
-                .is_err()
-        );
+        assert!(write.insert(&[10.0, 10.0], 1).is_err());
     }
 }

@@ -131,12 +131,7 @@ where
     }
 
     #[doc(hidden)]
-    pub async fn prune_node<A>(
-        &mut self,
-        accessor: &mut A,
-        id: I,
-        config: &Config,
-    ) -> ANNResult<()>
+    pub async fn prune_node<A>(&mut self, accessor: &mut A, id: I, config: &Config) -> ANNResult<()>
     where
         A: PruneAccessor<Id = I>,
     {

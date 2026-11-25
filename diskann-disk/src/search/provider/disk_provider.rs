@@ -19,14 +19,14 @@ use diskann::{
     error::IntoANNResult,
     flat::{DistancesUnordered, SearchStats as FlatSearchStats, knn_search as flat_knn_search},
     graph::{
-        self, DiskANNIndex,
+        self,
         ext::labeled::{self, QueryLabelProvider},
-        glue::{self, DefaultPostProcessor, SearchPostProcess, SearchStrategy},
+        glue::{self, DefaultPostProcessor, SearchPostProcess},
         search::{AdaptiveL, InlineFilterSearch, Knn},
         search_output_buffer::{self, BufferState, IdDistanceAssociatedData},
     },
     neighbor::{self, Neighbor},
-    provider::{DataProvider, DefaultContext, HasId, NoopGuard},
+    provider::HasId,
     utils::{IntoUsize, VectorRepr},
 };
 use diskann_providers::storage::StorageReadProvider;
@@ -91,30 +91,6 @@ where
 
     /// The number of IO operations that can be done in parallel.
     search_io_limit: usize,
-}
-
-impl<Data> DataProvider for DiskProvider<Data>
-where
-    Data: GraphDataType<VectorIdType = u32>,
-{
-    type Context = DefaultContext;
-
-    type InternalId = u32;
-
-    type ExternalId = u32;
-
-    type Guard = NoopGuard<u32>;
-
-    type Error = ANNError;
-
-    /// Translate an external id to its corresponding internal id.
-    fn to_internal_id(
-        &self,
-        _context: &DefaultContext,
-        gid: &Self::ExternalId,
-    ) -> Result<Self::InternalId, Self::Error> {
-        Ok(*gid)
-    }
 }
 
 impl<Data> LoadWith<AsyncDiskLoadContext> for DiskProvider<Data>
@@ -438,7 +414,6 @@ where
 impl<Data, VP>
     SearchPostProcess<
         DiskAccessor<'_, Data, VP>,
-        &[Data::VectorDataType],
         SearchPayload<Data::AssociatedDataType, Data::VectorDataType>,
     > for RerankAndFilter<'_>
 where
@@ -449,7 +424,6 @@ where
     async fn post_process<I, B>(
         &self,
         accessor: &mut DiskAccessor<'_, Data, VP>,
-        query: &[Data::VectorDataType],
         candidates: I,
         output: &mut B,
     ) -> Result<usize, Self::Error>
@@ -488,7 +462,9 @@ where
             ensure_vertex_loaded(&mut accessor.scratch.vertex_provider, &uncached_ids)?;
             for n in &uncached_ids {
                 let v = accessor.scratch.vertex_provider.get_vector(n)?;
-                let d = provider.distance_comparer.evaluate_similarity(query, v);
+                let d = provider
+                    .distance_comparer
+                    .evaluate_similarity(accessor.query, v);
                 let a = accessor.scratch.vertex_provider.get_associated_data(n)?;
                 reranked.push(Neighbor::new((*n, *a), d));
             }
@@ -505,7 +481,6 @@ where
 impl<Data, VP>
     SearchPostProcess<
         DiskAccessor<'_, Data, VP>,
-        &[Data::VectorDataType],
         SearchPayload<Data::AssociatedDataType, Data::VectorDataType>,
     > for DeterminantDiversityAndFilter<'_>
 where
@@ -516,7 +491,6 @@ where
     async fn post_process<I, B>(
         &self,
         accessor: &mut DiskAccessor<'_, Data, VP>,
-        query: &[Data::VectorDataType],
         candidates: I,
         output: &mut B,
     ) -> Result<usize, Self::Error>
@@ -528,7 +502,7 @@ where
             + ?Sized,
     {
         let provider = accessor.provider;
-        let query_f32 = Data::VectorDataType::as_f32(query).map_err(Into::into)?;
+        let query_f32 = Data::VectorDataType::as_f32(accessor.query).map_err(Into::into)?;
 
         let candidate_ids: Vec<u32> = match self.filter {
             PostprocessStrategy::AcceptAll => candidates.map(|candidate| *candidate.id()).collect(),
@@ -553,7 +527,7 @@ where
             let vector = accessor.scratch.vertex_provider.get_vector(id)?;
             let distance = provider
                 .distance_comparer
-                .evaluate_similarity(query, vector);
+                .evaluate_similarity(accessor.query, vector);
             let vector_f32 = Data::VectorDataType::as_f32(vector).map_err(Into::into)?;
             let data = accessor.scratch.vertex_provider.get_associated_data(id)?;
 
@@ -587,7 +561,6 @@ where
 impl<Data, VP>
     SearchPostProcess<
         DiskAccessor<'_, Data, VP>,
-        &[Data::VectorDataType],
         SearchPayload<Data::AssociatedDataType, Data::VectorDataType>,
     > for DiskSearchPostProcessor<'_>
 where
@@ -598,7 +571,6 @@ where
     async fn post_process<I, B>(
         &self,
         accessor: &mut DiskAccessor<'_, Data, VP>,
-        query: &[Data::VectorDataType],
         candidates: I,
         output: &mut B,
     ) -> Result<usize, Self::Error>
@@ -611,49 +583,25 @@ where
     {
         match self {
             DiskSearchPostProcessor::RerankAndFilter(pp) => {
-                pp.post_process(accessor, query, candidates, output).await
+                pp.post_process(accessor, candidates, output).await
             }
             DiskSearchPostProcessor::DeterminantDiversity(pp) => {
-                pp.post_process(accessor, query, candidates, output).await
+                pp.post_process(accessor, candidates, output).await
             }
         }
     }
 }
 
-impl<'this, Data, ProviderFactory>
-    SearchStrategy<'this, DiskProvider<Data>, &'this [Data::VectorDataType]>
-    for DiskSearchStrategy<'this, Data, ProviderFactory>
+impl<'this, Data, VP>
+    DefaultPostProcessor<SearchPayload<Data::AssociatedDataType, Data::VectorDataType>>
+    for DiskAccessor<'this, Data, VP>
 where
     Data: GraphDataType<VectorIdType = u32>,
-    ProviderFactory: VertexProviderFactory<Data>,
-{
-    type SearchAccessor = DiskAccessor<'this, Data, ProviderFactory::VertexProviderType>;
-    type SearchAccessorError = ANNError;
-
-    fn search_accessor(
-        &'this self,
-        provider: &'this DiskProvider<Data>,
-        _context: &DefaultContext,
-        query: &'this [Data::VectorDataType],
-    ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
-        DiskAccessor::new(provider, query, self)
-    }
-}
-
-impl<'this, Data, ProviderFactory>
-    DefaultPostProcessor<
-        'this,
-        DiskProvider<Data>,
-        &'this [Data::VectorDataType],
-        SearchPayload<Data::AssociatedDataType, Data::VectorDataType>,
-    > for DiskSearchStrategy<'this, Data, ProviderFactory>
-where
-    Data: GraphDataType<VectorIdType = u32>,
-    ProviderFactory: VertexProviderFactory<Data>,
+    VP: VertexProvider<Data>,
 {
     type Processor = RerankAndFilter<'this>;
 
-    fn default_post_processor(&'this self) -> Self::Processor {
+    fn default_post_processor(&self) -> Self::Processor {
         RerankAndFilter::new(self.postprocess_filter)
     }
 }
@@ -769,6 +717,7 @@ where
     scratch: PoolOption<DiskSearchScratch<Data, VP>>,
     query: &'a [Data::VectorDataType],
     cache_indexed_vectors: bool,
+    postprocess_filter: PostprocessStrategy<'a>,
     flat_scan_filter: Option<IdFilter<'a>>,
 }
 
@@ -946,6 +895,7 @@ where
             scratch,
             query,
             cache_indexed_vectors: strategy.cache_indexed_vectors,
+            postprocess_filter: strategy.postprocess_filter,
             flat_scan_filter: None,
         })
     }
@@ -1003,7 +953,7 @@ pub struct DiskIndexSearcher<
     Data: GraphDataType<VectorIdType = u32>,
     ProviderFactory: VertexProviderFactory<Data>,
 {
-    index: DiskANNIndex<DiskProvider<Data>>,
+    provider: DiskProvider<Data>,
 
     /// The vertex provider factory is used to create the vertex provider for each search instance.
     vertex_provider_factory: ProviderFactory,
@@ -1081,16 +1031,6 @@ where
         let metadata = graph_header.metadata();
         let max_degree = graph_header.max_degree::<Data::VectorDataType>()? as u32;
 
-        let config = graph::config::Builder::new(
-            max_degree.into_usize(),
-            graph::config::MaxDegree::default_slack(),
-            1, // build-search-list-size
-            metric.into(),
-        )
-        .build()?;
-
-        debug!("Creating DiskIndexSearcher with index_config: {:?}", config);
-
         let graph_header = vertex_provider_factory.get_header()?;
         let pq_data = disk_index_reader.get_pq_data();
         let scratch_pool_args = DiskSearchScratchArgs {
@@ -1103,7 +1043,7 @@ where
         };
         let scratch_pool = Arc::new(ObjectPool::try_new(&scratch_pool_args, 0, None)?);
 
-        let disk_provider = DiskProvider::new(
+        let provider = DiskProvider::new(
             disk_index_reader,
             graph_header,
             metric,
@@ -1111,9 +1051,8 @@ where
             search_io_limit,
         )?;
 
-        let index = DiskANNIndex::new(config, disk_provider, NonZeroUsize::new(num_threads));
         Ok(Self {
-            index,
+            provider,
             vertex_provider_factory,
             scratch_pool,
         })
@@ -1149,7 +1088,7 @@ where
         vector_filter: Option<&(dyn Fn(&u32) -> bool + Send + Sync)>,
         neighbors_before_reranking: usize,
         output: &mut OB,
-    ) -> ANNResult<graph::index::SearchStats>
+    ) -> ANNResult<graph::algorithms::SearchStats>
     where
         OB: search_output_buffer::SearchOutputBuffer<
                 SearchPayload<Data::AssociatedDataType, Data::VectorDataType>,
@@ -1161,18 +1100,17 @@ where
                 "flat search list size must be greater than zero",
             )
         })?;
-        let mut visitor = DiskAccessor::new(self.index.provider(), query, strategy)?
+        let mut visitor = DiskAccessor::new(&self.provider, query, strategy)?
             .with_flat_scan_filter(vector_filter);
         let FlatSearchStats { cmps, result_count } = flat_knn_search(
             &mut visitor,
             k,
             RerankAndFilter::new(PostprocessStrategy::AcceptAll),
-            query,
             output,
         )
         .await?;
 
-        Ok(graph::index::SearchStats {
+        Ok(graph::algorithms::SearchStats {
             cmps,
             hops: 0,
             result_count,
@@ -1204,17 +1142,26 @@ where
         label_provider: &(dyn QueryLabelProvider<u32> + 'a),
         adaptive_l: Option<AdaptiveL>,
         output: &mut OB,
-    ) -> ANNResult<graph::index::SearchStats>
+    ) -> ANNResult<graph::algorithms::SearchStats>
     where
         OB: search_output_buffer::SearchOutputBuffer<
                 SearchPayload<Data::AssociatedDataType, Data::VectorDataType>,
             > + Send,
     {
-        let filtered_strategy = labeled::Filtered::new(strategy, label_provider);
+        let mut accessor = labeled::FilteredAccessor::new(
+            DiskAccessor::new(&self.provider, query, &strategy)?,
+            label_provider,
+        );
+
         let search = InlineFilterSearch::new(knn, adaptive_l);
-        self.index
-            .search(search, &filtered_strategy, &DefaultContext, query, output)
-            .await
+        let post_processor = accessor.default_post_processor();
+        graph::search::FilteredSearch::filtered_search(
+            search,
+            &mut accessor,
+            post_processor,
+            output,
+        )
+        .await
     }
 
     /// Perform a search on the disk index.
@@ -1409,15 +1356,16 @@ where
                 );
                 let knn_search = Knn::new(l, beam_width)
                     .map_err(|e| diskann_error!(ErrorKind::IndexError, e))?;
-                self.index
-                    .search(
-                        knn_search,
-                        &strategy,
-                        &DefaultContext,
-                        query,
-                        &mut result_output_buffer,
-                    )
-                    .await?
+
+                let mut accessor = DiskAccessor::new(&self.provider, query, &strategy)?;
+                let post_process = accessor.default_post_processor();
+
+                graph::search::Search::search(
+                    knn_search,
+                    &mut accessor,
+                    post_process,
+                    &mut result_output_buffer,
+                ).await?
             }
             SearchMode::InlineFilter { filter, adaptive_l } => {
                 // Strategy is passed by value into `filter_search` so that the
@@ -1449,19 +1397,17 @@ where
                 let strategy =
                     self.search_strategy(&io_tracker, postprocess_config, cache_indexed_vectors);
                 let knn_search = Knn::new(l, beam_width)?;
+                let mut accessor = DiskAccessor::new(&self.provider, query, &strategy)?;
                 let processor = DiskSearchPostProcessor::DeterminantDiversity(
                     DeterminantDiversityAndFilter::new(postprocess_config, *params),
                 );
-                self.index
-                    .search_with(
-                        knn_search,
-                        &strategy,
-                        processor,
-                        &DefaultContext,
-                        query,
-                        &mut result_output_buffer,
-                    )
-                    .await?
+
+                graph::search::Search::search(
+                    knn_search,
+                    &mut accessor,
+                    processor,
+                    &mut result_output_buffer,
+                ).await?
             }
         };
         query_stats.total_comparisons = stats.cmps;
@@ -2033,7 +1979,6 @@ mod disk_provider_tests {
     #[tokio::test]
     async fn test_disk_search_invalid_input() {
         let storage_provider = Arc::new(VirtualStorageProvider::new_overlay(test_data_root()));
-        let ctx = &DefaultContext;
 
         let params = CreateDiskIndexSearcherParams {
             max_thread_num: 5,
@@ -2065,25 +2010,6 @@ mod disk_provider_tests {
 
         let search_engine =
             create_disk_index_searcher::<GraphDataF32VectorU32Data>(params, &storage_provider);
-
-        // minor validation tests to improve code coverage
-        assert_eq!(
-            search_engine
-                .index
-                .data_provider
-                .to_internal_id(ctx, &0)
-                .unwrap(),
-            0
-        );
-
-        let provider_max_degree = search_engine
-            .index
-            .data_provider
-            .graph_header
-            .max_degree::<<GraphDataF32VectorU32Data as GraphDataType>::VectorDataType>()
-            .unwrap();
-        let index_max_degree = search_engine.index.config.pruned_degree().get();
-        assert_eq!(provider_max_degree, index_max_degree);
 
         let query = vec![0f32; 128];
         let mut query_stats = QueryStatistics::default();
@@ -2177,7 +2103,7 @@ mod disk_provider_tests {
             &storage_provider,
         );
 
-        let query_vector: [f32; 128] = [1f32; 128];
+        let query_vector: &[f32] = &[1f32; 128];
         let k = 10;
         let mut indices = vec![0u32; k];
         let mut distances = vec![0f32; k];
@@ -2192,13 +2118,14 @@ mod disk_provider_tests {
         let search_params = Knn::new(10, Some(4)).unwrap();
         let recorded_search =
             diskann::graph::search::RecordedKnn::new(search_params, &mut search_record);
-        search_engine
-            .index
-            .search(
+
+        let mut accessor =
+            DiskAccessor::new(&search_engine.provider, query_vector, &strategy).unwrap();
+        let post_processor = accessor.default_post_processor();
+            graph::search::SearchFor::search_for(
                 recorded_search,
-                &strategy,
-                &DefaultContext,
-                query_vector.as_slice(),
+                &mut accessor,
+                post_processor,
                 &mut result_output_buffer,
             )
             .await
@@ -3037,7 +2964,7 @@ mod disk_provider_tests {
             },
             &storage_provider,
         );
-        let query_vector: [f32; 128] = [1f32; 128];
+        let query_vector: &[f32] = &[1f32; 128];
 
         let k = 10;
         let mut indices = vec![0u32; k];
@@ -3055,17 +2982,19 @@ mod disk_provider_tests {
         let search_params = Knn::new(10, Some(4)).unwrap();
         let recorded_search =
             diskann::graph::search::RecordedKnn::new(search_params, &mut search_record);
-        search_engine
-            .index
-            .search(
+
+        let mut accessor =
+            DiskAccessor::new(&search_engine.provider, query_vector, &strategy).unwrap();
+        let post_processor = accessor.default_post_processor();
+            graph::search::SearchFor::search_for(
                 recorded_search,
-                &strategy,
-                &DefaultContext,
-                query_vector.as_slice(),
+                &mut accessor,
+                post_processor,
                 &mut result_output_buffer,
             )
             .await
             .unwrap();
+
         let visited_ids = search_record
             .visited
             .iter()

@@ -364,7 +364,10 @@ impl Index {
 
     /// Return the current [`DegreeStats`].
     pub fn degree_stats(&self) -> graph::stats::DegreeStats {
-        self.terms.iter().map(|ref_multi| ref_multi.value().neighbors.len()).collect()
+        self.terms
+            .iter()
+            .map(|ref_multi| ref_multi.value().neighbors.len())
+            .collect()
     }
 
     /// Return `true` is `id` is a start point. Otherwise, return `false`.
@@ -730,7 +733,9 @@ impl Index {
         let mut workspace = algorithms::insert::Workspace::new();
         let options = Options::default();
         let mut accessor = self.prune_accessor(&options, None);
-        workspace.prune_node(&mut accessor, id, &self.config.graph).await
+        workspace
+            .prune_node(&mut accessor, id, &self.config.graph)
+            .await
     }
 
     //--------//

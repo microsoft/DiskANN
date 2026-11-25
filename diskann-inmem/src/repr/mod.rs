@@ -140,7 +140,7 @@ pub(crate) trait Guard {
 
 /// Enable search over vectors defined by a [`Representation`].
 #[expect(private_bounds)]
-pub trait Search: Representation + for<'a> SearchImpl<'a, Self::Query<'a>>  {
+pub trait Search: Representation + for<'a> SearchImpl<'a, Self::Query<'a>> {
     /// The type of the query. This should be equivalent to the generic parameter in
     /// [`Set`], but needs to be replicated here due to limitations in the current trait
     /// design.
@@ -169,7 +169,6 @@ pub(crate) trait SearchImpl<'a, T>: 'static {
 #[expect(private_bounds)]
 pub trait Insert: Search + for<'a> InsertImpl<'a, Self::Vector<'a>> {
     type Vector<'a>: Send + Sync + Copy; // FIXME: Remove unnecessaryBounds
-
 }
 
 pub(crate) trait InsertImpl<'a, T>: SearchImpl<'a, T> {

@@ -15,8 +15,8 @@ use diskann_utils::views::rowmajor;
 use crate::{
     bitvector::BitVector,
     counters::{Counters, LocalCounters},
-    ids::IdMap,
     epoch,
+    ids::IdMap,
     num::{Capacity, IdLimit, MaxDegree},
     poll::{poll, ready},
     repr,

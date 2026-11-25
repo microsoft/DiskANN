@@ -12,13 +12,12 @@ use std::{
 
 use diskann::{
     ANNError, ANNResult,
-    graph::DiskANNIndex,
     utils::{IntoUsize, VectorRepr},
 };
 use diskann_inmem::{
     self as di,
+    index::buildonly,
     num::{Capacity, MaxDegree},
-    provider::buildonly::Provider,
 };
 
 use diskann_utils::{
@@ -165,9 +164,8 @@ where
         .store(store_config(num_threads))
         .locate_start_point_ids_at(start_point_ids)?;
 
-        let provider = Provider::new(full)?;
         let index = Index {
-            index: DiskANNIndex::new(graph, provider, None),
+            index: buildonly::Index::new(full, graph)?,
             start_id: start.id(),
         };
 
@@ -181,7 +179,7 @@ where
     T: di::repr::FullPrecision,
 {
     fn capacity(&self) -> usize {
-        self.index.provider().id_limit().value().into_usize()
+        self.index.id_limit().value().into_usize()
     }
 
     fn insert_vector<'a>(
@@ -189,16 +187,13 @@ where
         id: u32,
         vector: &'a [T],
     ) -> Pin<Box<dyn SendFuture<ANNResult<()>> + 'a>> {
-        // Skip inserting the start ID since it's already in the graph.
-        if id == self.start_id {
-            Box::pin(std::future::ready(Ok(())))
-        } else {
-            Box::pin(async move {
-                self.index
-                    .insert(&di::Strategy, &di::Context, &id, vector)
-                    .await
-            })
-        }
+        Box::pin(async move {
+            // Skip inserting the start ID since it's already in the graph.
+            if id != self.start_id {
+                self.index.write()?.insert(vector, id)?;
+            }
+            Ok(())
+        })
     }
 
     fn final_prune(
@@ -206,24 +201,22 @@ where
         range: core::ops::Range<u32>,
     ) -> Pin<Box<dyn SendFuture<ANNResult<()>> + '_>> {
         Box::pin(async move {
-            self.index
-                .prune_range(&di::Strategy, &di::Context, range)
-                .await
+            Ok(())
+            // FIXME: restore
+            // self.index
+            //     .prune_range(&di::Strategy, &di::Context, range)
+            //     .await
         })
     }
 
     fn save_graph_mut(&mut self, write: &mut dyn WriteSeek) -> ANNResult<()> {
-        save_graph(
-            self.index.provider_mut().inspect_neighbors(),
-            write,
-            self.start_id,
-        )?;
+        save_graph(self.index.inspect_neighbors(), write, self.start_id)?;
         Ok(())
     }
 
     #[cfg(debug_assertions)]
     fn count_reachable_nodes(&mut self) -> usize {
-        count_reachable_nodes(self.index.provider_mut().inspect_neighbors(), self.start_id)
+        count_reachable_nodes(self.index.inspect_neighbors(), self.start_id)
     }
 }
 
@@ -294,9 +287,8 @@ where
     .store(store_config(num_threads))
     .locate_start_point_ids_at(start_point_ids)?;
 
-    let provider = Provider::new(quantized)?;
     let index = Index {
-        index: DiskANNIndex::new(graph, provider, None),
+        index: buildonly::Index::new(quantized, graph)?,
         start_id: start.id(),
     };
 
@@ -309,7 +301,7 @@ where
     T: VectorRepr,
 {
     fn capacity(&self) -> usize {
-        self.index.provider().id_limit().value().into_usize()
+        self.index.id_limit().value().into_usize()
     }
 
     fn insert_vector<'a>(
@@ -317,17 +309,14 @@ where
         id: u32,
         vector: &'a [T],
     ) -> Pin<Box<dyn SendFuture<ANNResult<()>> + 'a>> {
-        // Skip inserting the start ID since it's already in the graph.
-        if id == self.start_id {
-            Box::pin(std::future::ready(Ok(())))
-        } else {
-            Box::pin(async move {
+        Box::pin(async move {
+            // Skip inserting the start ID since it's already in the graph.
+            if id != self.start_id {
                 let vector: Box<[f32]> = (*T::as_f32(vector).map_err(ANNError::new)?).into();
-                self.index
-                    .insert(&di::Strategy, &di::Context, &id, &vector)
-                    .await
-            })
-        }
+                self.index.write()?.insert(&vector, id)?;
+            }
+            Ok(())
+        })
     }
 
     fn final_prune(
@@ -335,24 +324,22 @@ where
         range: core::ops::Range<u32>,
     ) -> Pin<Box<dyn SendFuture<ANNResult<()>> + '_>> {
         Box::pin(async move {
-            self.index
-                .prune_range(&di::Strategy, &di::Context, range)
-                .await
+            // FIXME: Restore
+            // self.index
+            //     .prune_range(&di::Strategy, &di::Context, range)
+            //     .await
+            Ok(())
         })
     }
 
     fn save_graph_mut(&mut self, write: &mut dyn WriteSeek) -> ANNResult<()> {
-        save_graph(
-            self.index.provider_mut().inspect_neighbors(),
-            write,
-            self.start_id,
-        )?;
+        save_graph(self.index.inspect_neighbors(), write, self.start_id)?;
         Ok(())
     }
 
     #[cfg(debug_assertions)]
     fn count_reachable_nodes(&mut self) -> usize {
-        count_reachable_nodes(self.index.provider_mut().inspect_neighbors(), self.start_id)
+        count_reachable_nodes(self.index.inspect_neighbors(), self.start_id)
     }
 }
 
@@ -394,7 +381,7 @@ struct Index<R>
 where
     R: di::repr::Representation,
 {
-    index: DiskANNIndex<Provider<R>>,
+    index: buildonly::Index<R>,
     start_id: u32,
 }
 

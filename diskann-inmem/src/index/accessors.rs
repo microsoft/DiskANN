@@ -170,11 +170,7 @@ impl<'a> Search<'a> {
         Ok(count)
     }
 
-    pub(super) fn post_process_into<I, F>(
-        &mut self,
-        candidates: I,
-        mut output: F,
-    ) -> ANNResult<()>
+    pub(super) fn post_process_into<I, F>(&mut self, candidates: I, mut output: F) -> ANNResult<()>
     where
         I: IntoIterator<Item = Neighbor<u32>>,
         F: FnMut(Neighbor<u32>) -> bool,
