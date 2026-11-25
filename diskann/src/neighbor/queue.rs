@@ -184,6 +184,7 @@ impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
 
     /// See [`NeighborQueue::batch_insert`].
     ///
+    /// Gives the same result as calling [`Self::insert`] for each candidate in order.
     /// NaN distances are ignored.
     pub fn batch_insert(&mut self, neighbors: &mut Vec<Neighbor<I>>) {
         if self.auto_resizable {
@@ -212,22 +213,48 @@ impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
             }
         }
 
-        let worst = (self.size == self.capacity).then(|| self.distances[self.size - 1]);
-        neighbors.retain(|neighbor| {
-            !neighbor.distance.is_nan()
-                && worst.is_none_or(|distance| neighbor.distance <= distance)
-        });
-        if neighbors.len() <= 1 {
-            if let Some(neighbor) = neighbors.pop() {
-                self.insert(neighbor);
-            }
-            return;
+        let cutoff = self.cutoff();
+        // NaN fails this comparison, so NaN distances are dropped here.
+        neighbors.retain(|neighbor| neighbor.distance <= cutoff);
+
+        // At most `capacity` candidates can be kept, so sort at most that many at a
+        // time. Inserting chunk by chunk matches sequential `insert`.
+        let capacity = self.capacity;
+        while neighbors.len() > capacity {
+            self.insert_chunk(&mut neighbors[..capacity]);
+            // Drop the inserted chunk, and the rest that fail the tighter cutoff.
+            let cutoff = self.cutoff();
+            let mut index = 0;
+            neighbors.retain(|neighbor| {
+                index += 1;
+                index > capacity && neighbor.distance <= cutoff
+            });
         }
-
-        neighbors.sort_by(super::ord::reverse(super::ord::fast_distance));
-
-        self.merge_sorted(neighbors);
+        self.insert_chunk(neighbors);
         neighbors.clear();
+    }
+
+    /// The largest distance `insert` accepts: the worst distance when the queue
+    /// is full, otherwise infinity.
+    #[inline(always)]
+    fn cutoff(&self) -> f32 {
+        if self.size == self.capacity {
+            self.distances[self.size - 1]
+        } else {
+            f32::INFINITY
+        }
+    }
+
+    /// Inserts at most `capacity` accepted, NaN-free candidates, given in any order.
+    fn insert_chunk(&mut self, neighbors: &mut [Neighbor<I>]) {
+        match *neighbors {
+            [] => {}
+            [neighbor] => self.insert(neighbor),
+            _ => {
+                neighbors.sort_by(super::ord::reverse(super::ord::fast_distance));
+                self.merge_sorted(neighbors);
+            }
+        }
     }
 
     /// Merge a nonempty, NaN-free batch sorted by descending distance.
@@ -305,22 +332,15 @@ impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
         };
 
         // At least `merged_size - batch.len()` old entries survive, at most all of them.
-        let fewest = merged_size.saturating_sub(batch.len());
-        let most = self.size.min(merged_size);
-        Self::partition_point_in(fewest..most, keeps_too_few_old)
-    }
-
-    /// Returns the first value in `range` for which `pred` is false,
-    /// or `range.end` if there is none. `pred` must be true then false.
-    #[inline(always)]
-    fn partition_point_in(
-        range: std::ops::Range<usize>,
-        mut pred: impl FnMut(usize) -> bool,
-    ) -> usize {
-        let (mut lo, mut hi) = (range.start, range.end);
+        // `batch.len() <= capacity` and `size <= merged_size`, so neither bound overflows.
+        let (mut lo, mut hi) = (merged_size - batch.len(), self.size);
         while lo < hi {
-            let mid = lo + (hi - lo) / 2;
-            if pred(mid) { lo = mid + 1 } else { hi = mid }
+            let k = lo + (hi - lo) / 2;
+            if keeps_too_few_old(k) {
+                lo = k + 1
+            } else {
+                hi = k
+            }
         }
         lo
     }
@@ -875,6 +895,32 @@ mod neighbor_priority_queue_test {
             assert_eq!(candidates.as_ptr(), allocation);
             assert_eq!(queue.capacity(), capacity);
             assert_same_queue(&queue, &reference);
+        }
+    }
+
+    #[test]
+    fn batch_insert_matches_sequential_insertion_in_chunks() {
+        // Batches larger than the capacity, with many ties, in random order.
+        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+        for capacity in [1, 2, 3, 5, 8] {
+            for initial in [0, capacity / 2, capacity] {
+                for batch_len in [capacity + 1, 2 * capacity + 1, 4 * capacity + 3] {
+                    let mut reference = NeighborPriorityQueue::new(capacity);
+                    for id in 0..initial {
+                        reference.insert(Neighbor::new(id, rng.random_range(0..8u32) as f32));
+                    }
+                    let mut actual = reference.clone();
+                    let mut candidates: Vec<_> = (0..batch_len)
+                        .map(|i| Neighbor::new(initial + i, rng.random_range(0..8u32) as f32))
+                        .collect();
+                    for &candidate in &candidates {
+                        reference.insert(candidate);
+                    }
+                    actual.batch_insert(&mut candidates);
+                    assert!(candidates.is_empty());
+                    assert_same_queue(&actual, &reference);
+                }
+            }
         }
     }
 
