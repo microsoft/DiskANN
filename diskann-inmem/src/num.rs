@@ -254,17 +254,17 @@ typed_int!(
 /// following properties:
 ///
 /// 1. Start and end are guaranteed to be non-decreasing.
-/// 2. It is `Copy`.
+/// 2. It is [`Copy`].
+/// 3. It does not implement [`Iterator`].
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct Range {
+pub struct Range {
     start: u32,
     end: u32,
 }
 
 impl Range {
     /// Construct a new [`Range`] if `end >= start`.
-    #[cfg_attr(not(test), expect(unused, reason = "this completes the API"))]
-    pub(crate) const fn new(start: u32, end: u32) -> Option<Self> {
+    pub const fn new(start: u32, end: u32) -> Option<Self> {
         if end < start {
             None
         } else {
@@ -275,7 +275,7 @@ impl Range {
     /// Construct a new range over `[start, start + offset)`.
     ///
     /// Returns `None` if `start + offset` overflows `u32::MAX`.
-    pub(crate) const fn start_plus(start: u32, offset: u32) -> Option<Self> {
+    pub const fn start_plus(start: u32, offset: u32) -> Option<Self> {
         match start.checked_add(offset) {
             Some(end) => Some(Self { start, end }),
             None => None,
@@ -285,7 +285,7 @@ impl Range {
     /// Construct a new range over `[start, start + offset)`.
     ///
     /// Returns `None` if `start`, `offset`, or `start + offset` exceed `u32::MAX`.
-    pub(crate) const fn start_plus_usize(start: usize, offset: usize) -> Option<Self> {
+    pub const fn start_plus_usize(start: usize, offset: usize) -> Option<Self> {
         let start = match const_convert(start) {
             Some(start) => start,
             None => return None,
@@ -300,30 +300,28 @@ impl Range {
     }
 
     /// Return the length of the [`Range`].
-    #[cfg_attr(not(test), expect(unused, reason = "this completes the API"))]
-    pub(crate) const fn len(&self) -> usize {
+    pub const fn len(&self) -> usize {
         const { assert!(std::mem::size_of::<usize>() >= std::mem::size_of::<u32>()) };
         (self.end - self.start) as usize
     }
 
     /// Return `true` only if `self.len() == 0`.
-    #[cfg_attr(not(test), expect(unused, reason = "this completes the API"))]
-    pub(crate) const fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
     /// Return the start of the range.
-    pub(crate) const fn start(&self) -> u32 {
+    pub const fn start(&self) -> u32 {
         self.start
     }
 
     /// Return the end of the range.
-    pub(crate) const fn end(&self) -> u32 {
+    pub const fn end(&self) -> u32 {
         self.end
     }
 
     /// Return an iterator over all items in the range.
-    pub(crate) const fn iter(&self) -> std::ops::Range<u32> {
+    pub const fn iter(&self) -> std::ops::Range<u32> {
         self.start()..self.end()
     }
 }

@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 
 use diskann_inmem::{
     self as inmem, Provider,
-    num::{Capacity, MaxDegree},
+    num::{Capacity, MaxDegree, Range},
     repr::Full,
 };
 
@@ -157,6 +157,7 @@ mod dto {
         FullPrecision {
             data_type: DataType,
         },
+        StaticBuild,
         Spherical {
             bits: spherical::Bits,
             rerank: quantization::Rerank,
@@ -392,6 +393,7 @@ enum Representation {
     FullPrecision {
         data_type: DataType,
     },
+    StaticBuild,
     Spherical {
         bits: spherical::Bits,
         rerank: quantization::Rerank,
@@ -413,6 +415,7 @@ impl Representation {
     fn from_raw(raw: dto::Representation) -> Self {
         match raw {
             dto::Representation::FullPrecision { data_type } => Self::FullPrecision { data_type },
+            dto::Representation::StaticBuild => Self::StaticBuild,
             dto::Representation::Spherical { bits, rerank } => Self::Spherical {
                 bits: spherical::Bits::from_raw(bits),
                 rerank: quantization::Rerank::from_raw(rerank),
@@ -438,6 +441,7 @@ impl Representation {
             Self::FullPrecision { data_type } => dto::Representation::FullPrecision {
                 data_type: *data_type,
             },
+            Self::StaticBuild => dto::Representation::StaticBuild,
             Self::Spherical { bits, rerank } => dto::Representation::Spherical {
                 bits: bits.as_raw(),
                 rerank: rerank.as_raw(),
@@ -663,6 +667,7 @@ impl Test {
 
                 Ok(index)
             }
+            Representation::StaticBuild => self.create_static(data),
             Representation::Spherical { bits, rerank } => {
                 self.create_spherical(data, *bits, *rerank)
             }
@@ -675,6 +680,31 @@ impl Test {
                 rerank,
             } => self.create_scalar(data, *bits, *override_to_cosine_normalized, *rerank),
         }
+    }
+
+    fn create_static(&self, data: DatasetView<'_>) -> anyhow::Result<Arc<dyn Index>> {
+        let DatasetView::F32(data) = data else {
+            anyhow::bail!("static build tests only support f32 data");
+        };
+
+        let start_point = rowmajor::Owned::row_vector(Box::from(
+            <f32 as diskann_utils::sampling::medoid::ComputeMedoid>::compute_medoid(data),
+        ));
+        let num_start_points = start_point.nrows();
+
+        let metric = self.data.metric;
+        let capacity = Capacity::new(data.nrows());
+        let max_degree = self.build.config.max_degree().get();
+        let index_config = self.build.config.clone();
+
+        let end_range = Range::start_plus_usize(data.nrows(), num_start_points)
+            .ok_or_else(|| anyhow::anyhow!("cannot move start points to the end"))?;
+
+        let full_config = Full::config(capacity, MaxDegree::new(max_degree), metric, start_point)?
+            .locate_start_point_ids_at(end_range)?;
+
+        let provider = inmem::provider::buildonly::Provider::new(full_config)?;
+        Ok(finish(provider, index_config))
     }
 
     fn create_spherical(
@@ -936,11 +966,13 @@ impl diskann_benchmark_runner::Benchmark for FullPrecision {
     fn try_match(&self, input: &Test, context: &MatchContext) -> Score {
         let mut score = context.success(0);
 
+        // Match data-type.
         match input.representation {
             Representation::FullPrecision { .. } => {
                 // We match all valid data-types
             }
-            Representation::Spherical { .. }
+            Representation::StaticBuild
+            | Representation::Spherical { .. }
             | Representation::Product { .. }
             | Representation::Scalar { .. } => {
                 let data_type = input.data.data_type;
@@ -948,10 +980,25 @@ impl diskann_benchmark_runner::Benchmark for FullPrecision {
                 if data_type != DataType::F32 {
                     score.fail(
                         1,
-                        &format_args!("quantization requires f32 data, not {}", data_type),
+                        &format_args!(
+                            "static-build/quantization requires f32 data, not {}",
+                            data_type
+                        ),
                     );
                 }
             }
+        }
+
+        // Don't run multi-insert for static-builds.
+        //
+        // This should be kept in-sync with backend capabilities.
+        if matches!(input.representation, Representation::StaticBuild)
+            && matches!(input.build.insert, Insert::Multi { .. })
+        {
+            score.fail(
+                1,
+                &"multi-insert is not supported for static builds to save compilation time",
+            );
         }
 
         score
@@ -969,9 +1016,10 @@ impl diskann_benchmark_runner::Benchmark for FullPrecision {
     ) -> anyhow::Result<Self::Output> {
         let data_type = match input.representation {
             Representation::FullPrecision { data_type } => data_type,
-            Representation::Spherical { .. } => input.data.data_type,
-            Representation::Product { .. } => input.data.data_type,
-            Representation::Scalar { .. } => input.data.data_type,
+            Representation::StaticBuild
+            | Representation::Spherical { .. }
+            | Representation::Product { .. }
+            | Representation::Scalar { .. } => input.data.data_type,
         };
 
         // Load the data and perform any necessary data conversions.

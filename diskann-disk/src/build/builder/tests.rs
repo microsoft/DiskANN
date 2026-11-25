@@ -228,7 +228,7 @@ mod disk_index_build_tests {
         .unwrap();
     }
 
-    ///////////////////////////////
+    //////////////////////////////
     // MinMax Integration Tests //
     //////////////////////////////
 
@@ -283,16 +283,45 @@ mod disk_index_build_tests {
             10,
             32,
             |fixture| {
-                fixture.build_with_pipnn::<GraphDataMinMaxVectorUnitData>(|pipnn| {
-                    let pipnn = pipnn
-                        .c_max(std::num::NonZeroUsize::new(64).unwrap())
-                        .p_samp(0.05)
-                        .seed(42);
-                    match hash_prune {
-                        Some(hash_prune) => pipnn.hash_prune(hash_prune),
-                        None => pipnn,
-                    }
-                })
+                use crate::build::{
+                    builder::build::DiskIndexBuilder,
+                    configuration::{DiskIndexBuildConfig, NumPQChunks},
+                };
+                use crate::storage::DiskIndexWriter;
+                use std::num::NonZeroUsize;
+
+                let params = &fixture.params;
+                let storage = fixture.storage_provider.as_ref();
+                let mut builder = diskann::graph::pipnn::Config::builder(
+                    NonZeroUsize::new(params.max_degree as usize).unwrap(),
+                )
+                .c_max(NonZeroUsize::new(64).unwrap())
+                .p_samp(0.05)
+                .seed(42);
+                if let Some(hash_prune) = hash_prune {
+                    builder = builder.hash_prune(hash_prune);
+                }
+                let graph = builder.build()?;
+                let mut config = DiskIndexBuildConfig::new(
+                    params.metric,
+                    params.num_threads,
+                    NumPQChunks::new_with(params.num_pq_chunks, params.full_dim)?,
+                    graph,
+                )
+                .with_seed(100);
+                if let Some(count) = params.data_compression_chunk_vector_count {
+                    config = config.with_data_compression_chunk_vector_count(count);
+                }
+                let writer = DiskIndexWriter::new(
+                    params.data_path.clone(),
+                    params.index_path_prefix.clone(),
+                    params.associated_data_path.clone(),
+                    params.block_size,
+                )?;
+                DiskIndexBuilder::<GraphDataMinMaxVectorUnitData, _, _>::new(
+                    storage, config, writer,
+                )
+                .build()
             },
         );
     }
@@ -316,7 +345,10 @@ mod disk_index_build_tests {
             max_degree,
             index_path_prefix: index_path_prefix.clone(),
             index_build_ram_gb: get_index_build_ram_gb(use_sharded_build),
-            build_quantization_type: QuantizationType::FP,
+            build_quantization_type: QuantizationType::SQ {
+                nbits: 1,
+                standard_deviation: None,
+            },
             ..params
         };
 
@@ -339,5 +371,36 @@ mod disk_index_build_tests {
         } else {
             1.0
         }
+    }
+
+    // Regression check: enabling `pipnn` must not add PiPNN bounds to `BuildElement`
+    // or Vamana-only callers of `DiskIndexBuilder::build`.
+    #[test]
+    fn vamana_builder_requires_only_build_element() {
+        use crate::{
+            build::{
+                builder::{backend::BuildElement, build::DiskIndexBuilder},
+                configuration::{CommonBuildConfig, DiskIndexBuildConfig, VamanaBuildConfig},
+            },
+            data_model::AdHoc,
+            storage::DiskIndexWriter,
+        };
+        use diskann::utils::VectorRepr;
+
+        fn check<T, P>(
+            storage: &P,
+            common: CommonBuildConfig,
+            vamana: VamanaBuildConfig,
+            writer: DiskIndexWriter,
+        ) -> ANNResult<()>
+        where
+            T: VectorRepr + BuildElement,
+            P: StorageReadProvider<Reader: Send> + StorageWriteProvider + 'static,
+        {
+            let config = DiskIndexBuildConfig::from_common(common, vamana);
+            DiskIndexBuilder::<AdHoc<T>, P>::new(storage, config, writer).build()
+        }
+
+        let _ = check::<f32, VirtualStorageProvider<OverlayFS>>;
     }
 }

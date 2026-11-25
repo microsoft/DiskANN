@@ -197,6 +197,27 @@ impl<T> Config<T> {
         self.start_points.ncols()
     }
 
+    /// Manually control the internal IDs used for the start points.
+    ///
+    /// This requires:
+    ///
+    /// * `at.len()` to be equal to the number of start points.
+    /// * `at.end()` to be less than the sum of `self`'s construction `Capacity` and the
+    ///   number of start points.
+    pub fn locate_start_point_ids_at(mut self, at: crate::num::Range) -> Result<Self, ConfigError> {
+        if at.len() != self.start_points.nrows() {
+            Err(ConfigError::relocated_point_mismatch(
+                at.len(),
+                self.start_points.nrows(),
+            ))
+        } else if at.end() > self.layout.id_limit().value() {
+            Err(ConfigError::invalid_range(at.end(), self.layout.id_limit()))
+        } else {
+            self.start_point_ids = at;
+            Ok(self)
+        }
+    }
+
     /// Construct a [`Full`] from the [`Config`].
     pub fn build(self) -> ANNResult<Full<T>>
     where
@@ -228,6 +249,21 @@ impl ConfigError {
             },
         }
     }
+
+    fn relocated_point_mismatch(num_relocated_ids: usize, num_start_points: usize) -> Self {
+        Self {
+            inner: ConfigErrorInner::RelocatedPointMismatch {
+                num_relocated_ids,
+                num_start_points,
+            },
+        }
+    }
+
+    fn invalid_range(end: u32, id_limit: IdLimit) -> Self {
+        Self {
+            inner: ConfigErrorInner::InvalidRange { end, id_limit },
+        }
+    }
 }
 
 diskann::convert_error!(ConfigError);
@@ -245,6 +281,17 @@ enum ConfigErrorInner {
         capacity: Capacity,
         num_start_points: usize,
     },
+    #[error(
+        "number of relocated start point ids ({}) differs from number of start points ({})",
+        num_relocated_ids,
+        num_start_points
+    )]
+    RelocatedPointMismatch {
+        num_relocated_ids: usize,
+        num_start_points: usize,
+    },
+    #[error("end of relocated range ({}) exceeds {}", end, id_limit)]
+    InvalidRange { end: u32, id_limit: IdLimit },
 }
 
 impl<T> repr::RepresentationConfig for Config<T>
@@ -456,6 +503,34 @@ where
         counters: LocalCounters<'a>,
     ) -> ANNResult<crate::provider::PruneAccessor<'a>> {
         T::__prune_accessor(self, counters)
+    }
+}
+
+// Temporary Traits
+
+impl<T> repr::SetAt<&[T]> for Full<T>
+where
+    T: FullPrecision,
+{
+    fn set_at(&self, id: u32, v: &[T]) -> ANNResult<Guard<'_>> {
+        self.check_dim(v.len())?;
+
+        let mut slot = self
+            .store
+            .slot(id)
+            .ok_or_else(|| ANNError::message("could not allocate a new slot"))?;
+
+        slot.data()
+            .as_mut_slice()
+            .copy_from_slice(bytemuck::must_cast_slice::<T, u8>(v));
+
+        Ok(Guard::new(slot))
+    }
+}
+
+impl<T> repr::InspectNeighbors for Full<T> {
+    fn inspect_neighbors(&mut self) -> repr::NeighborSnapshot<'_> {
+        self.store.neighbors_mut().snapshot()
     }
 }
 
@@ -872,6 +947,61 @@ mod tests {
         num::{LogicalId, SlotId},
         repr::test::Reference,
     };
+
+    //--------//
+    // Config //
+    //--------//
+
+    #[test]
+    fn test_locate_start_point_ids_at() {
+        let mut start_points = rowmajor::Owned::from_element(2, 2, -2.0f32);
+        start_points.row_mut(1).fill(2.0);
+        let make_config = || {
+            Full::config(
+                Capacity::new(4),
+                MaxDegree::new(0),
+                Metric::L2,
+                start_points.clone(),
+            )
+            .unwrap()
+        };
+
+        for count in [1, 3] {
+            let err = make_config()
+                .locate_start_point_ids_at(Range::start_plus(0, count).unwrap())
+                .unwrap_err();
+            assert_contains!(
+                err.to_string(),
+                format!(
+                    "number of relocated start point ids ({count}) differs from number of start points (2)"
+                ),
+            );
+        }
+
+        let err = make_config()
+            .locate_start_point_ids_at(Range::new(5, 7).unwrap())
+            .unwrap_err();
+        assert_contains!(
+            err.to_string(),
+            "end of relocated range (7) exceeds IdLimit(6)"
+        );
+
+        for start in [2, 4] {
+            let at = Range::start_plus(start, 2).unwrap();
+            let full = make_config()
+                .locate_start_point_ids_at(at)
+                .unwrap()
+                .build()
+                .unwrap();
+            let reader = full.reader().unwrap();
+            for (id, point) in std::iter::zip(at, start_points.rows()) {
+                assert_eq!(
+                    reader.read(id).unwrap(),
+                    bytemuck::must_cast_slice::<f32, u8>(point),
+                );
+            }
+        }
+    }
 
     /// See the description for [`make_test_repr`].
     const TEST_LIMIT: IdLimit = IdLimit::new(11);

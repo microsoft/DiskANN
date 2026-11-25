@@ -43,6 +43,7 @@ vfs = { workspace = true }
 
 # Optional dependencies
 opentelemetry = { workspace = true, optional = true }
+diskann-inmem = { workspace = true, features = ["quantization"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 io-uring = "0.6.4"
@@ -82,7 +83,7 @@ proptest.workspace = true
 [features]
 default = []
 perf_test = ["dep:opentelemetry"]
-pipnn = ["diskann/pipnn", "diskann-providers/pipnn"]
+pipnn = ["diskann/pipnn"]
 experimental_diversity_search = [
     "diskann/experimental_diversity_search",
     "diskann-providers/experimental_diversity_search",

@@ -6,21 +6,19 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
-use diskann::{
-    graph::config,
-    utils::{VectorRepr, ONE},
-};
+use diskann::{graph::config, utils::VectorRepr};
 use diskann_benchmark_runner::utils::MicroSeconds;
 use diskann_disk::{
-    build::builder::build::DiskIndexBuilder,
-    data_model::AdHoc,
-    disk_index_build_parameter::{
-        DiskIndexBuildParameters, MemoryBudget, NumPQChunks, DISK_SECTOR_LEN,
+    build::{
+        builder::{backend::BuildElement, build::DiskIndexBuilder},
+        configuration::{DiskIndexBuildConfig, VamanaBuildConfig},
     },
+    data_model::AdHoc,
+    disk_index_build_parameter::{MemoryBudget, NumPQChunks, DISK_SECTOR_LEN},
     storage::DiskIndexWriter,
 };
 use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
-use diskann_providers::{model::IndexConfiguration, utils::load_metadata_from_file};
+use diskann_providers::utils::{load_metadata_from_file, DEFAULT_SEED_FOR_TESTS};
 use diskann_vector::distance::Metric;
 use opentelemetry::global;
 use opentelemetry::trace::Tracer;
@@ -60,7 +58,7 @@ pub(super) fn build_disk_index<T, StorageProviderType>(
     params: &DiskIndexBuild,
 ) -> anyhow::Result<DiskBuildStats>
 where
-    T: VectorRepr,
+    T: VectorRepr + BuildElement,
     StorageProviderType: StorageReadProvider + StorageWriteProvider + 'static,
     <StorageProviderType as StorageReadProvider>::Reader: std::marker::Send,
 {
@@ -93,21 +91,18 @@ where
 
     let metadata = load_metadata_from_file(storage_provider, &data_path)?;
 
-    let build_parameters = DiskIndexBuildParameters::new(
-        MemoryBudget::try_from_gb(params.build_ram_limit_gb)?,
-        params.quantization_type,
-        NumPQChunks::new_with(params.num_pq_chunks.get(), metadata.ndims())?,
-    );
-
-    let index_configuration = IndexConfiguration::new(
+    let config = DiskIndexBuildConfig::new(
         metric,
-        metadata.ndims(),
-        metadata.npoints(),
-        ONE,
         params.num_threads,
-        config,
+        NumPQChunks::new_with(params.num_pq_chunks.get(), metadata.ndims())?,
+        VamanaBuildConfig {
+            graph: config,
+            memory_budget: MemoryBudget::try_from_gb(params.build_ram_limit_gb)?,
+            build_quantization: params.quantization_type,
+            prefetch_lookahead: None,
+        },
     )
-    .with_pseudo_rng();
+    .with_seed(DEFAULT_SEED_FOR_TESTS);
 
     let disk_index_writer = DiskIndexWriter::new(
         data_path,
@@ -118,10 +113,9 @@ where
 
     let mut disk_index = DiskIndexBuilder::<AdHoc<T>, StorageProviderType>::new(
         storage_provider,
-        build_parameters,
-        index_configuration,
+        config,
         disk_index_writer,
-    )?;
+    );
 
     let span = {
         let tracer = opentelemetry::global::tracer("benchmark");

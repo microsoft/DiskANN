@@ -159,6 +159,7 @@ pub trait QueryDistanceVisitor<'a> {
 ///
 /// Since this type is [`IntoBackend`] for itself, it can be used as a type-erased container
 /// for multiple [`Quantizer`] implementations, which can simplify quantizer preparation.
+#[derive(Debug)]
 pub struct Backend {
     inner: inner::Quantizer,
 }
@@ -310,6 +311,27 @@ impl Config {
         self
     }
 
+    /// Manually control the internal IDs used for the start points.
+    ///
+    /// This requires:
+    ///
+    /// * `at.len()` to be equal to the number of start points.
+    /// * `at.end()` to be less than the sum of `self`'s construction `Capacity` and the
+    ///   number of start points.
+    pub fn locate_start_point_ids_at(mut self, at: crate::num::Range) -> Result<Self, ConfigError> {
+        if at.len() != self.start_points.nrows() {
+            Err(ConfigError::relocated_point_mismatch(
+                at.len(),
+                self.start_points.nrows(),
+            ))
+        } else if at.end() > self.layout.id_limit().value() {
+            Err(ConfigError::invalid_range(at.end(), self.layout.id_limit()))
+        } else {
+            self.start_point_ids = at;
+            Ok(self)
+        }
+    }
+
     /// Build the [`Quantized`] from `self`.
     pub fn build(self) -> ANNResult<Quantized> {
         Quantized::new(self)
@@ -357,6 +379,21 @@ impl ConfigError {
             },
         }
     }
+
+    fn relocated_point_mismatch(num_relocated_ids: usize, num_start_points: usize) -> Self {
+        Self {
+            inner: ConfigErrorInner::RelocatedPointMismatch {
+                num_relocated_ids,
+                num_start_points,
+            },
+        }
+    }
+
+    fn invalid_range(end: u32, id_limit: IdLimit) -> Self {
+        Self {
+            inner: ConfigErrorInner::InvalidRange { end, id_limit },
+        }
+    }
 }
 
 #[derive(Debug, Error)]
@@ -381,6 +418,17 @@ enum ConfigErrorInner {
         capacity: Capacity,
         num_start_points: usize,
     },
+    #[error(
+        "number of relocated start point ids ({}) differs from number of start points ({})",
+        num_relocated_ids,
+        num_start_points
+    )]
+    RelocatedPointMismatch {
+        num_relocated_ids: usize,
+        num_start_points: usize,
+    },
+    #[error("end of relocated range ({}) exceeds {}", end, id_limit)]
+    InvalidRange { end: u32, id_limit: IdLimit },
 }
 
 /// Choose how data is reranked.
@@ -683,6 +731,38 @@ impl repr::Insert for Quantized {
     }
 }
 
+// Temporary Traits
+
+impl repr::SetAt<&[f32]> for Quantized {
+    fn set_at(&self, id: u32, v: &[f32]) -> ANNResult<Guard<'_>> {
+        // Easy check to reject invalid vectors before acquiring an epoch guard.
+        let vlen = v.len();
+        let dim = self.dim();
+        if vlen != dim {
+            return Err(ANNError::message(lazy_format!(
+                move,
+                "vector dim {} does not match quantizer dim {}",
+                vlen,
+                dim
+            )));
+        }
+
+        let mut slot = self
+            .store
+            .slot(id)
+            .ok_or_else(|| ANNError::message("could not allocate a new slot"))?;
+
+        self.set(v, slot.data())?;
+        Ok(Guard::new(slot))
+    }
+}
+
+impl repr::InspectNeighbors for Quantized {
+    fn inspect_neighbors(&mut self) -> repr::NeighborSnapshot<'_> {
+        self.store.neighbors_mut().snapshot()
+    }
+}
+
 //-------//
 // inner //
 //-------//
@@ -834,7 +914,7 @@ mod inner {
     }
 
     /// A new-type wrapper around [`super::Quantized`] to bridge into [`ErasedQuantizer`].
-    #[derive(Debug)]
+    #[derive(Debug, Clone)]
     struct Super<Q>(Q);
 
     impl<Q> ErasedQuantizer for Super<Q>
@@ -1079,6 +1159,61 @@ mod tests {
 
     /// See the description in [`make_test_repr`].
     const TEST_LIMIT: IdLimit = IdLimit::new(11);
+
+    #[test]
+    fn test_locate_start_point_ids_at() {
+        let mut start_points = rowmajor::Owned::from_element(2, 2, -2.0f32);
+        start_points.row_mut(1).fill(2.0);
+        let round = Round::new(2, Metric::SquaredL2);
+        let make_config = || {
+            Quantized::config(
+                round,
+                Capacity::new(4),
+                MaxDegree::new(0),
+                start_points.clone(),
+                Rerank::None,
+            )
+            .unwrap()
+        };
+
+        for count in [1, 3] {
+            let err = make_config()
+                .locate_start_point_ids_at(Range::start_plus(0, count).unwrap())
+                .unwrap_err();
+            assert_contains!(
+                err.to_string(),
+                format!(
+                    "number of relocated start point ids ({count}) differs from number of start points (2)"
+                ),
+            );
+        }
+
+        let err = make_config()
+            .locate_start_point_ids_at(Range::new(5, 7).unwrap())
+            .unwrap_err();
+        assert_contains!(
+            err.to_string(),
+            "end of relocated range (7) exceeds IdLimit(6)"
+        );
+
+        for start in [2, 4] {
+            let at = Range::start_plus(start, 2).unwrap();
+            let quantized = make_config()
+                .locate_start_point_ids_at(at)
+                .unwrap()
+                .build()
+                .unwrap();
+            let reader = quantized
+                .store
+                .guard(|slots, guard| slots.first().reader(guard))
+                .unwrap();
+            for (id, point) in std::iter::zip(at, start_points.rows()) {
+                let mut expected = [0u8; 2];
+                round.quantize(&mut expected, point).unwrap();
+                assert_eq!(reader.read(id.into_usize()).unwrap(), expected);
+            }
+        }
+    }
 
     // Use the canonical grid layout, but center the data around the origin.
     //

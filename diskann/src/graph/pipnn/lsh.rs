@@ -154,7 +154,7 @@ mod tests {
 
     fn rows(data: &[f32], point_count: usize, dimensions: usize) -> Rows<'_, f32> {
         let view = rowmajor::Ref::try_from_data(data, point_count, dimensions).unwrap();
-        Rows::new(view, Metric::L2).unwrap()
+        Rows::new(view, Metric::L2)
     }
 
     /// A dataset that reports a shape and holds no rows. The shape checks of

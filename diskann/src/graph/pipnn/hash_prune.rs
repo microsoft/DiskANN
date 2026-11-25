@@ -925,7 +925,7 @@ mod tests {
 
     fn rows<T: Element>(data: &[T], points: usize, dimensions: usize) -> Rows<'_, T> {
         let view = rowmajor::Ref::try_from_data(data, points, dimensions).unwrap();
-        Rows::new(view, Metric::L2).unwrap()
+        Rows::new(view, Metric::L2)
     }
 
     fn build_hash_prune<T: Element>(

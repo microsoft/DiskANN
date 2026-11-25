@@ -31,6 +31,10 @@ use crate::{
     num::{Capacity, IdLimit, MaxDegree},
 };
 
+// Reexport
+#[doc(hidden)]
+pub use crate::neighbors::Snapshot as NeighborSnapshot;
+
 //---------//
 // Modules //
 //---------//
@@ -129,7 +133,7 @@ pub trait Guard {
 }
 
 /// Enable search over vectors defined by a [`Representation`].
-pub trait Search: Send + Sync + 'static {
+pub trait Search: Representation {
     /// The type of the query. This should be equivalent to the generic parameter in
     /// [`Set`], but needs to be replicated here due to limitations in the current trait
     /// design.
@@ -165,6 +169,28 @@ pub trait Insert: Search + for<'a> Set<Self::Query<'a>> {
         &'a self,
         counters: LocalCounters<'a>,
     ) -> ANNResult<crate::provider::PruneAccessor<'a>>;
+}
+
+//------------------//
+// Temporary Traits //
+//------------------//
+
+// These are crate-private traits that are still used to implement public functionality
+// and work as a bridge to `diskann-disk`'s static build case.
+//
+// These are expected to be removed pending future architectural changes to `diskann`.
+
+/// Like [`Set`], but forces use of the exact internal ID.
+#[doc(hidden)]
+pub(crate) trait SetAt<T>: Set<T> {
+    #[doc(hidden)]
+    fn set_at(&self, id: u32, element: T) -> ANNResult<Self::Guard<'_>>;
+}
+
+#[doc(hidden)]
+pub trait InspectNeighbors {
+    #[doc(hidden)]
+    fn inspect_neighbors(&mut self) -> NeighborSnapshot<'_>;
 }
 
 //-----------------//
