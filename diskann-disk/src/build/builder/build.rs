@@ -48,46 +48,6 @@ use crate::{
     utils::instrumentation::{DiskIndexBuildCheckpoint, PerfLogger},
 };
 
-mod sealed {
-    use diskann::ANNResult;
-    use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
-    use diskann_utils::io::Metadata;
-
-    use super::DiskIndexBuilder;
-    use crate::data_model::GraphDataType;
-
-    pub trait GraphBuild<Data>: Sized
-    where
-        Data: GraphDataType<VectorIdType = u32>,
-    {
-        fn build_disk_index<StorageProvider>(
-            &self,
-            builder: &DiskIndexBuilder<'_, Data, StorageProvider, Self>,
-            data_path: &str,
-            metadata: Metadata,
-        ) -> ANNResult<()>
-        where
-            StorageProvider: StorageReadProvider<Reader: Send> + StorageWriteProvider + 'static;
-    }
-}
-
-/// Graph-construction configuration accepted by [`DiskIndexBuilder::build`].
-///
-/// Implemented for [`VamanaBuildConfig`] and, when the `pipnn` feature is
-/// enabled, [`diskann::graph::pipnn::Config`].
-pub trait GraphBuild<Data>: sealed::GraphBuild<Data>
-where
-    Data: GraphDataType<VectorIdType = u32>,
-{
-}
-
-impl<Data, G> GraphBuild<Data> for G
-where
-    Data: GraphDataType<VectorIdType = u32>,
-    G: sealed::GraphBuild<Data>,
-{
-}
-
 /// Shared search-PQ, graph, disk-layout and cleanup pipeline.
 pub struct DiskIndexBuilder<'a, Data, StorageProvider, GraphConfig = VamanaBuildConfig>
 where
@@ -106,7 +66,6 @@ impl<'a, Data, StorageProvider, GraphConfig>
 where
     Data: GraphDataType<VectorIdType = u32>,
     StorageProvider: StorageReadProvider<Reader: Send> + StorageWriteProvider + 'static,
-    GraphConfig: GraphBuild<Data>,
 {
     /// Stores the configuration; all input processing happens in `build`.
     pub fn new(
@@ -128,24 +87,6 @@ where
         }
     }
 
-    /// Builds search-PQ, the selected graph and the disk layout.
-    ///
-    /// # Errors
-    /// Returns compression, graph-construction or storage errors.
-    pub fn build(&mut self) -> ANNResult<()> {
-        let data_path = self.index_writer.get_dataset_file();
-        let metadata = load_metadata_from_file(self.storage_provider, &data_path)?;
-        self.config
-            .graph
-            .build_disk_index(self, &data_path, metadata)
-    }
-}
-
-impl<Data, StorageProvider, GraphConfig> DiskIndexBuilder<'_, Data, StorageProvider, GraphConfig>
-where
-    Data: GraphDataType<VectorIdType = u32>,
-    StorageProvider: StorageReadProvider<Reader: Send> + StorageWriteProvider + 'static,
-{
     fn build_with(
         &self,
         metadata: Metadata,
@@ -207,65 +148,65 @@ where
     }
 }
 
-impl<Data> sealed::GraphBuild<Data> for VamanaBuildConfig
+impl<Data, StorageProvider> DiskIndexBuilder<'_, Data, StorageProvider, VamanaBuildConfig>
 where
     Data: GraphDataType<VectorIdType = u32, VectorDataType: BuildElement>,
+    StorageProvider: StorageReadProvider<Reader: Send> + StorageWriteProvider + 'static,
 {
-    fn build_disk_index<StorageProvider>(
-        &self,
-        builder: &DiskIndexBuilder<'_, Data, StorageProvider, Self>,
-        data_path: &str,
-        metadata: Metadata,
-    ) -> ANNResult<()>
-    where
-        StorageProvider: StorageReadProvider<Reader: Send> + StorageWriteProvider + 'static,
-    {
+    /// Builds search-PQ, the Vamana graph, and the disk layout.
+    ///
+    /// # Errors
+    /// Returns compression, graph-construction, or storage errors.
+    pub fn build(&mut self) -> ANNResult<()> {
+        let data_path = self.index_writer.get_dataset_file();
+        let metadata = load_metadata_from_file(self.storage_provider, &data_path)?;
+        let vamana = &self.config.graph;
         info!(
             "Training quantizer for {} quantized builds.",
-            self.build_quantization.to_string()
+            vamana.build_quantization.to_string()
         );
         let backend = Backend::<Data::VectorDataType>::new(
-            &self.build_quantization,
-            &builder.config.common,
+            &vamana.build_quantization,
+            &self.config.common,
             metadata.npoints(),
-            data_path,
-            &builder.index_writer.get_index_path_prefix(),
-            builder.storage_provider,
+            &data_path,
+            &self.index_writer.get_index_path_prefix(),
+            self.storage_provider,
         )?;
-        let runtime = create_runtime(builder.config.common.num_threads)?;
+        let runtime = create_runtime(self.config.common.num_threads)?;
         info!(
             "Starting index build: R={} L={} Indexing RAM budget={} T={}",
-            self.graph.pruned_degree(),
-            self.graph.l_build(),
-            self.memory_budget.in_bytes(),
-            builder.config.common.num_threads
+            vamana.graph.pruned_degree(),
+            vamana.graph.l_build(),
+            vamana.memory_budget.in_bytes(),
+            self.config.common.num_threads
         );
-        builder.build_with(metadata, |pool| {
+        self.build_with(metadata, |pool| {
             runtime.block_on(async {
-                match determine_build_strategy::<Data>(metadata, self) {
+                match determine_build_strategy::<Data>(metadata, vamana) {
                     IndexBuildStrategy::Merged => {
                         MergedVamanaIndexBuilder::<Data, _>::new(
-                            &builder.config.common,
-                            &builder.index_writer,
+                            &self.config.common,
+                            &self.index_writer,
                             &backend,
-                            builder.storage_provider,
+                            self.storage_provider,
                         )
-                        .build(self, metadata, pool)
+                        .build(vamana, metadata, pool)
                         .await
                     }
                     IndexBuildStrategy::OneShot => {
                         build_inmem_index::<Data::VectorDataType, _>(
-                            self.graph.clone(),
+                            vamana.graph.clone(),
                             inmem_builder::Config::new(
                                 metadata.npoints(),
-                                builder.config.common.num_threads,
-                                self.prefetch_lookahead,
+                                self.config.common.num_threads,
+                                vamana.prefetch_lookahead,
                             )?,
-                            builder.config.common.seed,
+                            self.config.common.seed,
                             &backend,
-                            data_path,
-                            &builder.index_writer.get_mem_index_file(),
-                            builder.storage_provider,
+                            &data_path,
+                            &self.index_writer.get_mem_index_file(),
+                            self.storage_provider,
                         )
                         .await
                     }
@@ -276,40 +217,41 @@ where
 }
 
 #[cfg(feature = "pipnn")]
-impl<Data> sealed::GraphBuild<Data> for diskann::graph::pipnn::Config
+impl<Data, StorageProvider>
+    DiskIndexBuilder<'_, Data, StorageProvider, diskann::graph::pipnn::Config>
 where
     Data: GraphDataType<VectorIdType = u32, VectorDataType: super::pipnn::PipnnBuildElement>,
+    StorageProvider: StorageReadProvider<Reader: Send> + StorageWriteProvider + 'static,
 {
-    fn build_disk_index<StorageProvider>(
-        &self,
-        builder: &DiskIndexBuilder<'_, Data, StorageProvider, Self>,
-        data_path: &str,
-        metadata: Metadata,
-    ) -> ANNResult<()>
-    where
-        StorageProvider: StorageReadProvider<Reader: Send> + StorageWriteProvider + 'static,
-    {
+    /// Builds search-PQ, the PiPNN graph, and the disk layout.
+    ///
+    /// # Errors
+    /// Returns compression, graph-construction, or storage errors.
+    pub fn build(&mut self) -> ANNResult<()> {
+        let data_path = self.index_writer.get_dataset_file();
+        let metadata = load_metadata_from_file(self.storage_provider, &data_path)?;
+        let graph = &self.config.graph;
         info!(
             "Starting index build: algorithm=PiPNN R={} c_max={} leaf_k={} T={}",
-            self.degree(),
-            self.c_max(),
-            self.leaf_k(),
-            builder.config.common.num_threads
+            graph.degree(),
+            graph.c_max(),
+            graph.leaf_k(),
+            self.config.common.num_threads
         );
-        builder.build_with(metadata, |pool| {
+        self.build_with(metadata, |pool| {
             let start_id = start_point_from_medoid::<Data::VectorDataType, _>(
-                data_path,
-                builder.config.common.seed,
-                builder.storage_provider,
+                &data_path,
+                self.config.common.seed,
+                self.storage_provider,
             )?
             .id();
             super::pipnn::build_inmem_index::<Data::VectorDataType, _>(
-                builder.config.common.metric,
+                self.config.common.metric,
                 start_id,
-                self,
-                data_path,
-                &builder.index_writer.get_mem_index_file(),
-                builder.storage_provider,
+                graph,
+                &data_path,
+                &self.index_writer.get_mem_index_file(),
+                self.storage_provider,
                 pool,
             )
         })
