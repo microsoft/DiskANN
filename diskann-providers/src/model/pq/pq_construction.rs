@@ -32,7 +32,7 @@ use rayon::prelude::*;
 use tracing::info;
 
 use crate::{
-    model::GeneratePivotArguments,
+    model::{GeneratePivotArguments, pq::FixedChunkPQTable},
     storage::PQStorage,
     utils::{
         BridgeErr, ParallelIteratorInPool, RandomProvider, RayonThreadPoolRef,
@@ -58,6 +58,37 @@ where
     fn build_rng(&self, chunk_index: usize) -> Self::Rng {
         self.create_rnd_from_seed(chunk_index as u64)
     }
+}
+
+/// PQ training maintained for backwards compatibility.
+pub fn legacy_train(
+    data: rowmajor::Ref<f32>,
+    num_pq_chunks: usize,
+    rng: &mut dyn rand::RngCore,
+    pool: RayonThreadPoolRef<'_>,
+) -> ANNResult<FixedChunkPQTable> {
+    let dim = data.ncols();
+    let pivot_args = GeneratePivotArguments::new(
+        data.nrows(),
+        data.ncols(),
+        NUM_PQ_CENTROIDS,
+        num_pq_chunks,
+        5,
+    )?;
+    let mut offsets = vec![0; num_pq_chunks + 1];
+    let mut full_pivot_data = vec![0.0; NUM_PQ_CENTROIDS * dim];
+
+    generate_pq_pivots_from_membuf(
+        &pivot_args,
+        data.as_slice(),
+        &mut offsets,
+        &mut full_pivot_data,
+        rng,
+        &mut (false),
+        pool,
+    )?;
+
+    FixedChunkPQTable::new(dim, full_pivot_data.into(), offsets.into())
 }
 
 /// given training data in train_data of dimensions num_train * dim, generate

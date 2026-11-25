@@ -5,45 +5,16 @@
 
 use std::{num::NonZeroUsize, sync::Arc};
 
-use diskann::{
-    graph::{DiskANNIndex, StartPointStrategy},
-    provider::{self, DataProvider, DefaultContext},
-    ANNError, ANNResult,
-};
+use diskann::{graph::DiskANNIndex, provider::DataProvider};
 use diskann_benchmark_core::build as build_core;
 use diskann_benchmark_runner::{
     output::Output,
     utils::{percentiles, MicroSeconds},
 };
-use diskann_providers::{
-    self,
-    model::{configuration::IndexConfiguration, graph::provider::async_::inmem::SetStartPoints},
-    storage::{AsyncIndexMetadata, LoadWith, SaveWith},
-};
-use diskann_utils::{
-    future::AsyncFriendly,
-    views::rowmajor::{self, Matrix},
-};
+use diskann_utils::views::rowmajor;
 use serde::Serialize;
 
 use crate::{inputs::graph_index::IndexBuild, utils::progress::Progress};
-
-///////////////////////////////
-// Start Point Configuration //
-///////////////////////////////
-
-pub(crate) fn set_start_points<DP, T>(
-    provider: &DP,
-    data: rowmajor::Ref<'_, T>,
-    start_strategy: StartPointStrategy,
-) -> ANNResult<()>
-where
-    DP: SetStartPoints<[T]>,
-    T: diskann::graph::SampleableForStart + AsyncFriendly,
-{
-    let start_points = start_strategy.compute(data).map_err(ANNError::new)?;
-    provider.set_start_points(start_points.rows())
-}
 
 ///////////
 // Build //
@@ -101,49 +72,6 @@ where
 
             Ok(BuildStats::new(BuildKind::MultiInsert, results)?)
         }
-    }
-}
-
-#[cfg(any(feature = "scalar-quantization", feature = "spherical-quantization"))]
-pub(crate) fn only_single_insert<DP, T, S>(
-    index: Arc<DiskANNIndex<DP>>,
-    strategy: S,
-    data: Arc<rowmajor::Owned<T>>,
-    input: &IndexBuild,
-    output: &mut dyn Output,
-) -> anyhow::Result<BuildStats>
-where
-    DP: DataProvider,
-    build_core::graph::SingleInsert<DP, T, S>: build_core::Build<Output = ()>,
-    build_core::ids::Identity<DP::ExternalId>: build_core::ids::ToId<DP::ExternalId>,
-{
-    let rt = diskann_benchmark_core::tokio::runtime(input.num_threads())?;
-    match input.multi_insert() {
-        None => {
-            let runner = build_core::graph::SingleInsert::new(
-                index,
-                data,
-                strategy,
-                build_core::ids::Identity::<DP::ExternalId>::new(),
-            );
-
-            let results = build_core::build_tracked(
-                runner,
-                build_core::Parallelism::dynamic(
-                    diskann::utils::ONE,
-                    NonZeroUsize::new(input.num_threads()).unwrap(),
-                ),
-                &rt,
-                Some(&Progress::new(output)),
-            )?;
-
-            Ok(BuildStats::new(BuildKind::SingleInsert, results)?)
-        }
-        Some(_) => Err(anyhow::anyhow!(
-            "please file a bug report, this quantization does not \
-             support multi-insert and this should have been rejected \
-             by the benchmark front-end"
-        )),
     }
 }
 
@@ -205,46 +133,4 @@ impl std::fmt::Display for BuildStats {
             self.insert_latencies.mean, self.insert_latencies.p90, self.insert_latencies.p99,
         )
     }
-}
-
-////////////////////////
-// Save and Load API ///
-////////////////////////
-
-pub(crate) async fn save_index<DP, T>(
-    index: Arc<DiskANNIndex<DP>>,
-    save_path: &str,
-) -> anyhow::Result<()>
-where
-    DP: DataProvider<Context = DefaultContext, ExternalId = u32>
-        + for<'a> provider::SetElement<&'a [T]>,
-    DiskANNIndex<DP>: SaveWith<AsyncIndexMetadata, Error = ANNError>,
-{
-    index
-        .save_with(
-            &diskann_providers::storage::FileStorageProvider,
-            &AsyncIndexMetadata::new(save_path),
-        )
-        .await?;
-
-    Ok(())
-}
-
-// for now, this only works with full-precision indices
-pub(crate) async fn load_index<'a, DP>(
-    load_path: &'a str,
-    index_config: &IndexConfiguration,
-) -> anyhow::Result<DiskANNIndex<DP>>
-where
-    DP: DataProvider<Context = DefaultContext, ExternalId = u32>,
-    DiskANNIndex<DP>:
-        diskann_providers::storage::LoadWith<(&'a str, IndexConfiguration), Error = ANNError>,
-{
-    let index = DiskANNIndex::<DP>::load_with(
-        &diskann_providers::storage::FileStorageProvider,
-        &(load_path, index_config.clone()),
-    )
-    .await?;
-
-    Ok(index)
 }

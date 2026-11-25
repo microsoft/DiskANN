@@ -560,7 +560,6 @@ impl DiskIndexWriter {
 #[cfg(test)]
 mod disk_index_storage_test {
     use crate::test_utils::GraphDataF32VectorU32Data;
-    use diskann_providers::model::graph::provider::async_::SimpleNeighborProviderAsync;
     use diskann_providers::storage::VirtualStorageProvider;
     use diskann_utils::{io::write_bin, test_data_root, views::rowmajor};
     use vfs::OverlayFS;
@@ -760,10 +759,17 @@ mod disk_index_storage_test {
         )
         .unwrap();
 
-        // A single node with no neighbors, which is also the start point.
-        SimpleNeighborProviderAsync::new(1, 0, MAX_DEGREE, 1.0)
-            .save_direct(&storage_provider, 0, &index_writer.get_mem_index_file())
-            .unwrap();
+        {
+            let mut graph = storage_provider
+                .create_for_write(&index_writer.get_mem_index_file())
+                .unwrap();
+
+            graph.write_all(&28u64.to_le_bytes()).unwrap(); // 24-byte header + degree
+            graph.write_all(&MAX_DEGREE.to_le_bytes()).unwrap();
+            graph.write_all(&0u32.to_le_bytes()).unwrap(); // start point
+            graph.write_all(&0u64.to_le_bytes()).unwrap(); // frozen points
+            graph.write_all(&0u32.to_le_bytes()).unwrap(); // node 0 has no neighbors
+        }
 
         index_writer
             .create_disk_layout::<GraphDataF32VectorU32Data, _>(&storage_provider)

@@ -8,7 +8,8 @@ use std::{num::NonZeroUsize, sync::Arc};
 use diskann_benchmark_core::{self as benchmark_core, search as core_search};
 use diskann_benchmark_core::{recall::GroundTruthMode, search::graph::KnnParams};
 
-use crate::{index::result::SearchResults, inputs::graph_index::GraphSearch};
+use super::super::result::SearchResults;
+use crate::inputs::graph_index::GraphSearch;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct SearchSteps<'a> {

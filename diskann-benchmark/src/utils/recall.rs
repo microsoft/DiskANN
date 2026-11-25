@@ -74,6 +74,7 @@ where
 
 #[derive(Debug, Clone, Serialize)]
 #[non_exhaustive]
+#[expect(dead_code, reason = "this will be used for inmem")]
 pub(crate) struct AveragePrecisionMetrics {
     /// The number of queries.
     pub(crate) num_queries: usize,

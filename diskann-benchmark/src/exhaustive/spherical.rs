@@ -44,11 +44,10 @@ mod imp {
         utils::{percentiles, MicroSeconds},
         Benchmark, Output,
     };
-    use diskann_providers::model::graph::provider::async_::distances::UnwrapErr;
     use diskann_quantization::{
         alloc::{GlobalAllocator, ScopedAllocator},
         bits::{Representation, Unsigned},
-        spherical::{DataMut, SphericalQuantizer},
+        spherical::{iface::Opaque, DataMut, SphericalQuantizer},
         CompressIntoWith,
     };
     use diskann_utils::views::rowmajor::{self, Matrix, MatrixMut};
@@ -455,14 +454,12 @@ mod imp {
         Unsigned: Representation<NBITS>,
     {
         type Item<'a>
-            = diskann_quantization::spherical::iface::Opaque<'a>
+            = Opaque<'a>
         where
             Self: 'a;
 
         fn iter(&self) -> impl Iterator<Item = Self::Item<'_>> {
-            self.data
-                .rows()
-                .map(move |r| diskann_quantization::spherical::iface::Opaque::new(&r[..self.bytes]))
+            self.data.rows().map(move |r| Opaque::new(&r[..self.bytes]))
         }
     }
 
@@ -476,16 +473,22 @@ mod imp {
         layout: inputs::exhaustive::SphericalQuery,
     }
 
+    #[derive(Debug)]
+    pub(super) struct QueryComputer(diskann_quantization::spherical::iface::QueryComputer);
+
+    impl diskann_vector::PreprocessedDistanceFunction<Opaque<'_>> for QueryComputer {
+        fn evaluate_similarity(&self, x: Opaque<'_>) -> f32 {
+            self.0.evaluate_similarity(x).unwrap()
+        }
+    }
+
     impl<const NBITS: usize> algos::CreateQuantComputer<Store<NBITS>> for Plan
     where
         Unsigned: Representation<NBITS>,
         diskann_quantization::spherical::iface::Impl<NBITS>:
             diskann_quantization::spherical::iface::Quantizer,
     {
-        type Computer<'a> = UnwrapErr<
-            diskann_quantization::spherical::iface::QueryComputer,
-            diskann_quantization::spherical::iface::QueryDistanceError,
-        >;
+        type Computer<'a> = QueryComputer;
 
         fn create_quant_computer<'a>(
             &'a self,
@@ -495,16 +498,13 @@ mod imp {
             use diskann_quantization::spherical::iface::Quantizer;
 
             let allow_rescale = self.measure == SimilarityMeasure::InnerProduct;
-            Ok(store
-                .plan
-                .fused_query_computer(
-                    query,
-                    self.layout.into(),
-                    allow_rescale,
-                    GlobalAllocator,
-                    ScopedAllocator::global(),
-                )
-                .map(UnwrapErr::new)?)
+            Ok(QueryComputer(store.plan.fused_query_computer(
+                query,
+                self.layout.into(),
+                allow_rescale,
+                GlobalAllocator,
+                ScopedAllocator::global(),
+            )?))
         }
     }
 }

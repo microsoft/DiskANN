@@ -5,7 +5,7 @@
 use std::{borrow::Cow, io::Write, num::NonZeroUsize, sync::Arc};
 
 use diskann::{
-    graph::{DiskANNIndex, InplaceDeleteMethod, SampleableForStart},
+    graph::{strategy::FullPrecision, DiskANNIndex, InplaceDeleteMethod, SampleableForStart},
     utils::{VectorRepr, ONE},
 };
 use diskann_benchmark_core::{
@@ -20,22 +20,19 @@ use diskann_benchmark_runner::{
     Benchmark, Checkpoint,
 };
 use diskann_bftree::{BfTreeProvider, NoStore};
-use diskann_providers::{
-    model::graph::provider::async_::common::FullPrecision,
-    storage::{FileStorageProvider, SaveWith},
-};
+use diskann_providers::storage::{FileStorageProvider, SaveWith};
 use diskann_utils::views::rowmajor::{self, Matrix};
 
-use crate::{
-    index::{
-        build::{BuildKind, BuildStats},
-        search::knn,
-        streaming::{
-            managed::{self, Managed},
-            stats::{GenericStats, StreamStats},
-            ManagedStream,
-        },
+use super::{
+    build::{BuildKind, BuildStats},
+    search::knn,
+    streaming::{
+        managed::{self, Managed},
+        stats::{GenericStats, StreamStats},
+        ManagedStream,
     },
+};
+use crate::{
     inputs::{
         bftree::BfTreeDynamicRun,
         graph_index::{SearchPhase, TopkSearchPhase},

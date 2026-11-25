@@ -49,7 +49,6 @@ use super::{
     AccessError, BfTreeId, NoStore,
 };
 use crate::locks::StripedLocks;
-use diskann_providers::model::graph::provider::async_::distances::UnwrapErr;
 use diskann_providers::storage::{LoadWith, SaveWith, StorageReadProvider, StorageWriteProvider};
 
 /////////////////////
@@ -1139,7 +1138,7 @@ where
     provider: &'a BfTreeProvider<T, QuantVectorProvider, I>,
     neighbors: NeighborAccessor<'a, I>,
     set: map::Map<I, Owned>,
-    distance: UnwrapErr<spherical_iface::DistanceComputer, spherical_iface::DistanceError>,
+    distance: spherical_iface::DistanceComputer,
 }
 
 impl<'a, T, I> QuantPruneAccessor<'a, T, I>
@@ -1151,10 +1150,7 @@ where
         provider: &'a BfTreeProvider<T, QuantVectorProvider, I>,
         capacity: usize,
     ) -> ANNResult<Self> {
-        let distance = provider
-            .quant_vectors
-            .distance_computer()
-            .map(UnwrapErr::new)?;
+        let distance = provider.quant_vectors.distance_computer()?;
         let set = map::Builder::new(map::Capacity::Default).build(capacity);
         Ok(Self {
             provider,
@@ -1162,6 +1158,19 @@ where
             set,
             distance,
         })
+    }
+}
+
+#[derive(Debug)]
+pub struct QuantDistance<'a>(&'a spherical_iface::DistanceComputer);
+
+impl DistanceFunction<Opaque<'_>, Opaque<'_>> for QuantDistance<'_> {
+    fn evaluate_similarity(&self, x: Opaque<'_>, y: Opaque<'_>) -> f32 {
+        #[expect(
+            clippy::unwrap_used,
+            reason = "prune does not allow fallible distance functions"
+        )]
+        self.0.evaluate_similarity(x, y).unwrap()
     }
 }
 
@@ -1186,7 +1195,7 @@ where
         Self: 'a;
 
     type Distance<'a>
-        = &'a UnwrapErr<spherical_iface::DistanceComputer, spherical_iface::DistanceError>
+        = QuantDistance<'a>
     where
         Self: 'a;
 
@@ -1225,7 +1234,7 @@ where
             }
         });
 
-        let result = view.map(|v| (v, &self.distance));
+        let result = view.map(|v| (v, QuantDistance(&self.distance)));
         std::future::ready(result)
     }
 

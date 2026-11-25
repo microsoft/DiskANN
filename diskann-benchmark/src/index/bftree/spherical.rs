@@ -5,28 +5,25 @@
 
 use std::{io::Write, sync::Arc};
 
-use diskann::graph::DiskANNIndex;
+use diskann::graph::{strategy::Quantized, DiskANNIndex};
 use diskann_benchmark_runner::{
     benchmark::{MatchContext, Score},
     output::Output,
     Benchmark, Checkpoint,
 };
 use diskann_bftree::{quant::QuantVectorProvider, BfTreeProvider};
-use diskann_providers::{
-    model::graph::provider::async_::common::Quantized,
-    storage::{FileStorageProvider, SaveWith},
-};
+use diskann_providers::storage::{FileStorageProvider, SaveWith};
 use diskann_quantization::alloc::GlobalAllocator;
 use diskann_utils::views::rowmajor::{self, Matrix};
 use rand::SeedableRng;
 
+use super::{
+    benchmarks::{QueryType, Strategy},
+    build::single_or_multi_insert,
+    result::BuildResult,
+    search::plugins::{Plugin, Plugins},
+};
 use crate::{
-    index::{
-        benchmarks::{QueryType, Strategy},
-        build::single_or_multi_insert,
-        result::BuildResult,
-        search::plugins::{Plugin, Plugins},
-    },
     inputs::{bftree::BfTreeSphericalBuild, graph_index::SearchPhase},
     utils::{self, datafiles, tokio},
 };

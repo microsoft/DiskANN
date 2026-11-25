@@ -16,8 +16,6 @@ pub use virtual_storage_provider::VirtualStorageProvider;
 mod api;
 pub use api::{AsyncIndexMetadata, AsyncQuantLoadContext, LoadWith, SaveWith};
 
-pub(crate) mod bin;
-
 pub(crate) mod file_storage_provider;
 // Use VirtualStorageProvider in tests to avoid filesystem side-effects
 #[cfg(not(test))]
@@ -38,7 +36,4 @@ pub use path_utility::{
 };
 
 pub mod index_storage;
-pub use index_storage::{
-    create_load_context, load_fp_index, load_index_with_deletes, load_pq_index,
-    load_pq_index_with_deletes,
-};
+pub use index_storage::create_load_context;

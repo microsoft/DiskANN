@@ -73,6 +73,7 @@ where
 }
 
 #[derive(Debug)]
+#[cfg_attr(not(test), expect(dead_code, reason = "this will be used for inmem"))]
 pub struct BitmapFilter(pub BitSet);
 
 impl<T> QueryLabelProvider<T> for BitmapFilter
@@ -84,6 +85,7 @@ where
     }
 }
 
+#[expect(dead_code, reason = "this will be used for inmem")]
 pub(crate) fn generate_bitmaps(
     query_predicates: &InputFile,
     data_labels: &InputFile,
@@ -100,6 +102,7 @@ pub(crate) fn generate_bitmaps(
     Ok(bit_maps)
 }
 
+#[expect(dead_code, reason = "this will be used for inmem")]
 pub(crate) fn setup_filter_strategies<I, S>(
     beta: f32,
     bit_maps: I,
@@ -115,6 +118,7 @@ where
         .collect::<Vec<_>>()
 }
 
+#[expect(dead_code, reason = "this will be used for inmem")]
 pub(crate) fn as_query_label_provider(set: BitSet) -> Arc<dyn QueryLabelProvider<u32>> {
     Arc::new(BitmapFilter(set))
 }

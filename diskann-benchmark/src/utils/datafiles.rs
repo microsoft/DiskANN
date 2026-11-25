@@ -154,6 +154,7 @@ pub(crate) fn load_groundtruth(
 /// the number of results for each point, then the ground truth ids and distances
 /// for all points in two contiguous arrays
 /// We do not return groundtruth distances because there is no use for them in tie breaking
+#[expect(dead_code, reason = "this will be used for inmem's range search")]
 pub(crate) fn load_range_groundtruth(path: BinFile<'_>) -> anyhow::Result<Vec<Vec<u32>>> {
     let provider = diskann_providers::storage::FileStorageProvider;
     let mut file = provider

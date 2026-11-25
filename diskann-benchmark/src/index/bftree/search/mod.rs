@@ -3,5 +3,7 @@
  * Licensed under the MIT license.
  */
 
-pub mod multi_pq_async;
-pub use multi_pq_async::TestMultiPQProviderAsync;
+pub(crate) mod knn;
+
+pub(crate) mod plugins;
+pub(crate) use plugins::Plugin;
