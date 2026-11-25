@@ -15,7 +15,7 @@ use crate::{
     graph::{
         algorithms::SearchStats,
         search::Range,
-        test::{provider as test_provider, synthetic::Grid},
+        test::{self, index::Index, synthetic::Grid},
     },
     neighbor::Neighbor,
     test::{
@@ -91,14 +91,14 @@ fn root() -> TestRoot {
     TestRoot::new("graph/test/cases/range_search")
 }
 
-pub(super) fn setup_grid_index(grid_size: usize, dims: Grid) -> Arc<test_provider::Provider> {
-    Arc::new(test_provider::Provider::grid(dims, grid_size).unwrap())
+pub(super) fn setup_grid_index(grid_size: usize, dims: Grid) -> Arc<Index> {
+    Arc::new(Index::grid(dims, grid_size).unwrap())
 }
 
 pub(super) fn setup_grid_index_and_default_query(
     grid_size: usize,
     dims: Grid,
-) -> (Arc<test_provider::Provider>, Vec<f32>) {
+) -> (Arc<Index>, Vec<f32>) {
     let index = setup_grid_index(grid_size, dims);
     let query = vec![grid_size as f32; dims.dim().into()];
     (index, query)

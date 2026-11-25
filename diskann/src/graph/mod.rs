@@ -4,6 +4,8 @@
  */
 
 pub mod algorithms;
+pub mod stats;
+
 pub mod compat;
 
 pub mod search_output_buffer;
@@ -22,9 +24,6 @@ pub use config::Config;
 
 mod start_point;
 pub use start_point::{SampleableForStart, StartPointStrategy};
-
-mod misc;
-pub use misc::InplaceDeleteMethod;
 
 pub mod glue;
 pub mod search;

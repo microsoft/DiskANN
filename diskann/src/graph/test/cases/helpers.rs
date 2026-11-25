@@ -13,7 +13,8 @@ use diskann_vector::distance::Metric;
 use crate::graph::{
     self, AdjacencyList,
     test::{
-        provider::{self as test_provider, Provider, StartPoint},
+        self,
+        index::{Index, StartPoint},
         synthetic::Grid,
     },
 };
@@ -26,7 +27,7 @@ use crate::graph::{
 pub(super) fn setup_2d_square(
     adjacency_lists: Vec<AdjacencyList<u32>>,
     pruned_degree: usize,
-) -> Arc<Provider> {
+) -> Arc<Index> {
     let vectors = Grid::Two.data(2);
     let num_points = vectors.nrows();
     let dim = vectors.ncols();
@@ -61,10 +62,10 @@ pub(super) fn setup_2d_square(
     .build()
     .unwrap();
 
-    let provider_config = test_provider::Config::new(
+    let provider_config = test::index::Config::new(
         index_config,
         Metric::L2,
-        test_provider::StartPoint::new(start_id, vec![0.5; dim]),
+        test::index::StartPoint::new(start_id, vec![0.5; dim]),
     )
     .unwrap();
 
@@ -75,7 +76,7 @@ pub(super) fn setup_2d_square(
         .map(|(id, (row, adj))| (id as u32, row.to_vec(), adj));
 
     let provider =
-        Provider::new_from(provider_config, iter::once((start_id, start_adj)), points).unwrap();
+        Index::new_from(provider_config, iter::once((start_id, start_adj)), points).unwrap();
 
     Arc::new(provider)
 }
@@ -84,7 +85,7 @@ pub(super) fn setup_2d_square_using_synthetics_grid(
     size: usize,
     start_id: u32,
     pruned_degree: usize,
-) -> Arc<Provider> {
+) -> Arc<Index> {
     let grid = Grid::Two;
     let setup = grid.setup(size, start_id);
 
@@ -97,7 +98,7 @@ pub(super) fn setup_2d_square_using_synthetics_grid(
     .build()
     .unwrap();
 
-    let provider_config = test_provider::Config::new(
+    let provider_config = test::index::Config::new(
         index_config,
         Metric::L2,
         StartPoint::new(setup.start_id(), setup.start_point()),
@@ -105,7 +106,7 @@ pub(super) fn setup_2d_square_using_synthetics_grid(
     .unwrap();
 
     let provider =
-        Provider::new_from(provider_config, setup.start_neighbors(), setup.setup()).unwrap();
+        Index::new_from(provider_config, setup.start_neighbors(), setup.setup()).unwrap();
 
     Arc::new(provider)
 }
@@ -122,7 +123,7 @@ pub(super) fn generate_2d_square_adjacency_list() -> Vec<AdjacencyList<u32>> {
 }
 
 /// Assert that `id`'s sorted neighbor list equals `expected`.
-pub(super) fn assert_neighbors(index: &Provider, id: u32, expected: &[u32]) {
+pub(super) fn assert_neighbors(index: &Index, id: u32, expected: &[u32]) {
     let mut list = AdjacencyList::new();
     index
         .get_neighbors(id, list.as_empty())

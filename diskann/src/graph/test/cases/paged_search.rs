@@ -12,7 +12,7 @@
 use std::{num::NonZeroUsize, sync::Arc};
 
 use crate::{
-    graph::test::{provider as test_provider, synthetic::Grid},
+    graph::test::{self, index::Index, synthetic::Grid},
     neighbor::Neighbor,
     test::{
         TestRoot,
@@ -26,14 +26,11 @@ fn root() -> TestRoot {
     TestRoot::new("graph/test/cases/paged_search")
 }
 
-fn setup_grid_index(grid_size: usize, dims: Grid) -> Arc<test_provider::Provider> {
-    Arc::new(test_provider::Provider::grid(dims, grid_size).unwrap())
+fn setup_grid_index(grid_size: usize, dims: Grid) -> Arc<Index> {
+    Arc::new(Index::grid(dims, grid_size).unwrap())
 }
 
-fn setup_grid_index_and_basic_query(
-    grid_size: usize,
-    dims: Grid,
-) -> (Arc<test_provider::Provider>, Vec<f32>) {
+fn setup_grid_index_and_basic_query(grid_size: usize, dims: Grid) -> (Arc<Index>, Vec<f32>) {
     let index = setup_grid_index(grid_size, dims);
     let query = vec![grid_size as f32; dims.dim().into()];
     (index, query)

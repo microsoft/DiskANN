@@ -26,7 +26,7 @@ use crate::{
         self,
         config::IntraBatchCandidates,
         search::Knn,
-        test::{provider as test_provider, synthetic::Grid},
+        test::{self, index::Index, synthetic::Grid},
     },
     test::{
         TestPath, TestRoot,
@@ -56,7 +56,7 @@ fn build_index(
     size: usize,
     intra_batch_candidates: IntraBatchCandidates,
     max_minibatch_par: usize,
-) -> Arc<test_provider::Provider> {
+) -> Arc<Index> {
     let max_degree: usize = (grid.dim() as usize) * 2;
     let start_vector = grid.start_point(size);
 
@@ -84,14 +84,14 @@ fn build_index(
     .build()
     .unwrap();
 
-    let config = test_provider::Config::new(
+    let config = test::index::Config::new(
         index_config,
         Metric::L2,
-        test_provider::StartPoint::new(u32::MAX, start_vector),
+        test::index::StartPoint::new(u32::MAX, start_vector),
     )
     .unwrap();
 
-    Arc::new(test_provider::Provider::new(config))
+    Arc::new(Index::new(config))
 }
 
 /// Run a round of index building on `data`.
@@ -112,15 +112,15 @@ fn build_index(
 /// To that end, baseline tests should set this to `false` while ensuring that setting this
 /// to `true` (A) builds the same graph and (B) results in fewer `get_vector` calls.
 fn run_build(
-    index: &Arc<test_provider::Provider>,
+    index: &Arc<Index>,
     data: rowmajor::Ref<'_, f32>,
     batchsize: Option<NonZeroUsize>,
     working_set_reuse: bool,
     runtime: &tokio::runtime::Runtime,
-) -> test_provider::SpawnCount {
-    let strategy = test_provider::Strategy::with_options(working_set_reuse);
+) -> test::index::SpawnCount {
+    let strategy = test::index::Options::with_options(working_set_reuse);
 
-    let mut spawn_count = test_provider::SpawnCount::default();
+    let mut spawn_count = test::index::SpawnCount::default();
     match batchsize {
         None => {
             for (id, vector) in data.rows().enumerate() {
@@ -152,7 +152,7 @@ fn run_build(
 }
 
 /// Capture the graph state as sorted adjacency lists, if [`DUMP_GRAPH_STATE`] is enabled.
-fn maybe_dump_graph(index: &test_provider::Provider) -> Option<Vec<(u32, Vec<u32>)>> {
+fn maybe_dump_graph(index: &Index) -> Option<Vec<(u32, Vec<u32>)>> {
     if !DUMP_GRAPH_STATE {
         None
     } else {
@@ -168,7 +168,7 @@ fn maybe_dump_graph(index: &test_provider::Provider) -> Option<Vec<(u32, Vec<u32
 
 /// Search the index with standard query vectors and return results.
 fn run_searches(
-    index: &test_provider::Provider,
+    index: &Index,
     grid: Grid,
     size: usize,
     description_prefix: &str,
@@ -250,11 +250,11 @@ struct GridInsertBaseline {
     /// Total number of points inserted (excludes start point).
     num_inserted: usize,
 
-    /// Provider-level metrics captured immediately after all inserts complete.
-    insert_metrics: test_provider::Metrics,
+    /// Metrics captured immediately after all inserts complete.
+    insert_metrics: test::index::Metrics,
 
     /// The number of task spawns at levels below the top.
-    spawns: test_provider::SpawnCount,
+    spawns: test::index::SpawnCount,
 
     /// Search results collected after all inserts.
     searches: Vec<GridSearch>,

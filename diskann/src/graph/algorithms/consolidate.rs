@@ -30,15 +30,6 @@ pub trait Access: HasId {
 
     fn prune_accessor(&mut self) -> impl std::borrow::BorrowMut<Self::PruneAccessor<'_>> + Send;
 
-    /// Retrieve the adjacency list for the item.
-    ///
-    /// This method has very particular semantics:
-    ///
-    /// 1. It should **only** return an error for truly catastrophic problems. Accessing an
-    ///    ID that doesn't exist should return `false`, not an error.
-    ///
-    /// 2. The returned [`Bool`] indicates if the operation was successful. Only return `true`
-    ///    if `id` exists and the retrieval was successful. Otherwise, it should return `false`.
     fn neighbors(
         &mut self,
         id: Self::Id,
@@ -50,7 +41,7 @@ pub trait Access: HasId {
         &mut self,
         ids: &mut AdjacencyList<Self::Id>,
         deleted: Option<Empty<'_, Self::Id>>,
-    );
+    ) -> impl SendFuture<ANNResult<()>>;
 }
 
 // enum used to return the status of the vector that `consolidate_vector`
@@ -87,82 +78,86 @@ impl<I> Workspace<I> {
         }
     }
 
-    pub async fn run<A>(
+    pub fn run<A>(
         &mut self,
         access: &mut A,
         id: A::Id,
         config: &Config,
-    ) -> ANNResult<ConsolidateKind>
+    ) -> impl SendFuture<ANNResult<ConsolidateKind>>
     where
         I: VectorId,
-        A: Access<Id = I>,
+        A: Access<Id = I> + Send,
     {
-        if !access.neighbors(id, self.live.as_empty()).await?.get() {
-            return Ok(ConsolidateKind::Deleted);
-        }
-
-        self.deleted.clear();
-        self.neighborhood.clear();
-
-        access.partition_live(&mut self.live, Some(self.deleted.as_empty()));
-        if self.deleted.is_empty() && self.live.len() <= config.pruned_degree().get() {
-            return Ok(ConsolidateKind::Complete);
-        }
-
-        self.neighborhood.extend(self.live.iter().copied());
-
-        for &deleted in self.deleted.iter() {
-            // Always consolidate the neighborhood, even if there is a race and this deleted
-            // neighbor gets resurrected.
-            let _ = access.neighbors(deleted, self.live.as_empty()).await?;
-            access.partition_live(&mut self.live, None);
-            self.neighborhood.extend(self.live.iter().copied());
-        }
-
-        // Remove self-loop if it snuck in.
-        self.neighborhood.remove(&id);
-        self.live
-            .replace_from_iter_unique(self.neighborhood.iter().copied());
-
-        let mut prune_accessor = access.prune_accessor();
-        let update: &[I] = {
-            // FIXME: Use of `pruned_degree` is probably incorrect but copied over from an
-            // earlier version of this algorithm. Kept for consistency.
-            if self.live.len() < config.pruned_degree().get() {
-                &self.live
-            } else {
-                // Force saturation is mainly used for the retry insert logic.
-                //
-                // No need to force during consolidation.
-                let options = prune::Options {
-                    force_saturate: false,
-                };
-
-                if algorithms::insert::robust_prune_list(
-                    prune_accessor.borrow_mut(),
-                    id,
-                    &self.live,
-                    &mut self.prune,
-                    options,
-                    config,
-                )
-                .await
-                .allow_transient("vector retrieval is allowed to fail during consolidate")?
-                .is_none()
-                {
-                    return Ok(ConsolidateKind::FailedVectorRetrieval);
-                }
-
-                &self.prune.neighbors
+        async move {
+            if !access.neighbors(id, self.live.as_empty()).await?.get() {
+                return Ok(ConsolidateKind::Deleted);
             }
-        };
 
-        prune_accessor
-            .borrow_mut()
-            .neighbors()
-            .borrow_mut()
-            .set_neighbors(id, update)
-            .await?;
-        Ok(ConsolidateKind::Complete)
+            self.deleted.clear();
+            self.neighborhood.clear();
+
+            access
+                .partition_live(&mut self.live, Some(self.deleted.as_empty()))
+                .await?;
+            if self.deleted.is_empty() && self.live.len() <= config.pruned_degree().get() {
+                return Ok(ConsolidateKind::Complete);
+            }
+
+            self.neighborhood.extend(self.live.iter().copied());
+
+            for &deleted in self.deleted.iter() {
+                // Always consolidate the neighborhood, even if there is a race and this deleted
+                // neighbor gets resurrected.
+                let _ = access.neighbors(deleted, self.live.as_empty()).await?;
+                access.partition_live(&mut self.live, None).await?;
+                self.neighborhood.extend(self.live.iter().copied());
+            }
+
+            // Remove self-loop if it snuck in.
+            self.neighborhood.remove(&id);
+            self.live
+                .replace_from_iter_unique(self.neighborhood.iter().copied());
+
+            let mut prune_accessor = access.prune_accessor();
+            let update: &[I] = {
+                // FIXME: Use of `pruned_degree` is probably incorrect but copied over from an
+                // earlier version of this algorithm. Kept for consistency.
+                if self.live.len() < config.pruned_degree().get() {
+                    &self.live
+                } else {
+                    // Force saturation is mainly used for the retry insert logic.
+                    //
+                    // No need to force during consolidation.
+                    let options = prune::Options {
+                        force_saturate: false,
+                    };
+
+                    if algorithms::insert::robust_prune_list(
+                        prune_accessor.borrow_mut(),
+                        id,
+                        &self.live,
+                        &mut self.prune,
+                        options,
+                        config,
+                    )
+                    .await
+                    .allow_transient("vector retrieval is allowed to fail during consolidate")?
+                    .is_none()
+                    {
+                        return Ok(ConsolidateKind::FailedVectorRetrieval);
+                    }
+
+                    &self.prune.neighbors
+                }
+            };
+
+            prune_accessor
+                .borrow_mut()
+                .neighbors()
+                .borrow_mut()
+                .set_neighbors(id, update)
+                .await?;
+            Ok(ConsolidateKind::Complete)
+        }
     }
 }

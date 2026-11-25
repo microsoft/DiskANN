@@ -736,7 +736,11 @@ mod test_support {
 mod construction_tests {
     use super::*;
     use crate::{
-        graph::{config, search::Knn, test::provider as test_provider},
+        graph::{
+            config,
+            search::Knn,
+            test::{self, index::Index},
+        },
         neighbor::{BackInserter, Neighbor},
         test::tokio::current_thread_runtime,
     };
@@ -811,14 +815,14 @@ mod construction_tests {
         graph: config::Config,
         metric: Metric,
         adjacency: Vec<AdjacencyList<u32>>,
-    ) -> test_provider::Provider {
+    ) -> Index {
         let medoid = f32::compute_medoid(data);
         let medoid_id = data.rows().position(|row| row == medoid).unwrap();
         let start_id = data.nrows() as u32;
-        let provider_config = test_provider::Config::new(
+        let provider_config = test::index::Config::new(
             graph,
             metric,
-            test_provider::StartPoint::new(start_id, data.row(medoid_id).to_vec()),
+            test::index::StartPoint::new(start_id, data.row(medoid_id).to_vec()),
         )
         .unwrap();
         let start_neighbors = AdjacencyList::from_iter_untrusted([medoid_id as u32]);
@@ -828,15 +832,14 @@ mod construction_tests {
             .enumerate()
             .map(|(id, (row, neighbors))| (id as u32, row.to_vec(), neighbors));
 
-        test_provider::Provider::new_from(provider_config, [(start_id, start_neighbors)], points)
-            .unwrap()
+        Index::new_from(provider_config, [(start_id, start_neighbors)], points).unwrap()
     }
 
     /// Assert that a search for each point of `data` returns its ten nearest
     /// distances, in order. An exact top 1 for every point also shows that
     /// every point is reachable from the start node.
     fn assert_exact_top_10(
-        index: &test_provider::Provider,
+        index: &Index,
         data: rowmajor::Ref<'_, f32>,
         metric: Metric,
         case: &str,

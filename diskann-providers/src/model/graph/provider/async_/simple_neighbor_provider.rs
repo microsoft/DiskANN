@@ -6,7 +6,11 @@
 use std::sync::RwLock;
 
 use crate::storage::{StorageReadProvider, StorageWriteProvider};
-use diskann::{ANNError, ANNResult, graph::AdjacencyList, provider::HasId};
+use diskann::{
+    ANNError, ANNResult,
+    graph::{AdjacencyList, stats::DegreeStats},
+    provider::HasId,
+};
 use diskann_utils::lazy_format;
 use diskann_vector::contains::ContainsSimd;
 use tracing::trace;
@@ -131,6 +135,20 @@ impl SimpleNeighborProviderAsync {
         // `new_len < self.graph.dim()` is enforced by the loop above, so the cast is safe.
         list_raw[self.graph.dim() - 1] = new_len as u32;
         Ok(())
+    }
+
+    pub fn degree_stats(&self) -> DegreeStats {
+        self.locks
+            .iter()
+            .enumerate()
+            .map(|(id, lock)| {
+                #[expect(clippy::unwrap_used)]
+                let _guard = lock.read().unwrap();
+
+                // SAFETY: We are under the read lock.
+                unsafe { self.get_slice(id) }.len()
+            })
+            .collect()
     }
 }
 

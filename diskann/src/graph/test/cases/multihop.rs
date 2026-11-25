@@ -20,7 +20,7 @@ use crate::{
         self, AdjacencyList,
         ext::labeled,
         search::{Knn, MultihopFilterSearch},
-        test::provider as test_provider,
+        test::{self, index::Index},
     },
     neighbor::Neighbor,
     test::{
@@ -82,7 +82,7 @@ pub(super) fn build_1d_index(
     start_neighbors: AdjacencyList<u32>,
     points: Vec<(u32, Vec<f32>, AdjacencyList<u32>)>,
     max_degree: usize,
-) -> test_provider::Provider {
+) -> Index {
     let index_config = graph::config::Builder::new(
         max_degree,
         graph::config::MaxDegree::Same,
@@ -92,19 +92,18 @@ pub(super) fn build_1d_index(
     .build()
     .unwrap();
 
-    let config = test_provider::Config::new(
+    let config = test::index::Config::new(
         index_config,
         Metric::L2,
-        test_provider::StartPoint::new(start_id, vec![start_pos]),
+        test::index::StartPoint::new(start_id, vec![start_pos]),
     )
     .unwrap();
 
-    test_provider::Provider::new_from(config, std::iter::once((start_id, start_neighbors)), points)
-        .unwrap()
+    Index::new_from(config, std::iter::once((start_id, start_neighbors)), points).unwrap()
 }
 
 fn run(
-    index: &test_provider::Provider,
+    index: &Index,
     query: &[f32],
     l: usize,
     filter: &dyn labeled::QueryLabelProvider<u32>,
@@ -270,10 +269,10 @@ verbose_eq!(MultihopFilterBaseline {
 });
 
 /// Set up a 3D grid index using the test provider.
-pub(super) fn setup_grid_index(grid_size: usize) -> Arc<test_provider::Provider> {
+pub(super) fn setup_grid_index(grid_size: usize) -> Arc<Index> {
     use crate::graph::test::synthetic::Grid;
 
-    Arc::new(test_provider::Provider::grid(Grid::Three, grid_size).unwrap())
+    Arc::new(Index::grid(Grid::Three, grid_size).unwrap())
 }
 
 /// Two-hop reachability through non-matching nodes, end-to-end with baseline.

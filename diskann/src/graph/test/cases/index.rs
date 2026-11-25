@@ -7,7 +7,7 @@ use std::num::NonZeroUsize;
 
 use super::helpers::{generate_2d_square_adjacency_list, setup_2d_square};
 use crate::{
-    graph::{self, AdjacencyList, algorithms, test::provider as test_provider},
+    graph::{self, AdjacencyList, algorithms, test},
     provider::NeighborAccessor,
     test::cmp::assert_eq_verbose,
 };
@@ -25,7 +25,7 @@ async fn test_count_reachable_nodes() {
 
     assert_eq!(initial_result, 5);
 
-    let strat = test_provider::Strategy::new();
+    let strat = test::index::Options::new();
 
     index
         .delete(
@@ -88,7 +88,7 @@ async fn test_count_unreachable_isolated_nodes() {
 // async fn test_prune_range() {
 //     let adjacency_list = generate_2d_square_adjacency_list();
 //     let index = setup_2d_square(adjacency_list, 1);
-//     let strat = test_provider::Strategy::new();
+//     let strat = test::index::Options::new();
 //
 //     index.prune_range(&strat, &ctx, 0..4).await.unwrap();
 //

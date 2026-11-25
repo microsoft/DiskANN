@@ -13,14 +13,18 @@ use crate::{
         algorithms::inplace_delete::{
             InplaceDeleteMethod, OneHop, TwoHopAndOneHop, VisitedAndTopK,
         },
-        test::provider::{self as test_provider},
+        test::{self, index::Index},
     },
     provider::NeighborAccessor,
 };
 
-use super::helpers::{generate_2d_square_adjacency_list, setup_2d_square};
+use super::helpers::{
+    generate_2d_square_adjacency_list, setup_2d_square, setup_2d_square_using_synthetics_grid,
+};
 
-fn inplace_delete_setup() -> Arc<test_provider::Provider> {
+const THREE: NonZeroUsize = NonZeroUsize::new(3).unwrap();
+
+fn inplace_delete_setup() -> Arc<Index> {
     let index_config = graph::config::Builder::new(
         10,
         graph::config::MaxDegree::default_slack(),
@@ -30,14 +34,14 @@ fn inplace_delete_setup() -> Arc<test_provider::Provider> {
     .build()
     .unwrap();
 
-    let provider_config = test_provider::Config::new(
+    let provider_config = test::index::Config::new(
         index_config,
         Metric::L2,
-        test_provider::StartPoint::new(0, vec![0.0, 0.0]),
+        test::index::StartPoint::new(0, vec![0.0, 0.0]),
     )
     .unwrap();
 
-    let provider = test_provider::Provider::new_from(
+    let provider = Index::new_from(
         provider_config,
         iter::once((0, AdjacencyList::new())),
         iter::empty(),
@@ -54,17 +58,17 @@ fn inplace_delete_setup() -> Arc<test_provider::Provider> {
 async fn basic_single() {
     let index = inplace_delete_setup();
 
-    let strat = test_provider::Strategy::new();
+    let options = test::index::Options::new();
 
     for i in 1..6 {
         index
-            .insert(&[i as f32, i as f32], i, &strat)
+            .insert(&[i as f32, i as f32], i, &options)
             .await
             .unwrap();
     }
 
     index
-        .delete(3, OneHop::new(NonZeroUsize::new(3).unwrap()).into(), &strat)
+        .delete(3, OneHop::new(THREE).into(), &options)
         .await
         .unwrap();
 }
@@ -78,26 +82,24 @@ async fn basic_single() {
 async fn basic_multi() {
     let index = inplace_delete_setup();
 
-    let strat = test_provider::Strategy::new();
+    let options = test::index::Options::new();
 
     for i in 1..6 {
         index
-            .insert(&[i as f32, i as f32], i, &strat)
+            .insert(&[i as f32, i as f32], i, &options)
             .await
             .unwrap();
     }
 
-    // FIXME: Restore
-    // index
-    //     .multi_inplace_delete(
-    //         strat.clone(),
-    //         &ctx,
-    //         Arc::new([3, 4]),
-    //         3,
-    //         graph::InplaceDeleteMethod::OneHop,
-    //     )
-    //     .await
-    //     .unwrap();
+    index
+        .batch_delete(
+            Arc::new([3, 4]),
+            OneHop::new(THREE).into(),
+            &options,
+            &tokio::runtime::Handle::current(),
+        )
+        .await
+        .unwrap();
 }
 
 /// Sets up 2D square, deletes node 3 with the given method, then validates.
@@ -106,7 +108,7 @@ async fn delete_node_3_and_validate(method: InplaceDeleteMethod) {
     let index = setup_2d_square(adjacency_lists, 4);
 
     index
-        .delete(3, method, &test_provider::Strategy::new())
+        .delete(3, method, &test::index::Options::new())
         .await
         .unwrap();
 
@@ -114,27 +116,24 @@ async fn delete_node_3_and_validate(method: InplaceDeleteMethod) {
     validate_graph_rebuild_for_simple_graph_after_3_delete(neighbors).await;
 }
 
-// /// Sets up 2D square, multi-deletes nodes 2 and 3 with the given method, then validates.
-// async fn multi_delete_2_and_3_and_validate(method: InplaceDeleteMethod) {
-//     let adjacency_lists = generate_2d_square_adjacency_list();
-//     let index = setup_2d_square(adjacency_lists, 4);
-//
-//     index
-//         .multi_inplace_delete(
-//             test_provider::Strategy::new(),
-//             &ctx,
-//             Arc::new([2, 3]),
-//             3,
-//             method,
-//         )
-//         .await
-//         .unwrap();
-//
-//     let neighbors = &mut index.provider().neighbors();
-//     validate_graph_after_2_and_3_delete(neighbors).await;
-// }
+/// Sets up 2D square, multi-deletes nodes 2 and 3 with the given method, then validates.
+async fn multi_delete_2_and_3_and_validate(method: InplaceDeleteMethod) {
+    let adjacency_lists = generate_2d_square_adjacency_list();
+    let index = setup_2d_square(adjacency_lists, 4);
 
-const THREE: NonZeroUsize = NonZeroUsize::new(3).unwrap();
+    index
+        .batch_delete(
+            Arc::new([2, 3]),
+            method,
+            &test::index::Options::new(),
+            &tokio::runtime::Handle::current(),
+        )
+        .await
+        .unwrap();
+
+    let neighbors = &mut index.neighbors();
+    validate_graph_after_2_and_3_delete(neighbors).await;
+}
 
 #[tokio::test(flavor = "current_thread")]
 async fn inplace_delete_onehop() {
@@ -171,21 +170,31 @@ async fn inplace_delete_visited_and_topk() {
     .await;
 }
 
-// /// Multi-delete vertices 2 and 3 using TwoHopAndOneHop, then validate the graph.
-// #[tokio::test(flavor = "current_thread")]
-// async fn multi_inplace_delete_twohop_and_onehop() {
-//     multi_delete_2_and_3_and_validate(InplaceDeleteMethod::TwoHopAndOneHop).await;
-// }
-//
-// /// Multi-delete vertices 2 and 3 using VisitedAndTopK, then validate the graph.
-// #[tokio::test(flavor = "current_thread")]
-// async fn multi_inplace_delete_visited_and_topk() {
-//     multi_delete_2_and_3_and_validate(InplaceDeleteMethod::VisitedAndTopK {
-//         k_value: 4,
-//         l_value: 10,
-//     })
-//     .await;
-// }
+/// Multi-delete vertices 2 and 3 using TwoHopAndOneHop, then validate the graph.
+#[tokio::test(flavor = "current_thread")]
+async fn multi_inplace_delete_twohop_and_onehop() {
+    multi_delete_2_and_3_and_validate(
+        TwoHopAndOneHop {
+            replacements: THREE,
+        }
+        .into(),
+    )
+    .await;
+}
+
+/// Multi-delete vertices 2 and 3 using VisitedAndTopK, then validate the graph.
+#[tokio::test(flavor = "current_thread")]
+async fn multi_inplace_delete_visited_and_topk() {
+    multi_delete_2_and_3_and_validate(
+        VisitedAndTopK {
+            replacements: THREE,
+            k_value: NonZeroUsize::new(4).unwrap(),
+            l_value: NonZeroUsize::new(10).unwrap(),
+        }
+        .into(),
+    )
+    .await;
+}
 
 async fn validate_graph_rebuild_for_simple_graph_after_3_delete<N>(neighbors: &mut N)
 where
@@ -309,7 +318,7 @@ async fn delete_isolated_node() {
                 replacements: THREE,
             }
             .into(),
-            &test_provider::Strategy::new(),
+            &test::index::Options::new(),
         )
         .await
         .unwrap(); // shouldn't panic
@@ -327,83 +336,87 @@ async fn delete_isolated_node() {
     }
 }
 
-// #[tokio::test(flavor = "current_thread")]
-// async fn inplace_delete_two_hop_and_one_hop_wider_topology() {
-//     let start_id = u32::MAX;
-//     let index = setup_2d_square_using_synthetics_grid(3, start_id, 4);
-//
-//     index
-//         .delete(
-//             4,
-//             TwoHopAndOneHop { replacements: THREE }.into(),
-//             &test_provider::Strategy::new(),
-//         )
-//         .await
-//         .unwrap();
-//
-//     let mut accessor = index.neighbors();
-//     let mut list = AdjacencyList::new();
-//
-//     for node in 0u32..9 {
-//         if node == 4 {
-//             continue; // we deleted 4
-//         }
-//
-//         accessor.get_neighbors(node, list.as_empty()).await.unwrap();
-//         assert!(
-//             !list.contains(4),
-//             "node {node} should not reference 4, it's deleted"
-//         );
-//     }
-//
-//     let reachable = index
-//         .count_reachable_nodes(&[start_id], &mut accessor)
-//         .await
-//         .unwrap();
-//     assert_eq!(reachable, 9, "8 data nodes + start should be reachable");
-// }
+#[tokio::test(flavor = "current_thread")]
+async fn inplace_delete_two_hop_and_one_hop_wider_topology() {
+    let start_id = u32::MAX;
+    let index = setup_2d_square_using_synthetics_grid(3, start_id, 4);
 
-// /// Multi-delete on the 3×3 grid with multi_thread to exercise parallel spawn + edge merge.
-// /// Deletes nodes [0, 4, 6] simultaneously, avoiding node 8 which is the start's only link.
-// #[tokio::test(flavor = "multi_thread")]
-// async fn multi_inplace_delete_wider_topology() {
-//     let start_id = u32::MAX;
-//     let index = setup_2d_square_using_synthetics_grid(3, start_id, 4);
-//
-//     let deleted: [u32; 3] = [0, 4, 6];
-//     index
-//         .multi_inplace_delete(
-//             test_provider::Strategy::new(),
-//             &ctx,
-//             Arc::new(deleted),
-//             3,
-//             InplaceDeleteMethod::TwoHopAndOneHop,
-//         )
-//         .await
-//         .unwrap();
-//
-//     let mut accessor = index.provider().neighbors();
-//     let mut list = AdjacencyList::new();
-//
-//     for node in 0u32..9 {
-//         if deleted.contains(&node) {
-//             continue; // deleted
-//         }
-//         accessor.get_neighbors(node, &mut list).await.unwrap();
-//         for &d in &deleted {
-//             assert!(
-//                 !list.contains(d),
-//                 "node {node} should not reference deleted node {d}"
-//             );
-//         }
-//     }
-//
-//     let reachable = index
-//         .count_reachable_nodes(&[start_id], &mut accessor)
-//         .await
-//         .unwrap();
-//     assert_eq!(
-//         reachable, 7,
-//         "6 surviving data nodes + start should be reachable"
-//     );
-// }
+    index
+        .delete(
+            4,
+            TwoHopAndOneHop {
+                replacements: THREE,
+            }
+            .into(),
+            &test::index::Options::new(),
+        )
+        .await
+        .unwrap();
+
+    let mut accessor = index.neighbors();
+    let mut list = AdjacencyList::new();
+
+    for node in 0u32..9 {
+        if node == 4 {
+            continue; // we deleted 4
+        }
+
+        accessor.get_neighbors(node, list.as_empty()).await.unwrap();
+        assert!(
+            !list.contains(4),
+            "node {node} should not reference 4, it's deleted"
+        );
+    }
+
+    let reachable = graph::algorithms::measure::reachable_from(&mut index.neighbors(), &[start_id])
+        .await
+        .unwrap();
+    assert_eq!(reachable, 9, "8 data nodes + start should be reachable");
+}
+
+/// Multi-delete on the 3×3 grid with multi_thread to exercise parallel spawn + edge merge.
+/// Deletes nodes [0, 4, 6] simultaneously, avoiding node 8 which is the start's only link.
+#[tokio::test(flavor = "multi_thread")]
+async fn multi_inplace_delete_wider_topology() {
+    let start_id = u32::MAX;
+    let index = setup_2d_square_using_synthetics_grid(3, start_id, 4);
+
+    let deleted: [u32; 3] = [0, 4, 6];
+    index
+        .batch_delete(
+            Arc::new(deleted),
+            TwoHopAndOneHop {
+                replacements: THREE,
+            }
+            .into(),
+            &test::index::Options::new(),
+            &tokio::runtime::Handle::current(),
+        )
+        .await
+        .unwrap();
+
+    let mut accessor = index.neighbors();
+    let mut list = AdjacencyList::new();
+
+    for node in 0u32..9 {
+        if deleted.contains(&node) {
+            continue; // deleted
+        }
+        accessor.get_neighbors(node, list.as_empty()).await.unwrap();
+        for &d in &deleted {
+            assert!(
+                !list.contains(d),
+                "node {node} should not reference deleted node {d}"
+            );
+        }
+    }
+
+    let reachable = graph::algorithms::measure::reachable_from(&mut accessor, &[start_id])
+        .await
+        .unwrap();
+
+    assert_eq!(
+        reachable, 7,
+        "6 surviving data nodes + start should be reachable"
+    );
+}

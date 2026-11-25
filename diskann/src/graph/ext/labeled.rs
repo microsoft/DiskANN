@@ -252,7 +252,7 @@ mod tests {
     use super::*;
     use crate::graph::{
         glue::{FilteredAccessor as _, HybridPredicate, Predicate, PredicateMut},
-        test::{provider as test_provider, synthetic::Grid},
+        test::{self, index::Index, synthetic::Grid},
     };
 
     #[derive(Debug)]
@@ -303,10 +303,10 @@ mod tests {
         // | 0  4  8 12
         //
         // Start point: u32::MAX (odd → rejected by EvenFilter).
-        let provider = test_provider::Provider::grid(Grid::Two, 4).unwrap();
+        let provider = Index::grid(Grid::Two, 4).unwrap();
         let filter = EvenFilter;
 
-        let inner = test_provider::Accessor::new(&provider, &[0.0, 0.0]).unwrap();
+        let inner = test::index::Accessor::new(&provider, &[0.0, 0.0]).unwrap();
         let mut accessor = FilteredAccessor::new(inner, &filter);
 
         // -- starting_points: u32::MAX is odd, should be Reject --
@@ -378,7 +378,7 @@ mod tests {
 
     #[tokio::test]
     async fn filtered_strategy_produces_accessor() {
-        let provider = test_provider::Provider::grid(Grid::Two, 4).unwrap();
+        let provider = Index::grid(Grid::Two, 4).unwrap();
         let filter = EvenFilter;
 
         let mut accessor =

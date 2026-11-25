@@ -9,7 +9,7 @@ use crate::{
     graph::{
         self,
         search::Knn,
-        test::{provider as test_provider, synthetic::Grid},
+        test::{self, index::Index, synthetic::Grid},
     },
     test::{
         TestPath, TestRoot,
@@ -62,7 +62,7 @@ pub(super) struct GridSearch {
     pub(super) beam_width: usize,
 
     /// Index level metrics recorded during search.
-    pub(super) metrics: test_provider::Metrics,
+    pub(super) metrics: test::index::Metrics,
 }
 
 verbose_eq!(GridSearch {
@@ -82,8 +82,8 @@ verbose_eq!(GridSearch {
 /// of `size`.
 ///
 /// The provider will be configured with the L2 metric.
-fn setup_grid_search(grid: Grid, size: usize) -> Arc<test_provider::Provider> {
-    Arc::new(test_provider::Provider::grid(grid, size).unwrap())
+fn setup_grid_search(grid: Grid, size: usize) -> Arc<Index> {
+    Arc::new(Index::grid(grid, size).unwrap())
 }
 
 const BEAM_WIDTHS: [usize; 3] = [1, 2, 4];

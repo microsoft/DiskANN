@@ -143,9 +143,9 @@ pub(crate) mod tests {
     use diskann::graph::test::synthetic::Grid;
     use diskann::{
         graph::{
-            self, AdjacencyList, InplaceDeleteMethod, StartPointStrategy,
+            self, AdjacencyList, StartPointStrategy,
             compat::{
-                DataProvider, DefaultContext, Delete, ExecutionContext, Guard,
+                DataProvider, DefaultContext, Delete, ExecutionContext, Guard, InplaceDeleteMethod,
                 InplaceDeleteStrategy, InsertStrategy, MultiInsertStrategy, SearchStrategy,
                 SetElement,
             },
@@ -1253,35 +1253,50 @@ pub(crate) mod tests {
         // vertex 3 should be dropped
         {
             let mut list = AdjacencyList::new();
-            neighbor_accessor.get_neighbors(4, list.as_empty()).await.unwrap();
+            neighbor_accessor
+                .get_neighbors(4, list.as_empty())
+                .await
+                .unwrap();
             list.sort();
             assert_eq!(&*list, &[0, 1, 2]);
         }
 
         {
             let mut list = AdjacencyList::new();
-            neighbor_accessor.get_neighbors(2, list.as_empty()).await.unwrap();
+            neighbor_accessor
+                .get_neighbors(2, list.as_empty())
+                .await
+                .unwrap();
             list.sort();
             assert_eq!(&*list, &[0, 1, 4]);
         }
 
         {
             let mut list = AdjacencyList::new();
-            neighbor_accessor.get_neighbors(0, list.as_empty()).await.unwrap();
+            neighbor_accessor
+                .get_neighbors(0, list.as_empty())
+                .await
+                .unwrap();
             list.sort();
             assert_eq!(&*list, &[1, 2, 4]);
         }
 
         {
             let mut list = AdjacencyList::new();
-            neighbor_accessor.get_neighbors(1, list.as_empty()).await.unwrap();
+            neighbor_accessor
+                .get_neighbors(1, list.as_empty())
+                .await
+                .unwrap();
             list.sort();
             assert_eq!(&*list, &[0, 2, 4]);
         }
 
         {
             let mut list = AdjacencyList::new();
-            neighbor_accessor.get_neighbors(3, list.as_empty()).await.unwrap();
+            neighbor_accessor
+                .get_neighbors(3, list.as_empty())
+                .await
+                .unwrap();
             assert!(list.is_empty());
         }
     }
@@ -1363,28 +1378,40 @@ pub(crate) mod tests {
         // vertex 4 (the start point) has its edge to 3 deleted
         {
             let mut list = AdjacencyList::new();
-            neighbor_accessor.get_neighbors(0, list.as_empty()).await.unwrap();
+            neighbor_accessor
+                .get_neighbors(0, list.as_empty())
+                .await
+                .unwrap();
             list.sort();
             assert_eq!(&*list, &[1, 2, 4]);
         }
 
         {
             let mut list = AdjacencyList::new();
-            neighbor_accessor.get_neighbors(1, list.as_empty()).await.unwrap();
+            neighbor_accessor
+                .get_neighbors(1, list.as_empty())
+                .await
+                .unwrap();
             list.sort();
             assert_eq!(&*list, &[0, 2, 4]);
         }
 
         {
             let mut list = AdjacencyList::new();
-            neighbor_accessor.get_neighbors(2, list.as_empty()).await.unwrap();
+            neighbor_accessor
+                .get_neighbors(2, list.as_empty())
+                .await
+                .unwrap();
             list.sort();
             assert_eq!(&*list, &[0, 1, 4]);
         }
 
         {
             let mut list = AdjacencyList::new();
-            neighbor_accessor.get_neighbors(4, list.as_empty()).await.unwrap();
+            neighbor_accessor
+                .get_neighbors(4, list.as_empty())
+                .await
+                .unwrap();
             list.sort();
             assert_eq!(&*list, &[0, 1, 2]);
         }
@@ -2341,22 +2368,16 @@ pub(crate) mod tests {
 
         let neighbor_accessor = &mut index.provider().neighbors();
         // check that we have an unpruned graph
-        let stats = index
-            .get_degree_stats(neighbor_accessor, index.provider().iter())
-            .await
-            .unwrap();
-        assert!(stats.max_degree.into_usize() > max_degree);
+        let stats = index.provider().neighbors().degree_stats();
+        assert!(stats.maximum() > max_degree);
 
         // prune graph and check that max_degree is respected
         index
             .prune_range(&FullPrecision, ctx, 0..256)
             .await
             .unwrap();
-        let stats = index
-            .get_degree_stats(neighbor_accessor, index.provider().iter())
-            .await
-            .unwrap();
-        assert!(stats.max_degree.into_usize() <= max_degree);
+        let stats = index.provider().neighbors().degree_stats();
+        assert!(stats.maximum() <= max_degree);
     }
 
     #[rstest]
@@ -2557,22 +2578,15 @@ pub(crate) mod tests {
         let index_sat = create_retry_saturated_index(NonZeroU32::new(1).unwrap(), true)
             .await
             .unwrap();
-        let mut accessor_sat = index_sat.provider().neighbors();
-        let res_sat = index_sat
-            .get_degree_stats(&mut accessor_sat, index_sat.provider().iter())
-            .await
-            .unwrap();
+        let res_sat = index_sat.provider().neighbors().degree_stats();
 
         let index_unsat = create_retry_saturated_index(NonZeroU32::new(1).unwrap(), false)
             .await
             .unwrap();
-        let mut accessor_unsat = index_unsat.provider().neighbors();
-        let res_unsat = index_unsat
-            .get_degree_stats(&mut accessor_unsat, index_unsat.provider().iter())
-            .await
-            .unwrap();
+        let res_unsat = index_unsat.provider().neighbors().degree_stats();
+
         assert!(
-            res_sat.avg_degree > res_unsat.avg_degree,
+            res_sat.average() > res_unsat.average(),
             "Saturated index should have higher average degree than the unsaturated index"
         );
     }
@@ -2582,22 +2596,14 @@ pub(crate) mod tests {
         let index_sat = create_retry_saturated_index(NonZeroU32::new(3).unwrap(), false)
             .await
             .unwrap();
-        let mut accessor_sat = index_sat.provider().neighbors();
-        let res_sat = index_sat
-            .get_degree_stats(&mut accessor_sat, index_sat.provider().iter())
-            .await
-            .unwrap();
+        let res_sat = index_sat.provider().neighbors().degree_stats();
 
         let index_unsat = create_retry_saturated_index(NonZeroU32::new(1).unwrap(), false)
             .await
             .unwrap();
-        let mut accessor_unsat = index_unsat.provider().neighbors();
-        let res_unsat = index_sat
-            .get_degree_stats(&mut accessor_unsat, index_unsat.provider().iter())
-            .await
-            .unwrap();
+        let res_unsat = index_unsat.provider().neighbors().degree_stats();
         assert!(
-            res_sat.avg_degree > res_unsat.avg_degree,
+            res_sat.average() > res_unsat.average(),
             "Saturated index should have higher average degree than the unsaturated index"
         );
     }

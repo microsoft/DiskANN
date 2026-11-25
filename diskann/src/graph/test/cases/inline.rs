@@ -15,8 +15,7 @@ use crate::{
         self, AdjacencyList,
         ext::labeled,
         search::{AdaptiveL, InlineFilterSearch, Knn},
-        test::provider as test_provider,
-        test::synthetic::Grid,
+        test::{self, index::Index, synthetic::Grid},
     },
     test::{
         TestRoot,
@@ -57,7 +56,7 @@ verbose_eq!(InlineBaseline {
 // Topology (3 levels below the start):
 //   0 (start) -> 10 level-1 nodes -> 20 level-2 nodes -> 40 labeled leaves.
 // The wide first level reaches adaptive-L's minimum sample count in one hop.
-fn build_three_level_labeled_provider() -> test_provider::Provider {
+fn build_three_level_labeled_provider() -> Index {
     let max_degree = 10;
     let start_id = 0u32;
 
@@ -70,10 +69,10 @@ fn build_three_level_labeled_provider() -> test_provider::Provider {
     .build()
     .unwrap();
 
-    let config = test_provider::Config::new(
+    let config = test::index::Config::new(
         index_config,
         Metric::L2,
-        test_provider::StartPoint::new(start_id, vec![0.0]),
+        test::index::StartPoint::new(start_id, vec![0.0]),
     )
     .unwrap();
 
@@ -106,7 +105,7 @@ fn build_three_level_labeled_provider() -> test_provider::Provider {
         ));
     }
 
-    test_provider::Provider::new_from(config, start_neighbors, points).unwrap()
+    Index::new_from(config, start_neighbors, points).unwrap()
 }
 
 #[derive(Debug)]
@@ -249,7 +248,7 @@ impl Setup1D {
         let mut path = test_root.path();
         let name = path.push(test_name);
 
-        let index = test_provider::Provider::grid(Grid::One, self.points).unwrap();
+        let index = Index::grid(Grid::One, self.points).unwrap();
 
         let adaptive_l = match kind {
             TestKind::Fixed => None,
@@ -293,7 +292,7 @@ enum TestKind {
     Adaptive,
 }
 
-fn build_three_level_index() -> std::sync::Arc<test_provider::Provider> {
+fn build_three_level_index() -> std::sync::Arc<Index> {
     std::sync::Arc::new(build_three_level_labeled_provider())
 }
 
@@ -326,7 +325,7 @@ verbose_eq!(InlineFilterBaseline {
 
 #[expect(clippy::too_many_arguments)]
 fn run_inline_on_grid(
-    index: &test_provider::Provider,
+    index: &Index,
     filter: &dyn labeled::QueryLabelProvider<u32>,
     grid_size: usize,
     matching_points: usize,

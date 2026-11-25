@@ -17,7 +17,7 @@ use crate::{
         self,
         ext::labeled,
         search::FilteredRange,
-        test::{provider as test_provider, synthetic::Grid},
+        test::{index::Index, synthetic::Grid},
     },
     neighbor::Neighbor,
     test::{
@@ -39,7 +39,7 @@ impl labeled::QueryLabelProvider<u32> for AlwaysTrueFilter {
 }
 
 fn run_filtered_range_search(
-    index: &test_provider::Provider,
+    index: &Index,
     query: &[f32],
     filtered_range: FilteredRange,
     filter: &impl labeled::QueryLabelProvider<u32>,

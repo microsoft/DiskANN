@@ -8,7 +8,6 @@
 use std::{
     collections::HashSet,
     fmt::{self, Debug},
-    future::Future,
 };
 
 use diskann_utils::{
@@ -24,7 +23,7 @@ use crate::{
     flat::DistancesUnordered,
     graph::test::synthetic::Grid,
     internal::counter::{Counter, LocalCounter},
-    provider::{self, HasId},
+    provider::HasId,
     utils::VectorRepr,
 };
 

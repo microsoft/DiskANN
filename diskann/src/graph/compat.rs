@@ -10,10 +10,7 @@
 
 use std::{borrow::BorrowMut, future::Future, num::NonZeroUsize, sync::Arc};
 
-use diskann_utils::{
-    Reborrow,
-    future::{AssertSend, SendFuture},
-};
+use diskann_utils::{Reborrow, future::SendFuture};
 use hashbrown::HashMap;
 use thiserror::Error;
 
@@ -21,8 +18,13 @@ use crate::{
     ANNError, ANNResult,
     error::{ErrorExt, IntoANNResult, StandardError, ToRanked},
     graph::{
-        self, AdjacencyList, SearchOutputBuffer, algorithms,
-        algorithms::inplace_delete::{self, OneHop, TwoHopAndOneHop, VisitedAndTopK},
+        self, AdjacencyList, SearchOutputBuffer,
+        adjacencylist::Empty,
+        algorithms::{
+            self,
+            consolidate::ConsolidateKind,
+            inplace_delete::{self, OneHop, TwoHopAndOneHop, VisitedAndTopK},
+        },
         glue::{
             Batch, DefaultPostProcessor, FilteredAccessor, PruneAccessor, SearchAccessor,
             SearchPostProcess,
@@ -30,7 +32,7 @@ use crate::{
         search::{FilteredSearch, PagedSearch, SearchFor},
     },
     provider::{HasId, NeighborAccessor, NeighborAccessorMut},
-    utils::VectorId,
+    utils::{Bool, VectorId},
 };
 
 ///////////
@@ -215,6 +217,88 @@ impl<DP> DiskANNIndex<DP> {
     // Maintenance //
     //-------------//
 
+    pub fn is_any_neighbor_deleted<NA>(
+        &self,
+        context: &DP::Context,
+        accessor: &mut NA,
+        vector_id: DP::InternalId,
+    ) -> impl SendFuture<ANNResult<bool>>
+    where
+        DP: Delete,
+        NA: NeighborAccessor<Id = DP::InternalId>,
+    {
+        async move {
+            let mut neighbors = AdjacencyList::new();
+            accessor
+                .get_neighbors(vector_id, neighbors.as_empty())
+                .await?;
+            for &id in neighbors.iter() {
+                let status = self
+                    .provider
+                    .status_by_internal_id(context, id)
+                    .await
+                    .allow_transient("a neighbor may disappear during a deletion check")?;
+                if !status.is_some_and(|status| status.is_valid()) {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        }
+    }
+
+    pub fn drop_deleted_neighbors<NA>(
+        &self,
+        context: &DP::Context,
+        accessor: &mut NA,
+        vector_id: DP::InternalId,
+        only_orphans: bool,
+    ) -> impl SendFuture<ANNResult<ConsolidateKind>>
+    where
+        DP: Delete,
+        NA: NeighborAccessorMut<Id = DP::InternalId>,
+    {
+        async move {
+            let status = self
+                .provider
+                .status_by_internal_id(context, vector_id)
+                .await
+                .escalate("`drop_deleted_neighbors` should only be called on valid IDs")?;
+            if status.is_deleted() {
+                return Ok(ConsolidateKind::Deleted);
+            }
+
+            let mut neighbors = AdjacencyList::new();
+            accessor
+                .get_neighbors(vector_id, neighbors.as_empty())
+                .await?;
+            let mut retained = AdjacencyList::with_capacity(neighbors.len());
+            let mut outgoing = AdjacencyList::new();
+            for &id in neighbors.iter() {
+                let status = self
+                    .provider
+                    .status_by_internal_id(context, id)
+                    .await
+                    .allow_transient("a neighbor may disappear during deletion cleanup")?;
+                let Some(status) = status else {
+                    continue;
+                };
+                if status.is_valid() {
+                    retained.push_unique(id);
+                } else if only_orphans {
+                    accessor.get_neighbors(id, outgoing.as_empty()).await?;
+                    if !outgoing.is_empty() {
+                        retained.push_unique(id);
+                    }
+                }
+            }
+
+            if retained.len() != neighbors.len() {
+                accessor.set_neighbors(vector_id, &retained).await?;
+            }
+            Ok(ConsolidateKind::Complete)
+        }
+    }
+
     /// Remove all outgoing edges from `vector_id`.
     ///
     /// This does not logically delete the vector or remove incoming references to it.
@@ -265,7 +349,7 @@ impl<DP> DiskANNIndex<DP> {
         context: &DP::Context,
         id: &DP::ExternalId,
         num_to_replace: usize,
-        inplace_delete_method: graph::InplaceDeleteMethod,
+        inplace_delete_method: InplaceDeleteMethod,
     ) -> impl SendFuture<ANNResult<()>>
     where
         DP: Delete,
@@ -297,7 +381,7 @@ impl<DP> DiskANNIndex<DP> {
             let mut workspace = inplace_delete::Workspace::new();
 
             match inplace_delete_method {
-                graph::InplaceDeleteMethod::OneHop => {
+                InplaceDeleteMethod::OneHop => {
                     self.provider
                         .delete(context, id)
                         .await
@@ -311,7 +395,7 @@ impl<DP> DiskANNIndex<DP> {
                         )
                         .await
                 }
-                graph::InplaceDeleteMethod::TwoHopAndOneHop => {
+                InplaceDeleteMethod::TwoHopAndOneHop => {
                     self.provider
                         .delete(context, id)
                         .await
@@ -325,7 +409,7 @@ impl<DP> DiskANNIndex<DP> {
                         )
                         .await
                 }
-                graph::InplaceDeleteMethod::VisitedAndTopK { k_value, l_value } => {
+                InplaceDeleteMethod::VisitedAndTopK { k_value, l_value } => {
                     let k_value = NonZeroUsize::new(k_value).ok_or_else(|| {
                         ANNError::message("inplace delete requires a non-zero k_value")
                     })?;
@@ -359,6 +443,37 @@ impl<DP> DiskANNIndex<DP> {
                         .await
                 }
             }
+        }
+    }
+
+    /// Consider the neighbors of `vector_id`, look for deleted nodes and compute replacements for them.
+    pub fn consolidate_vector<S>(
+        &self,
+        strategy: &S,
+        context: &DP::Context,
+        vector_id: DP::InternalId,
+    ) -> impl SendFuture<ANNResult<ConsolidateKind>>
+    where
+        DP: Delete,
+        S: PruneStrategy<DP>,
+    {
+        async move {
+            let prune = strategy
+                .prune_accessor(
+                    self.provider(),
+                    context,
+                    self.config.max_occlusion_size().get(),
+                )
+                .into_ann_result()?;
+            let mut accessor = Consolidate {
+                provider: self.provider(),
+                context,
+                prune,
+                partition: Vec::new(),
+            };
+            algorithms::consolidate::Workspace::new()
+                .run(&mut accessor, vector_id, &self.config)
+                .await
         }
     }
 
@@ -556,6 +671,18 @@ where
 // Inplace Delete //
 //----------------//
 
+// enum used to encode the algorithmic choices for inplace delete
+// the first term indicates what is used to approximate the in-neighbors
+// the second term indicates what is used to approximate the replace
+// candidates
+// also includes any params specific to that choice
+#[derive(Copy, Clone, Debug)]
+pub enum InplaceDeleteMethod {
+    VisitedAndTopK { k_value: usize, l_value: usize },
+    TwoHopAndOneHop,
+    OneHop,
+}
+
 struct InplaceDelete<'a, DP: DataProvider, P, S = ()> {
     provider: &'a DP,
     context: &'a DP::Context,
@@ -628,6 +755,91 @@ where
 
     fn search_accessor(&mut self) -> impl BorrowMut<S> + Send {
         &mut self.search
+    }
+}
+
+//-------------//
+// Consolidate //
+//-------------//
+
+#[derive(Debug)]
+struct Consolidate<'a, DP: DataProvider, P> {
+    provider: &'a DP,
+    context: &'a DP::Context,
+    prune: P,
+    partition: Vec<bool>,
+}
+
+impl<DP, P> HasId for Consolidate<'_, DP, P>
+where
+    DP: DataProvider,
+    P: HasId<Id = DP::InternalId>,
+{
+    type Id = DP::InternalId;
+}
+
+impl<DP, P> algorithms::consolidate::Access for Consolidate<'_, DP, P>
+where
+    DP: Delete,
+    P: PruneAccessor<Id = DP::InternalId>,
+{
+    type PruneAccessor<'a>
+        = P
+    where
+        Self: 'a;
+
+    fn prune_accessor(&mut self) -> impl BorrowMut<P> + Send {
+        &mut self.prune
+    }
+
+    async fn neighbors(&mut self, id: Self::Id, neighbors: Empty<'_, Self::Id>) -> ANNResult<Bool> {
+        // RACE WARNING: There is a TOCTOU race between the deletion check and the neighbor
+        // retrieval. This existed in older versions of this code and is part of the reason
+        // the `DataProvider` interface is being deprecated.
+        let status = self
+            .provider
+            .status_by_internal_id(self.context, id)
+            .await
+            .allow_transient("a vertex may disappear during consolidation")?;
+        let Some(status) = status else {
+            return Ok(false.into());
+        };
+
+        self.prune
+            .neighbors()
+            .borrow_mut()
+            .get_neighbors(id, neighbors)
+            .await?;
+        Ok(status.is_valid().into())
+    }
+
+    async fn partition_live(
+        &mut self,
+        ids: &mut AdjacencyList<Self::Id>,
+        deleted: Option<Empty<'_, Self::Id>>,
+    ) -> ANNResult<()> {
+        self.partition.clear();
+        for &id in ids.iter() {
+            let status = self
+                .provider
+                .status_by_internal_id(self.context, id)
+                .await
+                .allow_transient("a candidate may disappear during consolidation")?;
+            self.partition
+                .push(status.is_some_and(|status| status.is_valid()));
+        }
+
+        let mut deleted = deleted.map(Empty::take);
+        let mut position = 0;
+        ids.retain(|id| {
+            let live = self.partition[position];
+            position += 1;
+            if !live && let Some(deleted) = deleted.as_mut() {
+                deleted.push_unique(*id);
+            }
+            live
+        });
+        Ok(())
     }
 }
 
