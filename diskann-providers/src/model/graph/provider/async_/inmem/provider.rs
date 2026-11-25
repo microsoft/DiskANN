@@ -11,8 +11,8 @@ use diskann::{
     graph::{
         adjacencylist::Empty,
         compat::{
-            DataProvider, DefaultContext, Delete, ElementStatus, ExecutionContext, NoopGuard,
-            SetElement,
+            DataProvider, DefaultAccessor, DefaultContext, Delete, ElementStatus, ExecutionContext,
+            NoopGuard, SetElement,
         },
     },
     provider::{NeighborAccessor, NeighborAccessorMut},
@@ -545,6 +545,23 @@ where
         gid: &Self::ExternalId,
     ) -> Result<Self::InternalId, Self::Error> {
         Ok(*gid)
+    }
+}
+
+impl<U, V, D, Ctx> DefaultAccessor for DefaultProvider<U, V, D, Ctx>
+where
+    U: AsyncFriendly,
+    V: AsyncFriendly,
+    D: AsyncFriendly,
+    Ctx: ExecutionContext,
+{
+    type Accessor<'a>
+        = &'a SimpleNeighborProviderAsync
+    where
+        Self: 'a;
+
+    fn default_accessor(&self) -> Self::Accessor<'_> {
+        self.neighbors()
     }
 }
 

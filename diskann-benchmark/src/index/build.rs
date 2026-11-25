@@ -6,8 +6,10 @@
 use std::{num::NonZeroUsize, sync::Arc};
 
 use diskann::{
-    graph::{DiskANNIndex, StartPointStrategy},
-    provider::{self, DataProvider, DefaultContext},
+    graph::{
+        compat::{DataProvider, DefaultContext, DiskANNIndex, SetElement},
+        StartPointStrategy,
+    },
     ANNError, ANNResult,
 };
 use diskann_benchmark_core::build as build_core;
@@ -216,8 +218,7 @@ pub(crate) async fn save_index<DP, T>(
     save_path: &str,
 ) -> anyhow::Result<()>
 where
-    DP: DataProvider<Context = DefaultContext, ExternalId = u32>
-        + for<'a> provider::SetElement<&'a [T]>,
+    DP: DataProvider<Context = DefaultContext, ExternalId = u32> + for<'a> SetElement<&'a [T]>,
     DiskANNIndex<DP>: SaveWith<AsyncIndexMetadata, Error = ANNError>,
 {
     index

@@ -34,7 +34,7 @@
 
 use std::sync::Arc;
 
-use diskann::{graph::DiskANNIndex, provider::DataProvider};
+use diskann::graph::compat::{DataProvider, DiskANNIndex};
 use diskann_benchmark_runner::utils::fmt::{Delimit, Quote};
 use diskann_providers::model::graph::provider::DeterminantDiversityParams;
 

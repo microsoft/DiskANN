@@ -188,6 +188,8 @@ where
     /// The host provider.
     provider: &'a FullPrecisionProvider<T, Q, D, Ctx>,
 
+    query: &'a [T],
+
     /// The distance computer.
     computer: T::QueryDistance,
 
@@ -205,9 +207,10 @@ where
     D: AsyncFriendly,
     Ctx: ExecutionContext,
 {
-    pub fn new(provider: &'a FullPrecisionProvider<T, Q, D, Ctx>, query: &[T]) -> Self {
+    pub fn new(provider: &'a FullPrecisionProvider<T, Q, D, Ctx>, query: &'a [T]) -> Self {
         Self {
             provider,
+            query,
             computer: T::query_distance(query, provider.metric),
             id_buffer: AdjacencyList::new(),
         }
@@ -348,6 +351,15 @@ pub trait GetFullPrecision {
 
 pub trait GetQuery<T> {
     fn get_query(&self) -> &[T];
+}
+
+impl<T, Q, D, Ctx> GetQuery<T> for FullAccessor<'_, T, Q, D, Ctx>
+where
+    T: VectorRepr,
+{
+    fn get_query(&self) -> &[T] {
+        self.query
+    }
 }
 
 /// A [`glue::SearchPostProcess`] implementation that:

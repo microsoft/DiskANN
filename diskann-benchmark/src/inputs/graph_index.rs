@@ -1287,14 +1287,16 @@ pub enum InplaceDeleteMethod {
     OneHop,
 }
 
-impl From<InplaceDeleteMethod> for graph::InplaceDeleteMethod {
+impl From<InplaceDeleteMethod> for graph::compat::InplaceDeleteMethod {
     fn from(value: InplaceDeleteMethod) -> Self {
         match value {
             InplaceDeleteMethod::VisitedAndTopK { k_value, l_value } => {
-                graph::InplaceDeleteMethod::VisitedAndTopK { k_value, l_value }
+                graph::compat::InplaceDeleteMethod::VisitedAndTopK { k_value, l_value }
             }
-            InplaceDeleteMethod::TwoHopAndOneHop => graph::InplaceDeleteMethod::TwoHopAndOneHop,
-            InplaceDeleteMethod::OneHop => graph::InplaceDeleteMethod::OneHop,
+            InplaceDeleteMethod::TwoHopAndOneHop => {
+                graph::compat::InplaceDeleteMethod::TwoHopAndOneHop
+            }
+            InplaceDeleteMethod::OneHop => graph::compat::InplaceDeleteMethod::OneHop,
         }
     }
 }

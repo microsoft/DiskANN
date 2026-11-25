@@ -6,9 +6,10 @@
 use std::{io::Write, num::NonZeroUsize, sync::Arc};
 
 use diskann::{
-    graph::SampleableForStart,
-    graph::{glue, DiskANNIndex},
-    provider::{self, DataProvider, DefaultContext},
+    graph::{
+        compat::{self, DataProvider, DefaultContext, DiskANNIndex},
+        glue, SampleableForStart,
+    },
     utils::VectorRepr,
 };
 use diskann_benchmark_core::{
@@ -371,10 +372,10 @@ pub(crate) fn run_build<T, BF, CF, B, DP>(
 ) -> anyhow::Result<(Index<DP>, BuildStats)>
 where
     DP: DataProvider<Context = DefaultContext, InternalId = u32, ExternalId = u32>
-        + for<'a> provider::SetElement<&'a [T]>,
+        + for<'a> compat::SetElement<&'a [T]>,
     CF: FnOnce(rowmajor::Ref<T>) -> anyhow::Result<Arc<DiskANNIndex<DP>>>,
     T: diskann::graph::SampleableForStart + std::fmt::Debug + Copy + AsyncFriendly + bytemuck::Pod,
-    B: for<'a> glue::SearchStrategy<'a, DP, &'a [T]> + Clone + Send + Sync,
+    B: for<'a> compat::SearchStrategy<'a, DP, &'a [T]> + Clone + Send + Sync,
     BF: FnOnce(
         Index<DP>,
         B,
@@ -394,7 +395,7 @@ where
     Ok((index, build_stats))
 }
 
-/// A new-type wrapper for [`glue::SearchStrategy`].
+/// A new-type wrapper for [`compat::SearchStrategy`].
 ///
 /// This exists so we can implement [`search::Plugin`] for a raw generic `DP` without
 /// forming a blanket implementation for all `DP`/parameter `P` pairs.
@@ -467,11 +468,11 @@ impl search::Plugin<FullPrecisionProvider<f32>, SearchPhase, Strategy<common::Fu
 impl<DP, S> search::Plugin<DP, SearchPhase, Strategy<S>> for plugins::Topk
 where
     DP: DataProvider<Context: Default, InternalId = u32, ExternalId = u32> + QueryType,
-    S: for<'a> glue::DefaultSearchStrategy<
+    S: for<'a> compat::SearchStrategy<
             'a,
             DP,
             &'a [DP::Element],
-            SearchAccessor: glue::SearchAccessor,
+            SearchAccessor: glue::SearchAccessor + glue::DefaultPostProcessor<u32>,
         > + Clone
         + AsyncFriendly,
 {
@@ -525,11 +526,11 @@ where
 impl<DP, S> search::Plugin<DP, SearchPhase, Strategy<S>> for plugins::Range
 where
     DP: DataProvider<Context: Default, InternalId = u32, ExternalId = u32> + QueryType,
-    S: for<'a> glue::DefaultSearchStrategy<
+    S: for<'a> compat::SearchStrategy<
             'a,
             DP,
             &'a [DP::Element],
-            SearchAccessor: glue::SearchAccessor,
+            SearchAccessor: glue::SearchAccessor + glue::DefaultPostProcessor<u32>,
         > + Clone
         + AsyncFriendly,
 {
@@ -575,11 +576,11 @@ where
 impl<DP, S> search::Plugin<DP, SearchPhase, Strategy<S>> for plugins::FilteredRange
 where
     DP: DataProvider<Context: Default, InternalId = u32, ExternalId = u32> + QueryType,
-    S: for<'a> glue::DefaultSearchStrategy<
+    S: for<'a> compat::SearchStrategy<
             'a,
             DP,
             &'a [DP::Element],
-            SearchAccessor: glue::SearchAccessor,
+            SearchAccessor: glue::SearchAccessor + glue::DefaultPostProcessor<u32>,
         > + Clone
         + AsyncFriendly,
 {
@@ -641,11 +642,11 @@ where
 impl<DP, S> search::Plugin<DP, SearchPhase, Strategy<S>> for plugins::TopkBetaFilter
 where
     DP: DataProvider<Context: Default, InternalId = u32, ExternalId = u32> + QueryType,
-    S: for<'a> glue::DefaultSearchStrategy<
+    S: for<'a> compat::SearchStrategy<
             'a,
             DP,
             &'a [DP::Element],
-            SearchAccessor: glue::SearchAccessor,
+            SearchAccessor: glue::SearchAccessor + glue::DefaultPostProcessor<u32>,
         > + Clone
         + AsyncFriendly,
 {
@@ -707,11 +708,11 @@ where
 impl<DP, S> search::Plugin<DP, SearchPhase, Strategy<S>> for plugins::TopkMultihopFilter
 where
     DP: DataProvider<Context: Default, InternalId = u32, ExternalId = u32> + QueryType,
-    S: for<'a> glue::DefaultSearchStrategy<
+    S: for<'a> compat::SearchStrategy<
             'a,
             DP,
             &'a [DP::Element],
-            SearchAccessor: glue::SearchAccessor,
+            SearchAccessor: glue::SearchAccessor + glue::DefaultPostProcessor<u32>,
         > + Clone
         + AsyncFriendly,
 {
@@ -769,11 +770,11 @@ where
 impl<DP, S> search::Plugin<DP, SearchPhase, Strategy<S>> for plugins::TopkInlineFilter
 where
     DP: DataProvider<Context: Default, InternalId = u32, ExternalId = u32> + QueryType,
-    S: for<'a> glue::DefaultSearchStrategy<
+    S: for<'a> compat::SearchStrategy<
             'a,
             DP,
             &'a [DP::Element],
-            SearchAccessor: glue::SearchAccessor,
+            SearchAccessor: glue::SearchAccessor + glue::DefaultPostProcessor<u32>,
         > + Clone
         + AsyncFriendly,
 {

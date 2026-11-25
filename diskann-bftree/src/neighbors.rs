@@ -10,7 +10,7 @@ use std::marker::PhantomData;
 use bf_tree::{BfTree, Config};
 use bytemuck::{cast_slice, cast_slice_mut};
 use diskann::{
-    graph::{AdjacencyList, adjacencylist},
+    graph::{adjacencylist, AdjacencyList},
     provider::{self, HasId},
     ANNError, ANNResult,
 };

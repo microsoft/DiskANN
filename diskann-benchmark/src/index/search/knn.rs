@@ -90,7 +90,7 @@ pub(crate) trait Knn<I> {
 
 impl<DP, T, S, PP> Knn<DP::InternalId> for Arc<core_search::graph::KNN<DP, T, S, PP>>
 where
-    DP: diskann::provider::DataProvider,
+    DP: diskann::graph::compat::DataProvider,
     core_search::graph::KNN<DP, T, S, PP>: core_search::Search<
         Id = DP::InternalId,
         Parameters = KnnParams,
@@ -122,7 +122,7 @@ where
 
 impl<DP, T, S> Knn<DP::InternalId> for Arc<core_search::graph::MultiHop<DP, T, S>>
 where
-    DP: diskann::provider::DataProvider,
+    DP: diskann::graph::compat::DataProvider,
     core_search::graph::MultiHop<DP, T, S>: core_search::Search<
         Id = DP::InternalId,
         Parameters = KnnParams,
@@ -154,7 +154,7 @@ where
 
 impl<DP, T, S> Knn<DP::InternalId> for Arc<core_search::graph::InlineFilterSearch<DP, T, S>>
 where
-    DP: diskann::provider::DataProvider,
+    DP: diskann::graph::compat::DataProvider,
     core_search::graph::InlineFilterSearch<DP, T, S>: core_search::Search<
         Id = DP::InternalId,
         Parameters = KnnParams,

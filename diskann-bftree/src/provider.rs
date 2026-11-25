@@ -510,8 +510,7 @@ where
         &self,
         context: &Self::Context,
         gid: &Self::ExternalId,
-    ) -> impl std::future::Future<Output = Result<ElementStatus, Self::Error>> + Send
-    {
+    ) -> impl std::future::Future<Output = Result<ElementStatus, Self::Error>> + Send {
         self.status_by_internal_id(context, *gid)
     }
 
@@ -519,8 +518,7 @@ where
         &self,
         _context: &Self::Context,
         id: Self::InternalId,
-    ) -> impl std::future::Future<Output = Result<ElementStatus, Self::Error>> + Send
-    {
+    ) -> impl std::future::Future<Output = Result<ElementStatus, Self::Error>> + Send {
         let status = match self.full_vectors.get_vector_sync(id.as_index()) {
             Ok(_) => Ok(ElementStatus::Valid),
             Err(RankedError::Transient(_)) => Ok(ElementStatus::Deleted),
@@ -1088,7 +1086,8 @@ where
     where
         Self: 'a;
 
-    type Neighbors<'a> = NeighborAccessor<'q, I>
+    type Neighbors<'a>
+        = NeighborAccessor<'q, I>
     where
         Self: 'a;
 
@@ -1618,7 +1617,10 @@ where
                 .allow_transient("stale candidate during rerank")
             {
                 Ok(Some(vec)) => {
-                    reranked.push(Neighbor::new(*n.id(), f.evaluate_similarity(accessor.query, &vec)));
+                    reranked.push(Neighbor::new(
+                        *n.id(),
+                        f.evaluate_similarity(accessor.query, &vec),
+                    ));
                 }
                 Ok(None) => {
                     // Transient (deleted/missing) — skip this candidate.
@@ -2125,7 +2127,11 @@ mod tests {
     use crate::quant::create_test_quantizer;
     use crate::vectors::VectorProvider;
     use diskann::{
-        graph::{self, search::Knn, compat::{DiskANNIndex, InplaceDeleteMethod}},
+        graph::{
+            self,
+            compat::{DiskANNIndex, InplaceDeleteMethod},
+            search::Knn,
+        },
         neighbor::BackInserter,
     };
     use diskann_providers::storage::FileStorageProvider;
@@ -2767,23 +2773,11 @@ mod tests {
         }
 
         index
-            .inplace_delete(
-                FullPrecision,
-                ctx,
-                &2u32,
-                2,
-                InplaceDeleteMethod::OneHop,
-            )
+            .inplace_delete(FullPrecision, ctx, &2u32, 2, InplaceDeleteMethod::OneHop)
             .await
             .unwrap();
         index
-            .inplace_delete(
-                FullPrecision,
-                ctx,
-                &4u32,
-                2,
-                InplaceDeleteMethod::OneHop,
-            )
+            .inplace_delete(FullPrecision, ctx, &4u32, 2, InplaceDeleteMethod::OneHop)
             .await
             .unwrap();
 

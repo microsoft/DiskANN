@@ -273,7 +273,7 @@ where
         let query = self.queries.row(index);
         let mut visitor = Visitor::new(&self.provider, query, self.metric);
 
-        let stats = knn_search(&mut visitor, parameters.k, CopyIds, query, buffer).await?;
+        let stats = knn_search(&mut visitor, parameters.k, CopyIds, buffer).await?;
 
         Ok(Metrics {
             comparisons: stats.cmps,

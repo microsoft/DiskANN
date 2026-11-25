@@ -6,8 +6,7 @@
 use std::{borrow::Cow, num::NonZeroUsize, sync::Arc};
 
 use diskann::{
-    graph::{DiskANNIndex, InplaceDeleteMethod},
-    provider::{self, Delete},
+    graph::compat::{DefaultContext, Delete, DiskANNIndex, InplaceDeleteMethod},
     utils::{VectorRepr, ONE},
     ANNError, ANNResult,
 };
@@ -188,7 +187,7 @@ where
     }
 }
 
-/// NOTE: The implementation here strictly targets the implementation of [`provider::Delete`]
+/// NOTE: The implementation here strictly targets the implementation of [`Delete`]
 /// for [`DefaultProvider`] with the [`TableDeleteProviderAsync`] delete provider.
 ///
 /// Trying to make this generic over the delete provider is not a recipe for a good time.
@@ -205,7 +204,7 @@ where
 
     async fn build(&self, range: std::ops::Range<usize>) -> ANNResult<()> {
         let provider = self.index.provider();
-        let ctx = &provider::DefaultContext;
+        let ctx = &DefaultContext;
 
         for internal_id in range {
             let internal_id: u32 = internal_id

@@ -109,7 +109,7 @@ pub(crate) fn run<I>(
 
 impl<DP, T, S> Range<DP::InternalId> for Arc<core_search::graph::Range<DP, T, S>>
 where
-    DP: diskann::provider::DataProvider,
+    DP: diskann::graph::compat::DataProvider,
     core_search::graph::Range<DP, T, S>: core_search::Search<
         Id = DP::InternalId,
         Parameters = RangeParameters,
@@ -136,7 +136,7 @@ where
 impl<DP, T, S> Range<DP::InternalId>
     for Arc<core_search::graph::filtered_range::FilteredRange<DP, T, S>>
 where
-    DP: diskann::provider::DataProvider,
+    DP: diskann::graph::compat::DataProvider,
     core_search::graph::filtered_range::FilteredRange<DP, T, S>: core_search::Search<
         Id = DP::InternalId,
         Parameters = FilteredRangeParameters,
