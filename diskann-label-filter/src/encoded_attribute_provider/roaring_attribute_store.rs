@@ -51,6 +51,7 @@ where
         self.index.clone()
     }
 
+    #[cfg(test)]
     pub(crate) fn attribute_map(&self) -> Arc<RwLock<AttributeEncoder>> {
         self.attribute_map.clone()
     }

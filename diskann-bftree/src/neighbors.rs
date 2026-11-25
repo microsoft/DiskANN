@@ -10,7 +10,7 @@ use std::marker::PhantomData;
 use bf_tree::{BfTree, Config};
 use bytemuck::{cast_slice, cast_slice_mut};
 use diskann::{
-    graph::AdjacencyList,
+    graph::{AdjacencyList, adjacencylist},
     provider::{self, HasId},
     ANNError, ANNResult,
 };
@@ -324,9 +324,9 @@ where
     fn get_neighbors(
         &mut self,
         id: Self::Id,
-        neighbors: &mut AdjacencyList<Self::Id>,
+        neighbors: adjacencylist::Empty<'_, Self::Id>,
     ) -> impl std::future::Future<Output = ANNResult<()>> + Send {
-        std::future::ready(self.provider.get_neighbors(id, neighbors))
+        std::future::ready(self.provider.get_neighbors(id, neighbors.take()))
     }
 }
 

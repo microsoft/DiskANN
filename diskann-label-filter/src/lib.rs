@@ -19,12 +19,6 @@ pub mod utils {
     pub mod jsonl_reader;
 }
 
-pub mod inline_beta_search {
-    pub mod encoded_document_accessor;
-    pub mod inline_beta_filter;
-    pub mod predicate_evaluator;
-}
-
 // Persisent Index Traits
 pub mod traits {
     pub mod attribute_accessor;
@@ -39,12 +33,8 @@ pub mod traits {
 //Modules that  handle predicates by mapping them
 // to integers.
 pub mod encoded_attribute_provider {
-    pub(crate) mod ast_id_expr;
-    pub(crate) mod ast_label_id_mapper;
     pub(crate) mod attribute_encoder;
-    pub mod document_provider;
     pub mod encoded_attribute_accessor;
-    pub(crate) mod encoded_filter_expr;
     pub mod roaring_attribute_store;
 }
 
@@ -58,8 +48,6 @@ pub mod tests {
 }
 
 pub mod attribute;
-pub mod document;
-pub mod query;
 pub mod set;
 
 // Index implementations

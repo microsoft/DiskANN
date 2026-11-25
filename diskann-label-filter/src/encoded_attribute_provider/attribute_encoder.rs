@@ -83,7 +83,8 @@ impl AttributeEncoder {
     /// an "internal attribute"  looks it up in the attribute map and
     /// returns the matching id if it iexists.
     /// Returns: Some(id) if the attribute is known, None otherwise.
-    pub fn get(&self, attribute: &Attribute) -> Option<u64> {
+    #[cfg(test)]
+    pub(crate) fn get(&self, attribute: &Attribute) -> Option<u64> {
         //Since this is test code, we are not worrying about performance. But if
         //we need this function in the hot path, we'll have to do some borrow
         //tricks to optimize perf.

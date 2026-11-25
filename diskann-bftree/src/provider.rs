@@ -22,16 +22,18 @@ use diskann::{
     default_post_processor,
     error::{ErrorExt, Infallible, RankedError},
     graph::{
-        glue::{
-            self, Batch, CopyIds, DefaultPostProcessor, InplaceDeleteStrategy, InsertStrategy,
-            MultiInsertStrategy, PruneStrategy, SearchStrategy,
+        compat::{
+            DataProvider, DefaultContext, Delete, ElementStatus, InplaceDeleteStrategy,
+            InsertStrategy, MultiInsertStrategy, NoopGuard, PruneStrategy, SearchStrategy,
+            SetElement,
         },
+        glue::{self, Batch, CopyIds, DefaultPostProcessor},
         strategy::{FullPrecision, Quantized},
         workingset::map,
         AdjacencyList, SearchOutputBuffer,
     },
     neighbor::{self, Neighbor},
-    provider::{DataProvider, DefaultContext, Delete, ElementStatus, HasId, NoopGuard, SetElement},
+    provider::HasId,
     utils::VectorRepr,
     ANNError, ANNResult,
 };
@@ -508,7 +510,7 @@ where
         &self,
         context: &Self::Context,
         gid: &Self::ExternalId,
-    ) -> impl std::future::Future<Output = Result<diskann::provider::ElementStatus, Self::Error>> + Send
+    ) -> impl std::future::Future<Output = Result<ElementStatus, Self::Error>> + Send
     {
         self.status_by_internal_id(context, *gid)
     }
@@ -517,7 +519,7 @@ where
         &self,
         _context: &Self::Context,
         id: Self::InternalId,
-    ) -> impl std::future::Future<Output = Result<diskann::provider::ElementStatus, Self::Error>> + Send
+    ) -> impl std::future::Future<Output = Result<ElementStatus, Self::Error>> + Send
     {
         let status = match self.full_vectors.get_vector_sync(id.as_index()) {
             Ok(_) => Ok(ElementStatus::Valid),
@@ -926,6 +928,8 @@ where
     computer: super::quant::QuantQueryComputer,
     /// A buffer to store retrieved elements.
     element: Box<[u8]>,
+    /// The original query.
+    query: &'a [T],
 }
 
 impl<'a, T, I> QuantAccessor<'a, T, I>
@@ -935,7 +939,7 @@ where
 {
     pub(crate) fn new(
         provider: &'a BfTreeProvider<T, QuantVectorProvider, I>,
-        query: &[T],
+        query: &'a [T],
     ) -> ANNResult<Self> {
         let computer = provider.quant_vectors.query_computer(query)?;
         Ok(Self {
@@ -944,6 +948,7 @@ where
             element: (0..provider.quant_vectors.quantizer.bytes())
                 .map(|_| u8::default())
                 .collect(),
+            query,
         })
     }
 
@@ -1083,8 +1088,7 @@ where
     where
         Self: 'a;
 
-    type Neighbors<'a>
-        = diskann::provider::Neighbors<'a, NeighborAccessor<'q, I>>
+    type Neighbors<'a> = NeighborAccessor<'q, I>
     where
         Self: 'a;
 
@@ -1121,8 +1125,8 @@ where
         std::future::ready(result)
     }
 
-    fn neighbors(&mut self) -> Self::Neighbors<'_> {
-        diskann::provider::Neighbors(&mut self.neighbors)
+    fn neighbors(&mut self) -> impl std::borrow::BorrowMut<Self::Neighbors<'_>> + Send {
+        &mut self.neighbors
     }
 }
 
@@ -1191,7 +1195,7 @@ where
         Self: 'a;
 
     type Neighbors<'a>
-        = diskann::provider::Neighbors<'a, NeighborAccessor<'q, I>>
+        = NeighborAccessor<'q, I>
     where
         Self: 'a;
 
@@ -1229,8 +1233,8 @@ where
         std::future::ready(result)
     }
 
-    fn neighbors(&mut self) -> Self::Neighbors<'_> {
-        diskann::provider::Neighbors(&mut self.neighbors)
+    fn neighbors(&mut self) -> impl std::borrow::BorrowMut<Self::Neighbors<'_>> + Send {
+        &mut self.neighbors
     }
 }
 
@@ -1276,7 +1280,7 @@ where
     }
 }
 
-impl<'a, T, Q, I> DefaultPostProcessor<'a, BfTreeProvider<T, Q, I>, &'a [T]> for FullPrecision
+impl<'a, T, Q, I> DefaultPostProcessor<I> for FullAccessor<'a, T, Q, I>
 where
     T: VectorRepr,
     Q: AsyncFriendly,
@@ -1445,8 +1449,7 @@ where
     }
 }
 
-impl<'a, T, I> DefaultPostProcessor<'a, BfTreeProvider<T, QuantVectorProvider, I>, &'a [T]>
-    for Quantized
+impl<'a, T, I> DefaultPostProcessor<I> for QuantAccessor<'a, T, I>
 where
     T: VectorRepr,
     I: BfTreeId,
@@ -1586,7 +1589,7 @@ where
 #[derive(Debug, Default, Clone, Copy)]
 pub struct Rerank;
 
-impl<'a, T, I> glue::SearchPostProcess<QuantAccessor<'a, T, I>, &[T]> for Rerank
+impl<'a, T, I> glue::SearchPostProcess<QuantAccessor<'a, T, I>> for Rerank
 where
     T: VectorRepr,
     I: BfTreeId,
@@ -1596,7 +1599,6 @@ where
     fn post_process<Itr, B>(
         &self,
         accessor: &mut QuantAccessor<'a, T, I>,
-        query: &[T],
         candidates: Itr,
         output: &mut B,
     ) -> impl Future<Output = Result<usize, Self::Error>> + Send
@@ -1616,7 +1618,7 @@ where
                 .allow_transient("stale candidate during rerank")
             {
                 Ok(Some(vec)) => {
-                    reranked.push(Neighbor::new(*n.id(), f.evaluate_similarity(query, &vec)));
+                    reranked.push(Neighbor::new(*n.id(), f.evaluate_similarity(accessor.query, &vec)));
                 }
                 Ok(None) => {
                     // Transient (deleted/missing) — skip this candidate.
@@ -2123,8 +2125,7 @@ mod tests {
     use crate::quant::create_test_quantizer;
     use crate::vectors::VectorProvider;
     use diskann::{
-        graph::DiskANNIndex,
-        graph::{self, search::Knn},
+        graph::{self, search::Knn, compat::{DiskANNIndex, InplaceDeleteMethod}},
         neighbor::BackInserter,
     };
     use diskann_providers::storage::FileStorageProvider;
@@ -2165,7 +2166,7 @@ mod tests {
         .build()
         .unwrap();
 
-        Arc::new(DiskANNIndex::new(index_config, provider, None))
+        Arc::new(DiskANNIndex::new(provider, index_config))
     }
 
     #[tokio::test]
@@ -2245,7 +2246,7 @@ mod tests {
         .build()
         .unwrap();
 
-        let index = Arc::new(DiskANNIndex::new(index_config, provider, None));
+        let index = Arc::new(DiskANNIndex::new(provider, index_config));
         let ctx = &DefaultContext;
 
         for i in 0u64..15 {
@@ -2342,7 +2343,7 @@ mod tests {
         .build()
         .unwrap();
 
-        let index = Arc::new(DiskANNIndex::new(index_config, provider, None));
+        let index = Arc::new(DiskANNIndex::new(provider, index_config));
         let ctx = &DefaultContext;
 
         // Insert point k (vector `[k; 5]`) at id `base + k`, so the id carries
@@ -2443,11 +2444,11 @@ mod tests {
         }
 
         index
-            .inplace_delete(Quantized, ctx, &2u32, 2, graph::InplaceDeleteMethod::OneHop)
+            .inplace_delete(Quantized, ctx, &2u32, 2, InplaceDeleteMethod::OneHop)
             .await
             .unwrap();
         index
-            .inplace_delete(Quantized, ctx, &4u32, 2, graph::InplaceDeleteMethod::OneHop)
+            .inplace_delete(Quantized, ctx, &4u32, 2, InplaceDeleteMethod::OneHop)
             .await
             .unwrap();
 
@@ -2507,7 +2508,7 @@ mod tests {
         .build()
         .unwrap();
 
-        Arc::new(DiskANNIndex::new(index_config, provider, None))
+        Arc::new(DiskANNIndex::new(provider, index_config))
     }
 
     #[tokio::test]
@@ -2661,7 +2662,7 @@ mod tests {
             .build()
             .unwrap();
 
-            let index = Arc::new(DiskANNIndex::new(index_config, provider, None));
+            let index = Arc::new(DiskANNIndex::new(provider, index_config));
             let ctx = &DefaultContext;
 
             for (row, vector) in data.iter().enumerate() {
@@ -2771,7 +2772,7 @@ mod tests {
                 ctx,
                 &2u32,
                 2,
-                graph::InplaceDeleteMethod::OneHop,
+                InplaceDeleteMethod::OneHop,
             )
             .await
             .unwrap();
@@ -2781,7 +2782,7 @@ mod tests {
                 ctx,
                 &4u32,
                 2,
-                graph::InplaceDeleteMethod::OneHop,
+                InplaceDeleteMethod::OneHop,
             )
             .await
             .unwrap();
