@@ -3,6 +3,8 @@
  * Licensed under the MIT license.
  */
 
+#![cfg_attr(docsrs, feature(doc_cfg))]
+
 //! # Shareable Infrastructure for Benchmarking Vector Indexing
 //!
 //! The purpose of this crate is to create abstractions and implementations for benchmarking
@@ -50,6 +52,10 @@ pub mod tokio;
 pub mod build;
 pub mod search;
 pub mod streaming;
+
+// Rayon utilities
+#[cfg(feature = "sync")]
+mod rayon;
 
 /// # Notes on Testing
 ///

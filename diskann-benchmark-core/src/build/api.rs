@@ -108,7 +108,7 @@ where
     /// a fully typed container.
     ///
     /// This requires that the dynamic type of the boxed [`Any`] outputs in `inner` is `T`.
-    fn new(inner: BuildResultsInner) -> Self {
+    pub(super) fn new(inner: BuildResultsInner) -> Self {
         let BuildResultsInner {
             end_to_end_latency,
             task_results,
@@ -202,6 +202,41 @@ impl Parallelism {
     /// Returns [`Self::Sequential`].
     pub fn sequential(batchsize: NonZeroUsize) -> Self {
         Self::Sequential { batchsize }
+    }
+
+    // Test //
+
+    /// Return the expected number of tasks and batches for processing `num_data` items.
+    #[cfg(test)]
+    pub(super) fn ntasks_and_nbatches(&self, num_data: usize) -> (NonZeroUsize, usize) {
+        match self {
+            Self::Dynamic { batchsize, ntasks } => {
+                let nbatches = num_data.div_ceil(batchsize.get());
+                (*ntasks, nbatches)
+            }
+            Self::Sequential { batchsize } => {
+                let nbatches = num_data.div_ceil(batchsize.get());
+                (NonZeroUsize::MIN, nbatches)
+            }
+            Self::Fixed { batchsize, ntasks } => {
+                // For Fixed, data is first partitioned among tasks, then each partition is batched.
+                // We need to calculate how many batches each task produces.
+                use diskann::utils::async_tools::PartitionIter;
+                let nbatches: usize = PartitionIter::new(num_data, *ntasks)
+                    .map(|partition| match batchsize {
+                        Some(bs) => partition.len().div_ceil(bs.get()),
+                        None => {
+                            if partition.is_empty() {
+                                0
+                            } else {
+                                1
+                            }
+                        }
+                    })
+                    .sum();
+                (*ntasks, nbatches)
+            }
+        }
     }
 }
 
@@ -317,7 +352,7 @@ where
 
 /// Type erased inner build results.
 #[derive(Debug)]
-struct BuildResultsInner {
+pub(super) struct BuildResultsInner {
     end_to_end_latency: MicroSeconds,
 
     /// This field has an implicit correspondence with the task-id.
@@ -326,12 +361,38 @@ struct BuildResultsInner {
     task_results: Vec<Vec<BatchResultsInner>>,
 }
 
+impl BuildResultsInner {
+    pub(super) fn new(
+        end_to_end_latency: MicroSeconds,
+        task_results: Vec<Vec<BatchResultsInner>>,
+    ) -> Self {
+        Self {
+            end_to_end_latency,
+            task_results,
+        }
+    }
+}
+
 #[derive(Debug)]
-struct BatchResultsInner {
+pub(super) struct BatchResultsInner {
     batch: Range<usize>,
     latency: MicroSeconds,
     /// Note that this has dynamic type `Build::Output`.
     output: Box<dyn Any + Send>,
+}
+
+impl BatchResultsInner {
+    pub(super) fn new(
+        batch: Range<usize>,
+        latency: MicroSeconds,
+        output: Box<dyn Any + Send>,
+    ) -> Self {
+        Self {
+            batch,
+            latency,
+            output,
+        }
+    }
 }
 
 //---------//
@@ -363,11 +424,7 @@ async fn build_inner_dynamic(
                         p.progress(batch.len());
                     }
 
-                    results.push(BatchResultsInner {
-                        batch,
-                        latency,
-                        output,
-                    });
+                    results.push(BatchResultsInner::new(batch, latency, output));
                 }
                 Ok::<_, ANNError>(results)
             })
@@ -384,21 +441,18 @@ async fn build_inner_dynamic(
         p.finish();
     }
 
-    Ok(BuildResultsInner {
-        end_to_end_latency,
-        task_results,
-    })
+    Ok(BuildResultsInner::new(end_to_end_latency, task_results))
 }
 
 #[derive(Debug, Clone)]
-struct ControlBlock(Arc<ControlBlockInner>);
+pub(super) struct ControlBlock(Arc<ControlBlockInner>);
 
 impl ControlBlock {
-    fn new(max: usize, batchsize: NonZeroUsize) -> Self {
+    pub(super) fn new(max: usize, batchsize: NonZeroUsize) -> Self {
         Self(Arc::new(ControlBlockInner::new(max, batchsize)))
     }
 
-    fn next(&self) -> Option<Range<usize>> {
+    pub(super) fn next(&self) -> Option<Range<usize>> {
         // We need to be careful about overflowing and the potential conflict with multiple
         // threads working with changes.
         //
@@ -472,27 +526,21 @@ async fn build_inner_fixed(
                                 p.progress(batch.len());
                             }
 
-                            results.push(BatchResultsInner {
-                                batch,
-                                latency,
-                                output,
-                            });
+                            results.push(BatchResultsInner::new(batch, latency, output));
                         }
                     }
                     None => {
-                        let start = std::time::Instant::now();
-                        let output = build_clone.build(range.clone()).await?;
-                        let latency: MicroSeconds = start.elapsed().into();
+                        if !range.is_empty() {
+                            let start = std::time::Instant::now();
+                            let output = build_clone.build(range.clone()).await?;
+                            let latency: MicroSeconds = start.elapsed().into();
 
-                        if let Some(p) = progress_clone.as_deref() {
-                            p.progress(range.len());
+                            if let Some(p) = progress_clone.as_deref() {
+                                p.progress(range.len());
+                            }
+
+                            results.push(BatchResultsInner::new(range, latency, output));
                         }
-
-                        results.push(BatchResultsInner {
-                            batch: range,
-                            latency,
-                            output,
-                        });
                     }
                 }
                 Ok::<_, ANNError>(results)
@@ -510,15 +558,12 @@ async fn build_inner_fixed(
         p.finish();
     }
 
-    Ok(BuildResultsInner {
-        end_to_end_latency,
-        task_results,
-    })
+    Ok(BuildResultsInner::new(end_to_end_latency, task_results))
 }
 
 /// An iterator that partitions a [`Range<usize>`] into equal-sized sub-ranges.
 #[derive(Debug, Clone)]
-struct Chunks {
+pub(super) struct Chunks {
     /// The current position in the range.
     current: usize,
     /// The end of the range.
@@ -528,7 +573,7 @@ struct Chunks {
 }
 
 impl Chunks {
-    fn new(range: Range<usize>, chunk_size: NonZeroUsize) -> Self {
+    pub(super) fn new(range: Range<usize>, chunk_size: NonZeroUsize) -> Self {
         Self {
             current: range.start,
             end: range.end,
@@ -570,7 +615,7 @@ impl ExactSizeIterator for Chunks {}
 ///////////
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
 
     use std::sync::atomic::AtomicBool;
@@ -641,6 +686,7 @@ mod tests {
         x.sort_by(sort_ranges);
         let mut expected_start = 0;
         for r in x {
+            assert!(!std::ops::Range::is_empty(r));
             assert_eq!(r.start, expected_start);
             expected_start = r.end;
         }
@@ -857,13 +903,17 @@ mod tests {
     }
 
     /// A mock implementation of [`Build`] that returns the range it was called with.
-    struct MockBuild {
+    pub(in crate::build) struct MockBuild {
         num_data: usize,
     }
 
     impl MockBuild {
-        fn new(num_data: usize) -> Self {
+        pub(in crate::build) fn new(num_data: usize) -> Self {
             Self { num_data }
+        }
+
+        pub(in crate::build) fn num_data(&self) -> usize {
+            self.num_data
         }
     }
 
@@ -871,7 +921,7 @@ mod tests {
         type Output = Range<usize>;
 
         fn num_data(&self) -> usize {
-            self.num_data
+            MockBuild::num_data(self)
         }
 
         async fn build(&self, range: Range<usize>) -> ANNResult<Self::Output> {
@@ -880,24 +930,24 @@ mod tests {
     }
 
     /// A mock implementation of [`Progress`] that tracks calls.
-    struct MockProgress {
+    pub(in crate::build) struct MockProgress {
         total_handled: AtomicUsize,
         finish_called: AtomicBool,
     }
 
     impl MockProgress {
-        fn new() -> Self {
+        pub(in crate::build) fn new() -> Self {
             Self {
                 total_handled: AtomicUsize::new(0),
                 finish_called: AtomicBool::new(false),
             }
         }
 
-        fn total_handled(&self) -> usize {
+        pub(in crate::build) fn total_handled(&self) -> usize {
             self.total_handled.load(Ordering::Relaxed)
         }
 
-        fn was_finished(&self) -> bool {
+        pub(in crate::build) fn was_finished(&self) -> bool {
             self.finish_called.load(Ordering::Relaxed)
         }
     }
@@ -913,24 +963,24 @@ mod tests {
     }
 
     /// A mock implementation of [`AsProgress`] that creates a [`MockProgress`].
-    struct MockAsProgress {
+    pub(in crate::build) struct MockAsProgress {
         progress: Arc<MockProgress>,
         expected_max: AtomicUsize,
     }
 
     impl MockAsProgress {
-        fn new() -> Self {
+        pub(in crate::build) fn new() -> Self {
             Self {
                 progress: Arc::new(MockProgress::new()),
                 expected_max: AtomicUsize::new(0),
             }
         }
 
-        fn progress(&self) -> &Arc<MockProgress> {
+        pub(in crate::build) fn progress(&self) -> &Arc<MockProgress> {
             &self.progress
         }
 
-        fn received_max(&self) -> usize {
+        pub(in crate::build) fn received_max(&self) -> usize {
             self.expected_max.load(Ordering::Relaxed)
         }
     }
@@ -942,10 +992,9 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_build() {
-        // (num_threads, num_data, parallelism, description)
-        let test_cases: &[(usize, usize, Parallelism, &str)] = &[
+    // (num_threads, num_data, parallelism, description)
+    pub(in crate::build) fn test_cases() -> Vec<(usize, usize, Parallelism, &'static str)> {
+        vec![
             (
                 4,
                 100,
@@ -1034,83 +1083,64 @@ mod tests {
                 Parallelism::fixed(Some(nz(2)), nz(4)),
                 "fixed uneven partition with batchsize",
             ),
-        ];
+            (4, 4, Parallelism::fixed(None, nz(6)), "over subscribed"),
+        ]
+    }
 
-        for (num_threads, num_data, parallelism, desc) in test_cases {
-            let num_data = *num_data;
-            let runtime = crate::tokio::runtime(*num_threads).unwrap();
+    pub(in crate::build) fn check_results(
+        results: BuildResults<Range<usize>>,
+        num_data: usize,
+        ntasks: NonZeroUsize,
+        expected_batches: usize,
+        desc: &str,
+    ) {
+        if num_data == 0 {
+            assert!(
+                results.output().is_empty(),
+                "{desc}: no batches for empty data"
+            );
+            return;
+        }
 
-            let (ntasks, expected_batches) = match parallelism {
-                Parallelism::Dynamic { batchsize, ntasks } => {
-                    let expected = num_data.div_ceil(batchsize.get());
-                    (*ntasks, expected)
-                }
-                Parallelism::Sequential { batchsize } => {
-                    let expected = num_data.div_ceil(batchsize.get());
-                    (nz(1), expected)
-                }
-                Parallelism::Fixed { batchsize, ntasks } => {
-                    // For Fixed, data is first partitioned among tasks, then each partition is batched.
-                    // We need to calculate how many batches each task produces.
-                    use diskann::utils::async_tools::PartitionIter;
-                    let expected: usize = PartitionIter::new(num_data, *ntasks)
-                        .map(|partition| match batchsize {
-                            Some(bs) => partition.len().div_ceil(bs.get()),
-                            None => {
-                                if partition.is_empty() {
-                                    0
-                                } else {
-                                    1
-                                }
-                            }
-                        })
-                        .sum();
-                    (*ntasks, expected)
-                }
-            };
+        // Verify that each BatchResult's output matches its batch range.
+        for batch_result in results.output() {
+            assert_eq!(
+                batch_result.output, batch_result.batch,
+                "{desc}: output range should match batch range"
+            );
+            assert!(
+                batch_result.taskid < ntasks.get(),
+                "{desc}: taskid {} should be less than ntasks {}",
+                batch_result.taskid,
+                ntasks.get()
+            );
+        }
 
+        assert_eq!(
+            results.output().len(),
+            expected_batches,
+            "{desc}: expected {expected_batches} batches, got {}",
+            results.output().len()
+        );
+
+        // Verify all data points are covered exactly once.
+        let mut ranges: Vec<_> = results.output().iter().map(|r| r.batch.clone()).collect();
+        check_ranges(&mut ranges, num_data);
+    }
+
+    #[test]
+    fn test_build() {
+        for (num_threads, num_data, parallelism, desc) in test_cases() {
+            let runtime = crate::tokio::runtime(num_threads).unwrap();
+
+            let (ntasks, expected_batches) = parallelism.ntasks_and_nbatches(num_data);
             let builder = Arc::new(MockBuild::new(num_data));
             let mock_as_progress = MockAsProgress::new();
-
-            let check_results = |results: BuildResults<Range<usize>>| {
-                if num_data == 0 {
-                    assert!(
-                        results.output().is_empty(),
-                        "{desc}: no batches for empty data"
-                    );
-                    return;
-                }
-
-                // Verify that each BatchResult's output matches its batch range.
-                for batch_result in results.output() {
-                    assert_eq!(
-                        batch_result.output, batch_result.batch,
-                        "{desc}: output range should match batch range"
-                    );
-                    assert!(
-                        batch_result.taskid < ntasks.get(),
-                        "{desc}: taskid {} should be less than ntasks {}",
-                        batch_result.taskid,
-                        ntasks.get()
-                    );
-                }
-
-                assert_eq!(
-                    results.output().len(),
-                    expected_batches,
-                    "{desc}: expected {expected_batches} batches, got {}",
-                    results.output().len()
-                );
-
-                // Verify all data points are covered exactly once.
-                let mut ranges: Vec<_> = results.output().iter().map(|r| r.batch.clone()).collect();
-                check_ranges(&mut ranges, num_data);
-            };
 
             // Tracked build
             let results = build_tracked(
                 builder.clone(),
-                *parallelism,
+                parallelism,
                 &runtime,
                 Some(&mock_as_progress),
             )
@@ -1132,12 +1162,12 @@ mod tests {
                 "{desc}: finish should be called"
             );
 
-            check_results(results);
+            check_results(results, num_data, ntasks, expected_batches, desc);
 
             // Untracked Build
-            let results = build(builder, *parallelism, &runtime)
+            let results = build(builder, parallelism, &runtime)
                 .unwrap_or_else(|_| panic!("{desc}: build should succeed"));
-            check_results(results);
+            check_results(results, num_data, ntasks, expected_batches, desc);
         }
     }
 }

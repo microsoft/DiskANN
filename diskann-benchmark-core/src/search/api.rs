@@ -3,6 +3,9 @@
  * Licensed under the MIT license.
  */
 
+// NOTE: This API is mirrored in the `sync` module. Updates to documentation should be
+// reflected in that module as well.
+
 use std::{any::Any, future::Future, num::NonZeroUsize, pin::Pin, sync::Arc};
 
 use diskann::{ANNResult, graph, utils::async_tools};
@@ -150,7 +153,7 @@ where
     I: Clone + Default,
     T: Any,
 {
-    fn new(batch: BatchResultsInner<I>) -> Self
+    pub(super) fn new(batch: BatchResultsInner<I>) -> Self
     where
         I: Clone + Default,
         T: Any,
@@ -231,24 +234,8 @@ where
     Ok(SearchResults::new(results))
 }
 
-/// An extension of [`search`] that allows multiple runs with different parameters with
-/// automatic result aggregation.
-///
-/// The elements of `parameters` will be executed sequentially. The element yielded from `parameters`
-/// is of type [`Run`], which encapsulates both the search parameters and setup information
-/// such as the number of tasks and repetitions. The returned vector will have the same length as
-/// the `parameters` iterator, with each entry corresponding to the aggregated results
-/// for the respective run.
-///
-/// The aggregation behavior is defined by `aggregator` using the [`Aggregate`] trait.
-/// [`Aggregate::aggregate`] will be provided with the raw results of all repetitions of
-/// a single result from `parameters`.
-///
-/// # Notes on Repetitions
-///
-/// Each run will be repeated `R` times where `R` is defined by [`Run::setup`]. Callers are
-/// encouraged to use multiple repetitions to obtain more stable performance metrics. Result
-/// aggregation can summarize the results across a repetition group to reduce memory consumption.
+/// Perform [batch search](crate::search#batch-execution) on `object` with `parameters`.
+/// Each search point is run sequentially in its own [`tokio::runtime::Runtime`].
 ///
 /// # See Also
 ///
@@ -271,28 +258,11 @@ where
     )
 }
 
-/// An extension of [`search`] that allows multiple runs with different parameters with
-/// automatic result aggregation.
+/// Perform [batch search](crate::search#batch-execution) on `object` with `parameters`.
+/// Each search point is run sequentially in its own [`tokio::runtime::Runtime`].
 ///
-/// The elements of `parameters` will be executed sequentially. The element yielded from `parameters`
-/// is of type [`Run`], which encapsulates both the search parameters and setup information
-/// such as the number of tasks and repetitions. The returned vector will have the same length as
-/// the `parameters` iterator, with each entry corresponding to the aggregated results
-/// for the respective run.
-///
-/// The aggregation behavior is defined by `aggregator` using the [`Aggregate`] trait.
-/// [`Aggregate::aggregate`] will be provided with the raw results of all repetitions of
-/// a single result from `parameters`.
-///
-/// When new [`tokio::runtime::Builder`]s are created, they will be passed to the `on_builder`
-/// callback for customization. Note that these builders will already be initialized with the
-/// number of threads specified by the corresponding [`Run`].
-///
-/// # Notes on Repetitions
-///
-/// Each run will be repeated `R` times where `R` is defined by [`Run::setup`]. Callers are
-/// encouraged to use multiple repetitions to obtain more stable performance metrics. Result
-/// aggregation can summarize the results across a repetition group to reduce memory consumption.
+/// Each [`tokio::runtime::Builder`] will be provided to `on_builder` before creation to
+/// allow customization.
 ///
 /// # See Also
 ///
@@ -333,12 +303,14 @@ where
 /// High level parameters for configuring a search run using [`search_all`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct Setup {
-    /// The number of threads to spawn in the [`tokio::runtime::Runtime`].
+    /// The number of threads to spawn in the [`tokio::runtime::Runtime`] or
+    /// [`rayon::ThreadPool`].
     pub threads: NonZeroUsize,
 
     /// The number of search tasks into which the search will be parallelized.
+    ///
     /// This is intentionally decoupled from `threads` to allow for oversubscription
-    /// of truly asynchronous providers.
+    /// of asynchronous providers or load balancing opportunities.
     pub tasks: NonZeroUsize,
 
     /// The number of repetitions of the search to perform.
@@ -424,26 +396,35 @@ where
 
         let end_to_end_latency: MicroSeconds = start.elapsed().into();
 
-        Ok(BatchResultsInner {
-            end_to_end_latency,
-            task_results,
-        })
+        Ok(BatchResultsInner::new(end_to_end_latency, task_results))
     };
 
     boxit(fut)
 }
 
 #[derive(Debug)]
-struct BatchResultsInner<I> {
+pub(super) struct BatchResultsInner<I> {
     end_to_end_latency: MicroSeconds,
     task_results: Vec<SearchResultsInner<I>>,
+}
+
+impl<I> BatchResultsInner<I> {
+    pub(super) fn new(
+        end_to_end_latency: MicroSeconds,
+        task_results: Vec<SearchResultsInner<I>>,
+    ) -> Self {
+        Self {
+            end_to_end_latency,
+            task_results,
+        }
+    }
 }
 
 /// Note: Maintain the invariant that the number of entries in all fields is the same. That
 /// is, this is something approximating an array of structs with special handling for the
 /// result ids.
 #[derive(Debug)]
-struct SearchResultsInner<I> {
+pub(super) struct SearchResultsInner<I> {
     ids: ResultIdsInner<I>,
     latencies: Vec<MicroSeconds>,
 
@@ -457,6 +438,22 @@ impl<I> SearchResultsInner<I> {
     fn new<T>(ids: ResultIdsInner<I>, latencies: Vec<MicroSeconds>, outputs: Vec<T::Output>) -> Self
     where
         T: Search<Id = I>,
+    {
+        Self {
+            ids,
+            latencies,
+            outputs: Box::new(outputs),
+        }
+    }
+
+    #[cfg(feature = "sync")]
+    pub(super) fn new_sync<T>(
+        ids: ResultIdsInner<I>,
+        latencies: Vec<MicroSeconds>,
+        outputs: Vec<T::Output>,
+    ) -> Self
+    where
+        T: super::sync::Search<Id = I>,
     {
         Self {
             ids,
@@ -579,42 +576,69 @@ where
 ///////////
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
 
     use std::hash::{self, Hash, Hasher};
 
     use diskann::neighbor::Neighbor;
 
+    pub(in crate::search) trait IdHash {
+        fn id_hash(&self, a: usize, b: usize) -> usize;
+    }
+
+    type FnPtr = fn(usize, usize) -> usize;
+
+    impl IdHash for FnPtr {
+        fn id_hash(&self, a: usize, b: usize) -> usize {
+            (self)(a, b)
+        }
+    }
+
     // We intentionally do not derive `Clone` to ensure that it is not needed
     // in the implementations.
     #[derive(Debug)]
-    struct TestSearch {
+    pub(in crate::search) struct TestSearch<H> {
         queries: usize,
         // A hash function to determine the number and value of returned IDs.
-        hasher: fn(usize, usize) -> usize,
+        hasher: H,
     }
 
-    impl TestSearch {
-        fn count(&self, index: usize, id_count: &IdCount) -> usize {
+    impl<H> TestSearch<H>
+    where
+        H: IdHash,
+    {
+        pub(in crate::search) fn new(queries: usize, hasher: H) -> Self {
+            Self { queries, hasher }
+        }
+
+        pub(in crate::search) fn num_queries(&self) -> usize {
+            self.queries
+        }
+
+        pub(in crate::search) fn count(&self, index: usize, id_count: &IdCount) -> usize {
             match id_count {
-                IdCount::Fixed(n) => (self.hasher)(index, index) % n.get(),
-                IdCount::Dynamic(_) => (self.hasher)(index, index) % DYNAMIC_MAX,
+                IdCount::Fixed(n) => self.hasher.id_hash(index, index) % n.get(),
+                IdCount::Dynamic(_) => self.hasher.id_hash(index, index) % DYNAMIC_MAX,
             }
         }
 
-        fn format(&self, index: usize, position: usize) -> String {
-            (self.hasher)(index, position).to_string()
+        pub(in crate::search) fn format(&self, index: usize, position: usize) -> String {
+            self.hasher.id_hash(index, position).to_string()
         }
 
-        fn check(&self, id_count: &IdCount, mut results: SearchResults<String, usize>) {
+        pub(in crate::search) fn check(
+            &self,
+            id_count: &IdCount,
+            mut results: SearchResults<String, usize>,
+        ) {
             let num_queries = self.queries;
 
             // End-to-end latency should not be zero.
-            assert_ne!(
-                results.end_to_end_latency().as_seconds(),
-                0.0,
-                "end to end latency should be non-zero"
+            let latency = results.end_to_end_latency().as_seconds();
+            assert!(
+                latency > 0.0,
+                "end to end latency ({latency}s) should be non-negative"
             );
 
             assert_eq!(results.latencies().len(), num_queries);
@@ -650,17 +674,33 @@ mod tests {
             let output = results.take_output();
             assert_eq!(output, expected_output);
         }
+
+        pub(in crate::search) fn search_inner<O>(
+            &self,
+            params: &IdCount,
+            buffer: &mut O,
+            index: usize,
+        ) -> usize
+        where
+            O: graph::SearchOutputBuffer<String>,
+        {
+            let count = self.count(index, params);
+            let set =
+                buffer.extend((0..count).map(|i| Neighbor::new(self.format(index, i), i as f32)));
+            assert_eq!(set, count);
+            count
+        }
     }
 
     const DYNAMIC_MAX: usize = 5;
 
-    impl Search for TestSearch {
+    impl Search for TestSearch<FnPtr> {
         type Id = String;
         type Parameters = IdCount;
         type Output = usize;
 
         fn num_queries(&self) -> usize {
-            self.queries
+            <TestSearch<FnPtr>>::num_queries(self)
         }
 
         fn id_count(&self, parameters: &IdCount) -> IdCount {
@@ -676,15 +716,11 @@ mod tests {
         where
             O: graph::SearchOutputBuffer<Self::Id> + Send,
         {
-            let count = self.count(index, params);
-            let set =
-                buffer.extend((0..count).map(|i| Neighbor::new(self.format(index, i), i as f32)));
-            assert_eq!(set, count);
-            Ok(count)
+            Ok(self.search_inner(params, buffer, index))
         }
     }
 
-    fn hash(a: usize, b: usize) -> usize {
+    pub(in crate::search) fn hash(a: usize, b: usize) -> usize {
         let mut hasher = hash::DefaultHasher::new();
         a.hash(&mut hasher);
         b.hash(&mut hasher);
@@ -697,10 +733,7 @@ mod tests {
     #[test]
     fn test_search() {
         for num_queries in [3, 4, 5] {
-            let searcher = Arc::new(TestSearch {
-                queries: num_queries,
-                hasher: hash,
-            });
+            let searcher = Arc::new(TestSearch::<FnPtr>::new(num_queries, hash));
 
             for num_threads in 1..6 {
                 let runtime = crate::tokio::runtime(num_threads).unwrap();
@@ -724,9 +757,9 @@ mod tests {
 
     /// An aggregator for testing [`search_all`]. This simply invokes [`TestSearch::check`]
     /// on the inner results, verifies the number of results, and
-    struct Aggregator<'a> {
+    pub(in crate::search) struct Aggregator<'a, H> {
         /// The searcher provided to [`search_all`].
-        searcher: Arc<TestSearch>,
+        searcher: &'a TestSearch<H>,
 
         /// A seed for randomizing the return values.
         seed: usize,
@@ -735,7 +768,24 @@ mod tests {
         called: &'a mut usize,
     }
 
-    impl Aggregate<IdCount, String, usize> for Aggregator<'_> {
+    impl<'a, H> Aggregator<'a, H> {
+        pub(in crate::search) fn new(
+            searcher: &'a TestSearch<H>,
+            seed: usize,
+            called: &'a mut usize,
+        ) -> Self {
+            Self {
+                searcher,
+                seed,
+                called,
+            }
+        }
+    }
+
+    impl<H> Aggregate<IdCount, String, usize> for Aggregator<'_, H>
+    where
+        H: IdHash,
+    {
         type Output = usize;
 
         fn aggregate(
@@ -770,10 +820,7 @@ mod tests {
         let seed = 0x2f1b462446d1f225;
 
         for num_queries in [3, 4, 5] {
-            let searcher = Arc::new(TestSearch {
-                queries: num_queries,
-                hasher: hash,
-            });
+            let searcher = Arc::new(TestSearch::<FnPtr>::new(num_queries, hash));
 
             let iter = itertools::iproduct!((1..6), (1..6), (2..3), counts,).map(
                 |(threads, tasks, reps, parameters)| {
@@ -791,11 +838,7 @@ mod tests {
             // `search_all`
             {
                 let mut called = 0usize;
-                let aggregator = Aggregator {
-                    searcher: searcher.clone(),
-                    seed,
-                    called: &mut called,
-                };
+                let aggregator = Aggregator::new(&*searcher, seed, &mut called);
 
                 let len = iter.size_hint().0;
                 let results = search_all(searcher.clone(), iter.clone(), aggregator).unwrap();
@@ -811,15 +854,11 @@ mod tests {
             // `search_all_with`
             {
                 let mut called = 0usize;
-                let aggregator = Aggregator {
-                    searcher: searcher.clone(),
-                    seed,
-                    called: &mut called,
-                };
+                let aggregator = Aggregator::new(&*searcher, seed, &mut called);
 
                 let len = iter.size_hint().0;
                 let mut builder_calls = 0usize;
-                let results = search_all_with(searcher, iter, aggregator, |_| {
+                let results = search_all_with(searcher.clone(), iter, aggregator, |_| {
                     builder_calls += 1;
                 })
                 .unwrap();
