@@ -247,7 +247,7 @@ mod tests {
 
     use diskann::graph::{
         glue::{HybridPredicate, Predicate, PredicateMut, SearchAccessor},
-        test::{provider as test_provider, synthetic::Grid},
+        test::{index as test_index, synthetic::Grid},
     };
     use std::collections::HashSet;
 
@@ -288,7 +288,7 @@ mod tests {
         // | 0  4  8 12
         // +---------------
         //
-        let provider = test_provider::Provider::grid(Grid::Two, 4).unwrap();
+        let provider = test_index::Index::grid(Grid::Two, 4).unwrap();
 
         let beta: f32 = 0.25;
 

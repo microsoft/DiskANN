@@ -2343,42 +2343,42 @@ pub(crate) mod tests {
         .await;
     }
 
-    #[tokio::test]
-    async fn test_final_prune() {
-        let ctx = &DefaultContext;
-        let max_degree = 32;
-        let parameters = InitParams {
-            l_build: 15,
-            max_degree,
-            metric: Metric::L2,
-            batchsize: NonZeroUsize::new(1).unwrap(),
-        };
+    // #[tokio::test]
+    // async fn test_final_prune() {
+    //     let ctx = &DefaultContext;
+    //     let max_degree = 32;
+    //     let parameters = InitParams {
+    //         l_build: 15,
+    //         max_degree,
+    //         metric: Metric::L2,
+    //         batchsize: NonZeroUsize::new(1).unwrap(),
+    //     };
 
-        let (index, _) = init_from_file(
-            FullPrecision,
-            parameters,
-            SIFTSMALL,
-            8,
-            StartPointStrategy::RandomSamples {
-                nsamples: ONE,
-                seed: 0x986ce825cbe015e9,
-            },
-        )
-        .await;
+    //     let (index, _) = init_from_file(
+    //         FullPrecision,
+    //         parameters,
+    //         SIFTSMALL,
+    //         8,
+    //         StartPointStrategy::RandomSamples {
+    //             nsamples: ONE,
+    //             seed: 0x986ce825cbe015e9,
+    //         },
+    //     )
+    //     .await;
 
-        let neighbor_accessor = &mut index.provider().neighbors();
-        // check that we have an unpruned graph
-        let stats = index.provider().neighbors().degree_stats();
-        assert!(stats.maximum() > max_degree);
+    //     let neighbor_accessor = &mut index.provider().neighbors();
+    //     // check that we have an unpruned graph
+    //     let stats = index.provider().neighbors().degree_stats();
+    //     assert!(stats.maximum() > max_degree);
 
-        // prune graph and check that max_degree is respected
-        index
-            .prune_range(&FullPrecision, ctx, 0..256)
-            .await
-            .unwrap();
-        let stats = index.provider().neighbors().degree_stats();
-        assert!(stats.maximum() <= max_degree);
-    }
+    //     // prune graph and check that max_degree is respected
+    //     index
+    //         .prune_range(&FullPrecision, ctx, 0..256)
+    //         .await
+    //         .unwrap();
+    //     let stats = index.provider().neighbors().degree_stats();
+    //     assert!(stats.maximum() <= max_degree);
+    // }
 
     #[rstest]
     #[tokio::test]

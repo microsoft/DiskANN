@@ -18,10 +18,7 @@ use crate::{
         internal::BackedgeBuffer,
     },
     provider::{HasId, NeighborAccessorMut},
-    utils::{
-        VectorId,
-        balancer::{Balancer, BatchPosition},
-    },
+    utils::{VectorId, balancer::Balancer},
 };
 
 #[derive(Debug)]

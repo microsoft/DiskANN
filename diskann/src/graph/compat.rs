@@ -11,7 +11,7 @@
 use std::{borrow::BorrowMut, future::Future, num::NonZeroUsize, sync::Arc};
 
 use diskann_utils::{Reborrow, future::SendFuture};
-use hashbrown::HashMap;
+use hashbrown::{HashMap, HashSet};
 use thiserror::Error;
 
 use crate::{
@@ -446,6 +446,96 @@ impl<DP> DiskANNIndex<DP> {
         }
     }
 
+    pub fn multi_inplace_delete<S>(
+        self: &Arc<Self>,
+        strategy: S,
+        context: &DP::Context,
+        ids: Arc<[DP::ExternalId]>,
+        num_to_replace: usize,
+        inplace_delete_method: InplaceDeleteMethod,
+    ) -> impl SendFuture<ANNResult<()>>
+    where
+        DP: Delete,
+        S: InplaceDeleteStrategy<DP>,
+    {
+        async move {
+            let replacements = NonZeroUsize::new(num_to_replace).ok_or_else(|| {
+                ANNError::message("multi inplace delete requires non-zero replacements")
+            })?;
+            let kind = match inplace_delete_method {
+                InplaceDeleteMethod::OneHop => OneHop::new(replacements).into(),
+                InplaceDeleteMethod::TwoHopAndOneHop => TwoHopAndOneHop::new(replacements).into(),
+                InplaceDeleteMethod::VisitedAndTopK { k_value, l_value } => {
+                    let k_value = NonZeroUsize::new(k_value).ok_or_else(|| {
+                        ANNError::message("multi inplace delete requires a non-zero k_value")
+                    })?;
+                    let l_value = NonZeroUsize::new(l_value).ok_or_else(|| {
+                        ANNError::message("multi inplace delete requires a non-zero l_value")
+                    })?;
+                    inplace_delete::InplaceDeleteMethod::VisitedAndTopK(VisitedAndTopK {
+                        replacements,
+                        l_value,
+                        k_value,
+                    })
+                }
+            };
+
+            let mut internal_ids = Vec::with_capacity(ids.len());
+            let mut unique = HashSet::with_capacity(ids.len());
+            for id in ids.iter() {
+                let internal_id = self
+                    .provider
+                    .to_internal_id(context, id)
+                    .escalate("id translation for `multi_inplace_delete` must succeed")?;
+                if !unique.insert(internal_id) {
+                    return Err(ANNError::message(
+                        "multi inplace delete requires unique internal IDs",
+                    ));
+                }
+                internal_ids.push(internal_id);
+            }
+            if internal_ids.is_empty() {
+                return Ok(());
+            }
+
+            // Capture queries before logical deletion can invalidate their external mapping.
+            let mut elements = HashMap::new();
+            if matches!(kind, inplace_delete::InplaceDeleteMethod::VisitedAndTopK(_)) {
+                for &id in &internal_ids {
+                    let element = strategy
+                        .get_delete_element(self.provider(), context, id)
+                        .await
+                        .into_ann_result()?;
+                    elements.insert(id, element);
+                }
+            }
+
+            let prune = strategy.prune_strategy();
+            for id in ids.iter() {
+                self.provider
+                    .delete(context, id)
+                    .await
+                    .escalate("`multi_inplace_delete` requires successful deletes")?;
+            }
+
+            let worker = Arc::new(BatchInplaceDelete {
+                index: self.clone(),
+                context: context.clone(),
+                strategy,
+                prune,
+                kind,
+                elements,
+            });
+            algorithms::batch::inplace_delete::standard(
+                &ScopedSpawn(context),
+                internal_ids.into(),
+                &self.config,
+                || worker.clone(),
+            )
+            .await
+        }
+    }
+
     /// Consider the neighbors of `vector_id`, look for deleted nodes and compute replacements for them.
     pub fn consolidate_vector<S>(
         &self,
@@ -758,6 +848,111 @@ where
     }
 }
 
+//--------------------//
+// BatchInplaceDelete //
+//--------------------//
+
+struct BatchInplaceDelete<DP, S>
+where
+    DP: DataProvider,
+    S: InplaceDeleteStrategy<DP>,
+{
+    index: Arc<DiskANNIndex<DP>>,
+    context: DP::Context,
+    strategy: S,
+    prune: S::PruneStrategy,
+    kind: inplace_delete::InplaceDeleteMethod,
+    elements: HashMap<DP::InternalId, S::DeleteElementGuard>,
+}
+
+impl<DP, S> std::fmt::Debug for BatchInplaceDelete<DP, S>
+where
+    DP: DataProvider,
+    S: InplaceDeleteStrategy<DP>,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "BatchInplaceDelete {{ .. }}")
+    }
+}
+
+impl<DP, S> HasId for Arc<BatchInplaceDelete<DP, S>>
+where
+    DP: DataProvider,
+    S: InplaceDeleteStrategy<DP>,
+{
+    type Id = DP::InternalId;
+}
+
+impl<DP, S> algorithms::batch::inplace_delete::Standard for Arc<BatchInplaceDelete<DP, S>>
+where
+    DP: Delete,
+    S: InplaceDeleteStrategy<DP>,
+{
+    type PruneAccessor<'a>
+        = <S::PruneStrategy as PruneStrategy<DP>>::PruneAccessor<'a>
+    where
+        Self: 'a;
+
+    fn discover(
+        &mut self,
+        id: Self::Id,
+        workspace: &mut algorithms::batch::inplace_delete::Workspace<Self::Id>,
+        edges: &mut algorithms::batch::inplace_delete::Edges<Self::Id>,
+        config: &graph::Config,
+    ) -> impl SendFuture<ANNResult<()>> {
+        async move {
+            let prune = self
+                .prune
+                .prune_accessor(
+                    self.index.provider(),
+                    &self.context,
+                    config.max_occlusion_size().get(),
+                )
+                .into_ann_result()?;
+            let mut access = InplaceDelete {
+                provider: self.index.provider(),
+                context: &self.context,
+                prune,
+                search: (),
+                live: AdjacencyList::new(),
+            };
+            match &self.kind {
+                inplace_delete::InplaceDeleteMethod::OneHop(kind) => {
+                    workspace.find_one_hop(edges, &mut access, kind, id).await
+                }
+                inplace_delete::InplaceDeleteMethod::TwoHopAndOneHop(kind) => {
+                    workspace
+                        .find_two_hop_and_one_hop(edges, &mut access, kind, id)
+                        .await
+                }
+                inplace_delete::InplaceDeleteMethod::VisitedAndTopK(kind) => {
+                    let element = self.elements.get(&id).ok_or_else(|| {
+                        ANNError::message("missing captured query for batch inplace delete")
+                    })?;
+                    let search_strategy = self.strategy.search_strategy();
+                    let search = search_strategy
+                        .search_accessor(self.index.provider(), &self.context, element.reborrow())
+                        .into_ann_result()?;
+                    let mut access = access.with_search(search);
+                    workspace
+                        .find_visited_and_top_k(edges, &mut access, kind, id, config)
+                        .await
+                }
+            }
+        }
+    }
+
+    fn prune_accessor(&mut self) -> ANNResult<impl BorrowMut<Self::PruneAccessor<'_>> + Send> {
+        self.prune
+            .prune_accessor(
+                self.index.provider(),
+                &self.context,
+                self.index.config().max_occlusion_size().get(),
+            )
+            .into_ann_result()
+    }
+}
+
 //-------------//
 // Consolidate //
 //-------------//
@@ -906,7 +1101,6 @@ where
         id: Self::Id,
     ) -> ANNResult<impl BorrowMut<Self::InsertAccessor<'_>> + Send> {
         let vector = self.vectors.get(self.map[&id]);
-        let strategy = self.strategy.insert_strategy();
         let provider = self.index.provider();
 
         let insert = Insert {

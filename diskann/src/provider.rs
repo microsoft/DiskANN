@@ -36,6 +36,7 @@ where
     type Id = T::Id;
 }
 
+#[cfg(any(test, feature = "testing"))]
 macro_rules! has_id {
     ($T:ty = $Id:ty) => {
         impl $crate::provider::HasId for $T {

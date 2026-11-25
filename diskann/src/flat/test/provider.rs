@@ -23,7 +23,7 @@ use crate::{
     flat::DistancesUnordered,
     graph::test::synthetic::Grid,
     internal::counter::{Counter, LocalCounter},
-    provider::HasId,
+    provider::has_id,
     utils::VectorRepr,
 };
 
@@ -285,9 +285,7 @@ impl Debug for Visitor<'_> {
     }
 }
 
-impl HasId for Visitor<'_> {
-    type Id = u32;
-}
+has_id!(Visitor<'_> = u32);
 
 impl DistancesUnordered for Visitor<'_> {
     type Error = AccessError;
