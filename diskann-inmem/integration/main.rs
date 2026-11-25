@@ -259,17 +259,15 @@ mod tests {
         );
     }
 
-    // FIXME: Restore
-    //
-    // #[test]
-    // #[cfg(not(miri))]
-    // fn graph_index_static_f32() {
-    //     run_regression_example(
-    //         "graph/static/f32.json",
-    //         "graph/static/checks.json",
-    //         "graph/static/f32-baseline.json",
-    //     );
-    // }
+    #[test]
+    #[cfg(not(miri))]
+    fn graph_index_static_f32() {
+        run_regression_example(
+            "graph/static/f32.json",
+            "graph/static/checks.json",
+            "graph/static/f32-baseline.json",
+        );
+    }
 
     #[test]
     #[cfg(not(any(miri, coverage)))]

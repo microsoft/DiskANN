@@ -21,7 +21,7 @@ use crate::support::{check_all, datatype::DataType};
 
 pub(super) fn register(registry: &mut Registry) -> Result<(), RegistryError> {
     registry.register_regression("full-integration-test", FullTest)?;
-    // registry.register_regression("partial-integration-test", PartialTest)?;
+    registry.register_regression("partial-integration-test", PartialTest)?;
     Ok(())
 }
 
@@ -113,8 +113,6 @@ impl diskann_benchmark_runner::Benchmark for FullTest {
             }
         };
 
-        let rt = diskann_benchmark_core::tokio::runtime(1)?;
-
         let parse::Search {
             knn,
             inline_filter,
@@ -164,116 +162,113 @@ impl Regression for FullTest {
     }
 }
 
-// //-------------//
-// // PartialTest //
-// //-------------//
-//
-// /// Partial integration test supporting only insert and regular KNN search.
-// ///
-// /// This is used to lightly test the static build path without needing to support the whole
-// /// range of build and search modes. Done to save compilation time and to keep the static
-// /// build support limited to just what is needed.
-// #[derive(Debug)]
-// struct PartialTest;
-//
-// impl diskann_benchmark_runner::Benchmark for PartialTest {
-//     type Input = parse::PartialTest;
-//     type Output = BuildAndSearch;
-//
-//     fn try_match(&self, input: &parse::PartialTest, context: &MatchContext) -> Score {
-//         let mut score = context.success(0);
-//
-//         // Match data-type.
-//         let data_type = input.data.data_type;
-//         if data_type != DataType::F32 {
-//             score.fail(
-//                 1,
-//                 &format_args!("static-build requires f32 data, not {}", data_type),
-//             );
-//         }
-//
-//         // Don't run multi-insert for static-builds.
-//         //
-//         // This should be kept in-sync with backend capabilities.
-//         match input.build.insert {
-//             parse::Insert::Single => {}
-//             parse::Insert::Multi { .. } => {
-//                 score.fail(
-//                     1,
-//                     &"multi-insert is not supported for static builds to save compilation time",
-//                 );
-//             }
-//         }
-//
-//         score
-//     }
-//
-//     fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-//         write!(f, "nop")
-//     }
-//
-//     fn run(
-//         &self,
-//         input: &parse::PartialTest,
-//         _checkpoint: Checkpoint<'_>,
-//         mut output: &mut dyn Output,
-//     ) -> anyhow::Result<Self::Output> {
-//         let parse::PartialTest {
-//             data,
-//             build,
-//             search,
-//         } = input;
-//
-//         let data_type = data.data_type;
-//
-//         // Load the data and perform any necessary data conversions.
-//         let ops::Bundle {
-//             data,
-//             labels: _, // unused for partial-tests.
-//             queries,
-//         } = ops::load_data(data, data_type)?;
-//
-//         let index = factory::create_partial(input.data.metric, &build.config, data.as_view())?;
-//
-//         let rt = diskann_benchmark_core::tokio::runtime(1)?;
-//         let build = match build.insert {
-//             parse::Insert::Single => ops::insert(&*index, data.as_view(), rt.handle())?,
-//             parse::Insert::Multi { .. } => {
-//                 anyhow::bail!("partial-tests do not support multi-insert");
-//             }
-//         };
-//
-//         let rt = diskann_benchmark_core::tokio::runtime(1)?;
-//
-//         let knn = ops::knn(&*index, search, queries.as_view(), rt.handle())?;
-//
-//         let build_and_search = BuildAndSearch {
-//             build,
-//             knn,
-//             inline_filter: Vec::new(),
-//             multihop_filter: Vec::new(),
-//         };
-//
-//         writeln!(output, "{}", build_and_search)?;
-//         Ok(build_and_search)
-//     }
-// }
-//
-// impl Regression for PartialTest {
-//     type Tolerances = CheckBuildAndSearch;
-//     type Pass = Finished;
-//     type Fail = Finished;
-//
-//     fn check(
-//         &self,
-//         tolerances: &Self::Tolerances,
-//         _input: &Self::Input,
-//         before: &Self::Output,
-//         after: &Self::Output,
-//     ) -> anyhow::Result<PassFail<Self::Pass, Self::Fail>> {
-//         Ok(tolerances.check(before, after).pass_fail())
-//     }
-// }
+//-------------//
+// PartialTest //
+//-------------//
+
+/// Partial integration test supporting only insert and regular KNN search.
+///
+/// This is used to lightly test the static build path without needing to support the whole
+/// range of build and search modes. Done to save compilation time and to keep the static
+/// build support limited to just what is needed.
+#[derive(Debug)]
+struct PartialTest;
+
+impl diskann_benchmark_runner::Benchmark for PartialTest {
+    type Input = parse::PartialTest;
+    type Output = BuildAndSearch;
+
+    fn try_match(&self, input: &parse::PartialTest, context: &MatchContext) -> Score {
+        let mut score = context.success(0);
+
+        // Match data-type.
+        let data_type = input.data.data_type;
+        if data_type != DataType::F32 {
+            score.fail(
+                1,
+                &format_args!("static-build requires f32 data, not {}", data_type),
+            );
+        }
+
+        // Don't run multi-insert for static-builds.
+        //
+        // This should be kept in-sync with backend capabilities.
+        match input.build.insert {
+            parse::Insert::Single => {}
+            parse::Insert::Multi { .. } => {
+                score.fail(
+                    1,
+                    &"multi-insert is not supported for static builds to save compilation time",
+                );
+            }
+        }
+
+        score
+    }
+
+    fn description(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "nop")
+    }
+
+    fn run(
+        &self,
+        input: &parse::PartialTest,
+        _checkpoint: Checkpoint<'_>,
+        mut output: &mut dyn Output,
+    ) -> anyhow::Result<Self::Output> {
+        let parse::PartialTest {
+            data,
+            build,
+            search,
+        } = input;
+
+        let data_type = data.data_type;
+
+        // Load the data and perform any necessary data conversions.
+        let ops::Bundle {
+            data,
+            labels: _, // unused for partial-tests.
+            queries,
+        } = ops::load_data(data, data_type)?;
+
+        let index = factory::create_partial(input.data.metric, &build.config, data.as_view())?;
+
+        let build = match build.insert {
+            parse::Insert::Single => ops::insert(&*index, data.as_view())?,
+            parse::Insert::Multi { .. } => {
+                anyhow::bail!("partial-tests do not support multi-insert");
+            }
+        };
+
+        let knn = ops::knn(&*index, search, queries.as_view())?;
+
+        let build_and_search = BuildAndSearch {
+            build,
+            knn,
+            inline_filter: Vec::new(),
+            multihop_filter: Vec::new(),
+        };
+
+        writeln!(output, "{}", build_and_search)?;
+        Ok(build_and_search)
+    }
+}
+
+impl Regression for PartialTest {
+    type Tolerances = CheckBuildAndSearch;
+    type Pass = Finished;
+    type Fail = Finished;
+
+    fn check(
+        &self,
+        tolerances: &Self::Tolerances,
+        _input: &Self::Input,
+        before: &Self::Output,
+        after: &Self::Output,
+    ) -> anyhow::Result<PassFail<Self::Pass, Self::Fail>> {
+        Ok(tolerances.check(before, after).pass_fail())
+    }
+}
 
 ////////////
 // Output //

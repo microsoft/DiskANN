@@ -8,6 +8,8 @@
 //! A simplified interface for [`crate::Provider`] to use for building a graph index.
 
 mod internal_docs {
+    //! # FIXME: Document the trait split approach.
+    //!
     //! # Start Point Handling
     //!
     //! By default, start points get located at the beginning of the physical slot space.
@@ -83,7 +85,10 @@ pub trait RepresentationConfig {
 /// - [`Set`]: For assigning into the store.
 /// - [`Search`]: Search compatibility with [`crate::Provider`].
 /// - [`Insert`]: Insert compatibility with [`crate::Provider`].
-pub trait Representation: std::fmt::Debug + Send + Sync + 'static {
+#[expect(private_bounds)]
+pub trait Representation: RepresentationImpl {}
+
+pub(crate) trait RepresentationImpl: std::fmt::Debug + Send + Sync + 'static {
     /// Return the [`MaxDegree`] of the internal graph.
     fn max_degree(&self) -> MaxDegree;
 
@@ -107,71 +112,16 @@ pub trait Representation: std::fmt::Debug + Send + Sync + 'static {
     ///
     /// Holding onto the resulting [`ReadGuard`] prevents ID reuse in the parent and thus
     /// should be held for as short a duration as possible.
-    fn read_guard(&self) -> ANNResult<ReadGuard<'_>>;
+    fn read_guard(&self) -> Result<epoch::ReadGuard<'_>, epoch::Unavailable>;
 
     /// Protect the [`Representation`] against recycling IDs.
     ///
     /// Holding onto the resulting [`ReadGuard`] prevents ID reuse in the parent and thus
     /// should be held for as short a duration as possible.
-    fn write_guard(&self) -> ANNResult<WriteGuard<'_>>;
-}
+    fn write_guard(&self) -> Result<epoch::WriteGuard<'_>, epoch::Unavailable>;
 
-#[derive(Debug)]
-pub struct ReadGuard<'a> {
-    guard: epoch::ReadGuard<'a>,
-}
-
-impl<'a> ReadGuard<'a> {
-    pub(crate) fn new(guard: epoch::ReadGuard<'a>) -> Self {
-        Self { guard }
-    }
-
-    pub(crate) fn into_inner(self) -> epoch::ReadGuard<'a> {
-        self.guard
-    }
-
-    pub(crate) fn share(&self) -> Self {
-        Self {
-            guard: self.guard.share(),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct WriteGuard<'a> {
-    guard: epoch::WriteGuard<'a>,
-}
-
-impl<'a> WriteGuard<'a> {
-    pub(crate) fn new(guard: epoch::WriteGuard<'a>) -> Self {
-        Self { guard }
-    }
-
-    pub(crate) fn as_read_guard(&self) -> ReadGuard<'a> {
-        ReadGuard::new(self.guard.read_guard().share())
-    }
-
-    pub(crate) fn into_inner(self) -> epoch::WriteGuard<'a> {
-        self.guard
-    }
-}
-
-/// Attempt to write data into a [`Representation`].
-///
-/// This will attempt to find an available internal ID to which `element` can be assigned,
-/// failing if no such ID can be found. The write is not eagerly committed. Instead, a
-/// [`Guard`] is returned, allowing writes to be aborted if necessary.
-pub trait Set<T>: Representation {
-    /// The type of the [`Guard`] used to defer commitment of the write.
-    type Guard<'a>: Guard;
-
-    /// Attempt to write the data in `element` into the [`Representation`].
-    ///
-    /// Returns [`Self::Guard`] to retrieve the allocated internal ID for `element` and to
-    /// defer commitment of the write until external code is ready.
-    ///
-    /// Dropping an unpublished [`Guard`] must abort the write and leave its data unpublished.
-    fn set(&self, element: T) -> ANNResult<Self::Guard<'_>>;
+    /// Return a snapshot of the current adjacency list.
+    fn inspect_neighbors(&mut self) -> NeighborSnapshot<'_>;
 }
 
 /// An insert guard for [`Set`] providing deferred commitment of pending writes.
@@ -183,28 +133,31 @@ pub trait Set<T>: Representation {
 ///
 /// Dropping a guard without calling [`Guard::publish`] indicates a failed insert and
 /// implementations should abort the write and leave the data unpublished.
-pub trait Guard {
+pub(crate) trait Guard {
     fn id(&self) -> u32;
     fn publish(self);
 }
 
 /// Enable search over vectors defined by a [`Representation`].
-pub trait Search: Representation {
+#[expect(private_bounds)]
+pub trait Search: Representation + for<'a> SearchImpl<'a, Self::Query<'a>>  {
     /// The type of the query. This should be equivalent to the generic parameter in
     /// [`Set`], but needs to be replicated here due to limitations in the current trait
     /// design.
     type Query<'a>: Send + Sync + Copy; // FIXME: Remove unnecessary bounds
+}
 
+pub(crate) trait SearchImpl<'a, T>: 'static {
     /// Construct a [`crate::provider::SearchAccessor`] for the query.
     ///
     /// # Panics
     ///
     /// Panics if `ReadGuard` did not come from `self`.
     #[doc(hidden)]
-    fn search_accessor<'a>(
+    fn search_accessor(
         &'a self,
-        query: Self::Query<'a>,
-        guard: Option<ReadGuard<'a>>,
+        query: T,
+        guard: Option<epoch::ReadGuard<'a>>,
         counters: LocalCounters<'a>,
     ) -> ANNResult<crate::index::accessors::Search<'a>>;
 }
@@ -213,47 +166,45 @@ pub trait Search: Representation {
 ///
 /// Note that the bounds for this trait are unnecessarily complicated, but require changes
 /// to [`diskann`] to fully resolve.
-pub trait Insert: Search + for<'a> Set<Self::Query<'a>> {
+#[expect(private_bounds)]
+pub trait Insert: Search + for<'a> InsertImpl<'a, Self::Vector<'a>> {
+    type Vector<'a>: Send + Sync + Copy; // FIXME: Remove unnecessaryBounds
+
+}
+
+pub(crate) trait InsertImpl<'a, T>: SearchImpl<'a, T> {
+    type Guard: Guard;
+
+    /// Attempt to write the data in `element` into the [`Representation`].
+    ///
+    /// Returns [`Self::Guard`] to retrieve the allocated internal ID for `element` and to
+    /// defer commitment of the write until external code is ready.
+    ///
+    /// Dropping an unpublished [`Guard`] must abort the write and leave its data unpublished.
+    fn set(&'a self, element: T) -> ANNResult<Self::Guard>;
+
+    /// Attempt to write the data in `element` into the [`Representation`] at the specified
+    /// slot.
+    ///
+    /// Dropping an unpublished [`Guard`] must abort the write and leave its data unpublished.
+    fn set_at(&'a self, element: T, slot: u32) -> ANNResult<Self::Guard>;
+
     /// # Panics
     ///
     /// Panics if `ReadGuard` did not come from `self`.
-    #[doc(hidden)]
-    fn insert_search_accessor<'a>(
+    fn insert_search_accessor(
         &'a self,
-        query: Self::Query<'a>,
-        guard: Option<ReadGuard<'a>>,
+        query: T,
+        guard: Option<epoch::ReadGuard<'a>>,
         counters: LocalCounters<'a>,
     ) -> ANNResult<crate::index::accessors::Search<'a>> {
         self.search_accessor(query, guard, counters)
     }
 
-    #[doc(hidden)]
-    fn prune_accessor<'a>(
+    fn prune_accessor(
         &'a self,
         counters: LocalCounters<'a>,
     ) -> ANNResult<crate::index::accessors::Prune<'a>>;
-}
-
-//------------------//
-// Temporary Traits //
-//------------------//
-
-// These are crate-private traits that are still used to implement public functionality
-// and work as a bridge to `diskann-disk`'s static build case.
-//
-// These are expected to be removed pending future architectural changes to `diskann`.
-
-/// Like [`Set`], but forces use of the exact internal ID.
-#[doc(hidden)]
-pub(crate) trait SetAt<T>: Set<T> {
-    #[doc(hidden)]
-    fn set_at(&self, id: u32, element: T) -> ANNResult<Self::Guard<'_>>;
-}
-
-#[doc(hidden)]
-pub trait InspectNeighbors {
-    #[doc(hidden)]
-    fn inspect_neighbors(&mut self) -> NeighborSnapshot<'_>;
 }
 
 //-----------------//

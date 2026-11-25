@@ -8,7 +8,7 @@ use std::{num::NonZeroUsize, sync::Arc};
 use diskann::graph::Config;
 use diskann_inmem::{
     self as di,
-    num::{Capacity, MaxDegree},
+    num::{Capacity, MaxDegree, Range},
     repr::Full,
 };
 use diskann_utils::views::rowmajor::{self, Matrix};
@@ -246,33 +246,33 @@ fn create_scalar(
     Ok(Arc::new(di::Index::new(config, index_config)?))
 }
 
-// pub(super) fn create_partial(
-//     metric: Metric,
-//     graph_config: &Config,
-//     data: DatasetView<'_>,
-// ) -> anyhow::Result<Arc<dyn PartialIndex>> {
-//     let DatasetView::F32(data) = data else {
-//         anyhow::bail!("static build tests only support f32 data");
-//     };
-//
-//     let start_point = rowmajor::Owned::row_vector(Box::from(
-//         <f32 as diskann_utils::sampling::medoid::ComputeMedoid>::compute_medoid(data),
-//     ));
-//     let num_start_points = start_point.nrows();
-//
-//     let capacity = Capacity::new(data.nrows());
-//     let max_degree = graph_config.max_degree().get();
-//     let index_config = graph_config.clone();
-//
-//     let end_range = Range::start_plus_usize(data.nrows(), num_start_points)
-//         .ok_or_else(|| anyhow::anyhow!("cannot move start points to the end"))?;
-//
-//     let full_config = Full::config(capacity, MaxDegree::new(max_degree), metric, start_point)?
-//         .locate_start_point_ids_at(end_range)?;
-//
-//     let provider = di::provider::buildonly::Provider::new(full_config)?;
-//     Ok(Arc::new(DiskANNIndex::new(index_config, provider, None)))
-// }
+pub(super) fn create_partial(
+    metric: Metric,
+    graph_config: &Config,
+    data: DatasetView<'_>,
+) -> anyhow::Result<Arc<dyn PartialIndex>> {
+    let DatasetView::F32(data) = data else {
+        anyhow::bail!("static build tests only support f32 data");
+    };
+
+    let start_point = rowmajor::Owned::row_vector(Box::from(
+        <f32 as diskann_utils::sampling::medoid::ComputeMedoid>::compute_medoid(data),
+    ));
+    let num_start_points = start_point.nrows();
+
+    let capacity = Capacity::new(data.nrows());
+    let max_degree = graph_config.max_degree().get();
+    let index_config = graph_config.clone();
+
+    let end_range = Range::start_plus_usize(data.nrows(), num_start_points)
+        .ok_or_else(|| anyhow::anyhow!("cannot move start points to the end"))?;
+
+    let full_config = Full::config(capacity, MaxDegree::new(max_degree), metric, start_point)?
+        .locate_start_point_ids_at(end_range)?;
+
+    let index = di::index::buildonly::Index::new(full_config, index_config)?;
+    Ok(Arc::new(index))
+}
 
 fn quantizer_rerank(rerank: quantization::Rerank, metric: Metric) -> di::repr::quantized::Rerank {
     match rerank {

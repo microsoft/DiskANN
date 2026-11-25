@@ -166,26 +166,37 @@ impl<'a> Search<'a> {
             }
         };
 
-        // If there is a registered post-process step, run that first.
+        self.post_process_into(candidates, push)?;
+        Ok(count)
+    }
+
+    pub(super) fn post_process_into<I, F>(
+        &mut self,
+        candidates: I,
+        mut output: F,
+    ) -> ANNResult<()>
+    where
+        I: IntoIterator<Item = Neighbor<u32>>,
+        F: FnMut(Neighbor<u32>) -> bool,
+    {
         if let Some(post_process) = &mut self.post_process {
             self.buffer.clear();
             Extend::extend(&mut self.buffer, candidates);
             post_process.post_process(&mut self.buffer)?;
 
             for neighbor in self.buffer.iter() {
-                if !push(*neighbor) {
+                if !output(*neighbor) {
                     break;
                 }
             }
         } else {
             for neighbor in candidates {
-                if !push(neighbor) {
+                if !output(neighbor) {
                     break;
                 }
             }
         }
-
-        Ok(count)
+        Ok(())
     }
 
     // Resize the internal buffer if needed.
@@ -369,6 +380,8 @@ impl<'a> Prune<'a> {
     }
 
     // FIXME: Can we move this behind a bulk method?
+    //
+    // IT currently does a dynamic dispatch for each deleted check.
     pub(crate) fn partition_live(
         &mut self,
         ids: &mut AdjacencyList<u32>,

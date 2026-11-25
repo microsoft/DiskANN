@@ -93,21 +93,8 @@ where
 ///
 /// This encompasses *everything* required for `Full: repr::Insert` and can be used as
 /// a single bound.
-pub trait FullPrecision: bytemuck::Pod + std::fmt::Debug + Send + Sync {
-    #[doc(hidden)]
-    fn __search_accessor<'a>(
-        representation: &'a Full<Self>,
-        query: &'a [Self],
-        guard: Option<repr::ReadGuard<'a>>,
-        counters: LocalCounters<'a>,
-    ) -> ANNResult<crate::index::accessors::Search<'a>>;
-
-    #[doc(hidden)]
-    fn __prune_accessor<'a>(
-        representation: &'a Full<Self>,
-        counters: LocalCounters<'a>,
-    ) -> ANNResult<crate::index::accessors::Prune<'a>>;
-}
+#[expect(private_bounds, reason = "this is a marker trait for Index functionality")]
+pub trait FullPrecision: FullPrecisionImpl {}
 
 /// A configuration struct for [`Full`].
 #[derive(Debug, Clone)]
@@ -307,14 +294,17 @@ where
 
 /// Internal helper for implementing [`FullPrecision`].
 trait FullPrecisionImpl: bytemuck::Pod + std::fmt::Debug + Send + Sync {
-    fn make_expand_beam<'a>(
-        full: &'a Full<Self>,
+    fn make_search_accessor<'a>(
+        representation: &'a Full<Self>,
         query: &'a [Self],
         guard: Option<epoch::ReadGuard<'a>>,
-    ) -> ANNResult<Box<dyn repr::ExpandBeam + 'a>>;
+        counters: LocalCounters<'a>,
+    ) -> ANNResult<crate::index::accessors::Search<'a>>;
 
-    #[doc(hidden)]
-    fn make_prune<'a>(full: &'a Full<Self>) -> ANNResult<Box<dyn repr::Prune + 'a>>;
+    fn make_prune_accessor<'a>(
+        representation: &'a Full<Self>,
+        counters: LocalCounters<'a>,
+    ) -> ANNResult<crate::index::accessors::Prune<'a>>;
 }
 
 /// Full-precision data representation.
@@ -475,13 +465,34 @@ repr::internal::macros::set_guard!(
     for<'a> packed::Exclusive<'a>
 );
 
-impl<T> repr::Set<&[T]> for Full<T>
+impl<'a, T> repr::SearchImpl<'a, &'a [T]> for Full<T>
 where
     T: FullPrecision,
 {
-    type Guard<'a> = Guard<'a>;
+    fn search_accessor(
+        &'a self,
+        query: &'a [T],
+        guard: Option<epoch::ReadGuard<'a>>,
+        counters: LocalCounters<'a>,
+    ) -> ANNResult<crate::index::accessors::Search<'a>> {
+        T::make_search_accessor(self, query, guard, counters)
+    }
+}
 
-    fn set(&self, v: &[T]) -> ANNResult<Guard<'_>> {
+impl<T> repr::Search for Full<T>
+where
+    T: FullPrecision,
+{
+    type Query<'a> = &'a [T];
+}
+
+impl<'a, T> repr::InsertImpl<'a, &'a [T]> for Full<T>
+where
+    T: FullPrecision,
+{
+    type Guard = Guard<'a>;
+
+    fn set(&'a self, v: &'a [T]) -> ANNResult<Guard<'a>> {
         self.check_dim(v.len())?;
 
         let mut slot = self
@@ -495,43 +506,8 @@ where
 
         Ok(Guard::new(slot))
     }
-}
 
-impl<T> repr::Search for Full<T>
-where
-    T: FullPrecision,
-{
-    type Query<'a> = &'a [T];
-
-    fn search_accessor<'a>(
-        &'a self,
-        query: Self::Query<'a>,
-        guard: Option<repr::ReadGuard<'a>>,
-        counters: LocalCounters<'a>,
-    ) -> ANNResult<crate::index::accessors::Search<'a>> {
-        T::__search_accessor(self, query, guard, counters)
-    }
-}
-
-impl<T> repr::Insert for Full<T>
-where
-    T: FullPrecision,
-{
-    fn prune_accessor<'a>(
-        &'a self,
-        counters: LocalCounters<'a>,
-    ) -> ANNResult<crate::index::accessors::Prune<'a>> {
-        T::__prune_accessor(self, counters)
-    }
-}
-
-// Temporary Traits
-
-impl<T> repr::SetAt<&[T]> for Full<T>
-where
-    T: FullPrecision,
-{
-    fn set_at(&self, id: u32, v: &[T]) -> ANNResult<Guard<'_>> {
+    fn set_at(&self, v: &[T], id: u32) -> ANNResult<Guard<'_>> {
         self.check_dim(v.len())?;
 
         let mut slot = self
@@ -545,12 +521,20 @@ where
 
         Ok(Guard::new(slot))
     }
+
+    fn prune_accessor(
+        &'a self,
+        counters: LocalCounters<'a>,
+    ) -> ANNResult<crate::index::accessors::Prune<'a>> {
+        T::make_prune_accessor(self, counters)
+    }
 }
 
-impl<T> repr::InspectNeighbors for Full<T> {
-    fn inspect_neighbors(&mut self) -> repr::NeighborSnapshot<'_> {
-        self.store.neighbors_mut().snapshot()
-    }
+impl<T> repr::Insert for Full<T>
+where
+    T: FullPrecision,
+{
+    type Vector<'a> = &'a [T];
 }
 
 //----------//
@@ -765,14 +749,15 @@ macro_rules! prune {
 }
 
 impl FullPrecisionImpl for f32 {
-    fn make_expand_beam<'a>(
-        full: &'a Full<f32>,
-        query: &'a [f32],
+    fn make_search_accessor<'a>(
+        full: &'a Full<Self>,
+        query: &'a [Self],
         guard: Option<epoch::ReadGuard<'a>>,
-    ) -> ANNResult<Box<dyn repr::ExpandBeam + 'a>> {
+        counters: LocalCounters<'a>,
+    ) -> ANNResult<crate::index::accessors::Search<'a>> {
         let into = IntoExpandBeam::new(full, Calf::Borrowed(query), guard)?;
 
-        let output: Box<dyn repr::ExpandBeam> = match full.metric {
+        let expand_beam: Box<dyn repr::ExpandBeam> = match full.metric {
             Metric::L2 => {
                 if full.dim() == 100 {
                     expand_beam!(into, { f32, 100, SquaredL2 })
@@ -785,36 +770,50 @@ impl FullPrecisionImpl for f32 {
             Metric::CosineNormalized => expand_beam!(into, CosineNormalized),
         };
 
-        Ok(output)
+        Ok(crate::index::accessors::Search::new(
+            full.store.neighbors(),
+            expand_beam,
+            None,
+            full.start_point_ids,
+            counters,
+        ))
     }
 
-    fn make_prune<'a>(full: &'a Full<Self>) -> ANNResult<Box<dyn repr::Prune + 'a>> {
+    fn make_prune_accessor<'a>(
+        full: &'a Full<Self>,
+        counters: LocalCounters<'a>,
+    ) -> ANNResult<crate::index::accessors::Prune<'a>> {
         let reader = full.writer()?;
 
-        let output: Box<dyn repr::Prune> = match full.metric {
+        let prune: Box<dyn repr::Prune> = match full.metric {
             Metric::L2 => prune!(Self, reader, SquaredL2),
             Metric::InnerProduct => prune!(Self, reader, InnerProduct),
             Metric::Cosine => prune!(Self, reader, Cosine),
             Metric::CosineNormalized => prune!(Self, reader, CosineNormalized),
         };
 
-        Ok(output)
+        Ok(crate::index::accessors::Prune::new(
+            prune,
+            full.store.neighbors(),
+            counters,
+        ))
     }
 }
 
 impl FullPrecisionImpl for f16 {
-    fn make_expand_beam<'a>(
-        full: &'a Full<f16>,
-        query: &'a [f16],
+    fn make_search_accessor<'a>(
+        full: &'a Full<Self>,
+        query: &'a [Self],
         guard: Option<epoch::ReadGuard<'a>>,
-    ) -> ANNResult<Box<dyn repr::ExpandBeam + 'a>> {
+        counters: LocalCounters<'a>,
+    ) -> ANNResult<crate::index::accessors::Search<'a>> {
         let mut as_f32: Box<[f32]> = std::iter::repeat_n(0.0, full.dim()).collect();
         diskann_wide::arch::dispatch2(SliceCast::new(), &mut *as_f32, query);
         let query = Calf::Owned(as_f32);
 
         let into = IntoExpandBeam::new(full, query, guard)?;
 
-        let output: Box<dyn repr::ExpandBeam> = match full.metric {
+        let expand_beam: Box<dyn repr::ExpandBeam> = match full.metric {
             Metric::L2 => {
                 if full.dim() == 100 {
                     expand_beam!(into, { f16, 100, SquaredL2 })
@@ -827,32 +826,46 @@ impl FullPrecisionImpl for f16 {
             Metric::CosineNormalized => expand_beam!(into, CosineNormalized),
         };
 
-        Ok(output)
+        Ok(crate::index::accessors::Search::new(
+            full.store.neighbors(),
+            expand_beam,
+            None,
+            full.start_point_ids,
+            counters,
+        ))
     }
 
-    fn make_prune<'a>(full: &'a Full<Self>) -> ANNResult<Box<dyn repr::Prune + 'a>> {
+    fn make_prune_accessor<'a>(
+        full: &'a Full<Self>,
+        counters: LocalCounters<'a>,
+    ) -> ANNResult<crate::index::accessors::Prune<'a>> {
         let reader = full.writer()?;
 
-        let output: Box<dyn repr::Prune> = match full.metric {
+        let prune: Box<dyn repr::Prune> = match full.metric {
             Metric::L2 => prune!(Self, reader, SquaredL2),
             Metric::InnerProduct => prune!(Self, reader, InnerProduct),
             Metric::Cosine => prune!(Self, reader, Cosine),
             Metric::CosineNormalized => prune!(Self, reader, CosineNormalized),
         };
 
-        Ok(output)
+        Ok(crate::index::accessors::Prune::new(
+            prune,
+            full.store.neighbors(),
+            counters,
+        ))
     }
 }
 
 impl FullPrecisionImpl for u8 {
-    fn make_expand_beam<'a>(
-        full: &'a Full<u8>,
-        query: &'a [u8],
+    fn make_search_accessor<'a>(
+        full: &'a Full<Self>,
+        query: &'a [Self],
         guard: Option<epoch::ReadGuard<'a>>,
-    ) -> ANNResult<Box<dyn repr::ExpandBeam + 'a>> {
+        counters: LocalCounters<'a>,
+    ) -> ANNResult<crate::index::accessors::Search<'a>> {
         let into = IntoExpandBeam::new(full, Calf::Borrowed(query), guard)?;
 
-        let output: Box<dyn repr::ExpandBeam> = match full.metric {
+        let expand_beam: Box<dyn repr::ExpandBeam> = match full.metric {
             Metric::L2 => {
                 if full.dim() == 128 {
                     expand_beam!(into, { u8, 128, SquaredL2 })
@@ -864,97 +877,83 @@ impl FullPrecisionImpl for u8 {
             Metric::Cosine | Metric::CosineNormalized => expand_beam!(into, Cosine),
         };
 
-        Ok(output)
+        Ok(crate::index::accessors::Search::new(
+            full.store.neighbors(),
+            expand_beam,
+            None,
+            full.start_point_ids,
+            counters,
+        ))
     }
 
-    fn make_prune<'a>(full: &'a Full<Self>) -> ANNResult<Box<dyn repr::Prune + 'a>> {
+    fn make_prune_accessor<'a>(
+        full: &'a Full<Self>,
+        counters: LocalCounters<'a>,
+    ) -> ANNResult<crate::index::accessors::Prune<'a>> {
         let reader = full.writer()?;
 
-        let output: Box<dyn repr::Prune> = match full.metric {
+        let prune: Box<dyn repr::Prune> = match full.metric {
             Metric::L2 => prune!(Self, reader, SquaredL2),
             Metric::InnerProduct => prune!(Self, reader, InnerProduct),
             Metric::Cosine => prune!(Self, reader, Cosine),
             Metric::CosineNormalized => prune!(Self, reader, CosineNormalized),
         };
 
-        Ok(output)
+        Ok(crate::index::accessors::Prune::new(
+            prune,
+            full.store.neighbors(),
+            counters,
+        ))
     }
 }
 
 impl FullPrecisionImpl for i8 {
-    fn make_expand_beam<'a>(
-        full: &'a Full<i8>,
-        query: &'a [i8],
+    fn make_search_accessor<'a>(
+        full: &'a Full<Self>,
+        query: &'a [Self],
         guard: Option<epoch::ReadGuard<'a>>,
-    ) -> ANNResult<Box<dyn repr::ExpandBeam + 'a>> {
+        counters: LocalCounters<'a>,
+    ) -> ANNResult<crate::index::accessors::Search<'a>> {
         let into = IntoExpandBeam::new(full, Calf::Borrowed(query), guard)?;
 
         let distance = VDistance::<Self, Self>::new(full.metric(), Some(full.dim()));
 
-        let output: Box<dyn repr::ExpandBeam + 'a> = into
+        let expand_beam: Box<dyn repr::ExpandBeam + 'a> = into
             .into_expand_beam(distance, prefetch::Loop::new())
             .boxed();
 
-        Ok(output)
+        Ok(crate::index::accessors::Search::new(
+            full.store.neighbors(),
+            expand_beam,
+            None,
+            full.start_point_ids,
+            counters,
+        ))
     }
 
-    fn make_prune<'a>(full: &'a Full<Self>) -> ANNResult<Box<dyn repr::Prune + 'a>> {
+    fn make_prune_accessor<'a>(
+        full: &'a Full<Self>,
+        counters: LocalCounters<'a>,
+    ) -> ANNResult<crate::index::accessors::Prune<'a>> {
         let reader = full.writer()?;
 
         let distance = VDistance::<Self, Self>::new(full.metric(), Some(full.dim()));
 
-        let output: Box<dyn repr::Prune> =
+        let prune: Box<dyn repr::Prune> =
             repr::internal::packed::Prune::new(reader, distance).boxed();
 
-        Ok(output)
+        Ok(crate::index::accessors::Prune::new(
+            prune,
+            full.store.neighbors(),
+            counters,
+        ))
     }
 }
 
-/// We use a macro to stamp out implementations of [`FullPrecision`] instead of using a
-/// blanket implementation from [`FullPrecisionImpl`] to make implementations more
-/// discoverable through the generated rust-doc.
-macro_rules! impl_full_precision {
-    ($T:ty) => {
-        impl FullPrecision for $T {
-            fn __search_accessor<'a>(
-                representation: &'a Full<Self>,
-                query: &'a [Self],
-                guard: Option<repr::ReadGuard<'a>>,
-                counters: LocalCounters<'a>,
-            ) -> ANNResult<crate::index::accessors::Search<'a>> {
-                let expand_beam = <$T>::make_expand_beam(
-                    representation,
-                    query,
-                    guard.map(repr::ReadGuard::into_inner),
-                )?;
-                Ok(crate::index::accessors::Search::new(
-                    representation.store.neighbors(),
-                    expand_beam,
-                    None,
-                    representation.start_point_ids,
-                    counters,
-                ))
-            }
-
-            fn __prune_accessor<'a>(
-                representation: &'a Full<Self>,
-                counters: LocalCounters<'a>,
-            ) -> ANNResult<crate::index::accessors::Prune<'a>> {
-                let prune = <$T>::make_prune(representation)?;
-                Ok(crate::index::accessors::Prune::new(
-                    prune,
-                    representation.store.neighbors(),
-                    counters,
-                ))
-            }
-        }
-    };
-    ($($Ts:ty),* $(,)?) => {
-        $(impl_full_precision!($Ts);)*
-    }
-}
-
-impl_full_precision!(f32, f16, u8, i8);
+impl FullPrecision for f32 {}
+impl FullPrecision for f16 {}
+impl FullPrecision for u8 {}
+impl FullPrecision for i8 {}
 
 ///////////
 // Tests //
@@ -1084,9 +1083,9 @@ mod tests {
         assert_eq!(full.dim(), data.ncols());
         assert_eq!(full.bytes().value(), bytes);
         assert_eq!(full.metric(), metric);
-        assert_eq!(repr::Representation::id_limit(&full), TEST_LIMIT,);
+        assert_eq!(repr::RepresentationImpl::id_limit(&full), TEST_LIMIT,);
         assert_eq!(
-            repr::Representation::capacity(&full),
+            repr::RepresentationImpl::capacity(&full),
             Capacity::new(data.nrows())
         );
 
@@ -1101,13 +1100,13 @@ mod tests {
                     reader.read(slot).unwrap(),
                     bytemuck::must_cast_slice::<f32, u8>(start),
                 );
-                assert_eq!(repr::Representation::is_readable(&full, slot), Some(true));
+                assert_eq!(repr::RepresentationImpl::is_readable(&full, slot), Some(true));
                 reference.insert(LogicalId(usize::MAX - i), SlotId(slot), start);
             }
         }
 
         for (i, row) in data.rows().enumerate() {
-            let guard = repr::Set::set(&full, row).unwrap();
+            let guard = repr::InsertImpl::set(&full, row).unwrap();
             let slot = repr::Guard::id(&guard);
             reference.insert(LogicalId(i), SlotId(slot), row);
             repr::Guard::publish(guard);
@@ -1131,7 +1130,7 @@ mod tests {
         metric: Metric,
         ctx: &dyn std::fmt::Display,
     ) {
-        assert_eq!(repr::Representation::id_limit(full), TEST_LIMIT, "{ctx}");
+        assert_eq!(repr::RepresentationImpl::id_limit(full), TEST_LIMIT, "{ctx}");
 
         let query = [10.0, -10.0];
 
@@ -1149,13 +1148,13 @@ mod tests {
         let i3_deleted = LogicalId(8);
         let s3_deleted = reference.slot_id_for(i3_deleted);
 
-        repr::Representation::retire(full, s3_deleted.value()).unwrap();
+        repr::RepresentationImpl::retire(full, s3_deleted.value()).unwrap();
         reference.delete(i3_deleted);
 
         let i4_deleted = LogicalId(4);
         let s4_deleted = reference.slot_id_for(i4_deleted);
 
-        repr::Representation::retire(full, s4_deleted.value()).unwrap();
+        repr::RepresentationImpl::retire(full, s4_deleted.value()).unwrap();
         reference.delete(i4_deleted);
 
         // Extract values.
@@ -1175,8 +1174,8 @@ mod tests {
         // Search/Insert
         {
             let counters = Counters::new();
-            let guard = repr::Representation::read_guard(full).unwrap();
-            let sa = repr::Search::search_accessor(
+            let guard = repr::RepresentationImpl::read_guard(full).unwrap();
+            let sa = repr::SearchImpl::search_accessor(
                 full,
                 query.as_slice(),
                 Some(guard),
@@ -1220,7 +1219,7 @@ mod tests {
             ]);
 
             let counters = Counters::new();
-            let mut pa = repr::Insert::prune_accessor(full, counters.local()).unwrap();
+            let mut pa = repr::InsertImpl::prune_accessor(full, counters.local()).unwrap();
 
             repr::test::test_prune(
                 pa.get_prune(),
@@ -1261,7 +1260,7 @@ mod tests {
     fn test_guard_and_reuse() {
         let (full, mut reference) = make_test_repr(Metric::L2);
 
-        let err = repr::Set::set(&full, &[-10.0, -10.0])
+        let err = repr::InsertImpl::set(&full, &[-10.0, -10.0])
             .unwrap_err()
             .to_string();
         assert_contains!(err, "could not allocate a new slot");
@@ -1269,7 +1268,7 @@ mod tests {
         let id = LogicalId(2);
         let slot = reference.slot_id_for(id);
         assert_eq!(
-            repr::Representation::is_readable(&full, slot.value()),
+            repr::RepresentationImpl::is_readable(&full, slot.value()),
             Some(true),
         );
 
@@ -1284,16 +1283,16 @@ mod tests {
                 bytemuck::bytes_of(&[-1.0f32, 1.0])
             );
 
-            repr::Representation::retire(&full, slot.value()).unwrap();
+            repr::RepresentationImpl::retire(&full, slot.value()).unwrap();
             reference.delete(id);
 
             assert!(reader.read(slot.value()).is_none());
             assert_eq!(
-                repr::Representation::is_readable(&full, slot.value()),
+                repr::RepresentationImpl::is_readable(&full, slot.value()),
                 Some(false),
             );
 
-            let err = repr::Set::set(&full, &[-2.0, 1.0]).unwrap_err().to_string();
+            let err = repr::InsertImpl::set(&full, &[-2.0, 1.0]).unwrap_err().to_string();
             assert_contains!(err, "could not allocate a new slot");
 
             // `reader` gets dropped.
@@ -1303,7 +1302,7 @@ mod tests {
         //
         // Dropping a `guard` does not publish.
         {
-            let guard = repr::Set::set(&full, &[-10.0, -10.0]).unwrap();
+            let guard = repr::InsertImpl::set(&full, &[-10.0, -10.0]).unwrap();
             assert_eq!(
                 repr::Guard::id(&guard),
                 slot.value(),
@@ -1313,33 +1312,33 @@ mod tests {
             let reader = full.reader(None).unwrap();
             assert!(reader.read(slot.value()).is_none());
             assert_eq!(
-                repr::Representation::is_readable(&full, slot.value()),
+                repr::RepresentationImpl::is_readable(&full, slot.value()),
                 Some(false),
             );
 
             // Dropping means the slot is reclaimed.
         }
         assert_eq!(
-            repr::Representation::is_readable(&full, slot.value()),
+            repr::RepresentationImpl::is_readable(&full, slot.value()),
             Some(false),
         );
 
         {
             let reader = full.reader(None).unwrap();
-            let guard = repr::Set::set(&full, &[-10.0, -10.0]).unwrap();
+            let guard = repr::InsertImpl::set(&full, &[-10.0, -10.0]).unwrap();
             assert_eq!(
                 repr::Guard::id(&guard),
                 slot.value(),
                 "expected the same slot to be reused because of the tight capacity"
             );
             assert_eq!(
-                repr::Representation::is_readable(&full, slot.value()),
+                repr::RepresentationImpl::is_readable(&full, slot.value()),
                 Some(false),
             );
 
             repr::Guard::publish(guard);
             assert_eq!(
-                repr::Representation::is_readable(&full, slot.value()),
+                repr::RepresentationImpl::is_readable(&full, slot.value()),
                 Some(true),
             );
 
@@ -1355,7 +1354,7 @@ mod tests {
         let (full, _) = make_test_repr(Metric::L2);
 
         for dim in [1, 3] {
-            let err = repr::Set::set(&full, vec![1.0; dim].as_slice()).unwrap_err();
+            let err = repr::InsertImpl::set(&full, vec![1.0; dim].as_slice()).unwrap_err();
             assert_contains!(
                 err.to_string(),
                 format!("expected slice of length 2 - instead got {dim}"),
@@ -1371,7 +1370,7 @@ mod tests {
         for dim in [1, 3] {
             let query = vec![1.0; dim];
             let err =
-                repr::Search::search_accessor(&full, query.as_slice(), None, counters.local())
+                repr::SearchImpl::search_accessor(&full, query.as_slice(), None, counters.local())
                     .unwrap_err();
             assert_contains!(
                 err.to_string(),
@@ -1470,6 +1469,7 @@ mod tests {
         T: FullPrecision + FullPrecisionImpl + Sample + DistanceProvider<T>,
     {
         let mut rng = StdRng::seed_from_u64(seed);
+        let counters = Counters::new();
 
         let start_point = gen_vec::<T>(dim, &mut rng);
         let query = gen_vec::<T>(dim, &mut rng);
@@ -1488,7 +1488,7 @@ mod tests {
         // We know the internal start IDs begin at 0. This is not a stability guarantee.
         let start_id: u32 = 0;
         let internal_query = {
-            let guard = <_ as repr::Set<&[T]>>::set(&full, &query).unwrap();
+            let guard = repr::InsertImpl::set(&full, &query).unwrap();
             let id = <_ as repr::Guard>::id(&guard);
             <_ as repr::Guard>::publish(guard);
             id
@@ -1500,9 +1500,9 @@ mod tests {
         // Expand Beam - both `evaluate` and `expand_beam` share the same distance computer,
         // so we can just test `evaluate`.
         {
-            let expand_beam =
-                <T as FullPrecisionImpl>::make_expand_beam(&full, &query, None).unwrap();
-            let got = expand_beam.evaluate(start_id).unwrap().unwrap();
+            let mut expand_beam =
+                <T as FullPrecisionImpl>::make_search_accessor(&full, &query, None, counters.local()).unwrap();
+            let got = expand_beam.get_expand_beam().evaluate(start_id).unwrap().unwrap();
             assert!(
                 approx_eq(expected, got),
                 "{ctx} - expected {expected}, got {got}"
@@ -1511,10 +1511,12 @@ mod tests {
 
         // Prune
         {
-            let prune = <T as FullPrecisionImpl>::make_prune(&full).unwrap();
-            let query = prune.get(internal_query).unwrap();
-            let start = prune.get(start_id).unwrap();
-            let got = prune.evaluate(query, start);
+            let mut prune = <T as FullPrecisionImpl>::make_prune_accessor(&full, counters.local()).unwrap();
+            let inner = prune.get_prune();
+
+            let query = inner.get(internal_query).unwrap();
+            let start = inner.get(start_id).unwrap();
+            let got = inner.evaluate(query, start);
             assert!(
                 approx_eq(expected, got),
                 "{ctx} - expected {expected}, got {got}"

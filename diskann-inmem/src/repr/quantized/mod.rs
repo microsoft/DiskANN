@@ -596,11 +596,11 @@ impl Quantized {
     ///
     /// # Panics
     ///
-    /// Panics if [`repr::ReadGuard`] is provided and wasn't obtained from `self.store`.
+    /// Panics if [`epoch::ReadGuard`] is provided and wasn't obtained from `self.store`.
     fn create_accessor<'a>(
         &'a self,
         query: &'a [f32],
-        guard: Option<repr::ReadGuard<'a>>,
+        guard: Option<epoch::ReadGuard<'a>>,
         counters: LocalCounters<'a>,
         args: AccessorArgs,
     ) -> ANNResult<crate::index::accessors::Search<'a>> {
@@ -651,7 +651,7 @@ impl Quantized {
 
         // Use the provided guard if present.
         let (expand_beam, post_process) = match guard {
-            Some(guard) => make_objects(self.store.slots(), guard.into_inner())?,
+            Some(guard) => make_objects(self.store.slots(), guard)?,
             None => self.store.read_guard(make_objects)??,
         };
 
@@ -677,8 +677,23 @@ repr::internal::macros::set_guard!(
     for<'a> cons::Exclusive<intrusive::Exclusive<'a>, Option<simple::Exclusive<'a>>>
 );
 
-impl repr::Set<&[f32]> for Quantized {
-    type Guard<'a> = Guard<'a>;
+impl<'a> repr::SearchImpl<'a, &'a [f32]> for Quantized {
+    fn search_accessor(
+        &'a self,
+        query: &'a [f32],
+        guard: Option<epoch::ReadGuard<'a>>,
+        counters: LocalCounters<'a>,
+    ) -> ANNResult<crate::index::accessors::Search<'a>> {
+        self.create_accessor(query, guard, counters, AccessorArgs { insert: false })
+    }
+}
+
+impl repr::Search for Quantized {
+    type Query<'a> = &'a [f32];
+}
+
+impl<'a> repr::InsertImpl<'a, &'a [f32]> for Quantized {
+    type Guard = Guard<'a>;
 
     fn set(&self, v: &[f32]) -> ANNResult<Guard<'_>> {
         // Easy check to reject invalid vectors before acquiring an epoch guard.
@@ -701,53 +716,8 @@ impl repr::Set<&[f32]> for Quantized {
         self.set(v, slot.data())?;
         Ok(Guard::new(slot))
     }
-}
 
-impl repr::Search for Quantized {
-    type Query<'a> = &'a [f32];
-
-    fn search_accessor<'a>(
-        &'a self,
-        query: &'a [f32],
-        guard: Option<repr::ReadGuard<'a>>,
-        counters: LocalCounters<'a>,
-    ) -> ANNResult<crate::index::accessors::Search<'a>> {
-        self.create_accessor(query, guard, counters, AccessorArgs { insert: false })
-    }
-}
-
-impl repr::Insert for Quantized {
-    fn insert_search_accessor<'a>(
-        &'a self,
-        query: Self::Query<'a>,
-        guard: Option<repr::ReadGuard<'a>>,
-        counters: LocalCounters<'a>,
-    ) -> ANNResult<crate::index::accessors::Search<'a>> {
-        self.create_accessor(query, guard, counters, AccessorArgs { insert: true })
-    }
-
-    fn prune_accessor<'a>(
-        &'a self,
-        counters: LocalCounters<'a>,
-    ) -> ANNResult<crate::index::accessors::Prune<'a>> {
-        let reader = self
-            .store
-            .write_guard(|slots, guard| slots.first().reader(guard.into_read_guard()))?;
-
-        let prune = self.quantizer.prune(reader);
-
-        Ok(crate::index::accessors::Prune::new(
-            prune,
-            self.store.neighbors(),
-            counters,
-        ))
-    }
-}
-
-// Temporary Traits
-
-impl repr::SetAt<&[f32]> for Quantized {
-    fn set_at(&self, id: u32, v: &[f32]) -> ANNResult<Guard<'_>> {
+    fn set_at(&self, v: &[f32], id: u32) -> ANNResult<Guard<'_>> {
         // Easy check to reject invalid vectors before acquiring an epoch guard.
         let vlen = v.len();
         let dim = self.dim();
@@ -768,12 +738,36 @@ impl repr::SetAt<&[f32]> for Quantized {
         self.set(v, slot.data())?;
         Ok(Guard::new(slot))
     }
+
+    fn insert_search_accessor(
+        &'a self,
+        query: &'a [f32],
+        guard: Option<epoch::ReadGuard<'a>>,
+        counters: LocalCounters<'a>,
+    ) -> ANNResult<crate::index::accessors::Search<'a>> {
+        self.create_accessor(query, guard, counters, AccessorArgs { insert: true })
+    }
+
+    fn prune_accessor(
+        &'a self,
+        counters: LocalCounters<'a>,
+    ) -> ANNResult<crate::index::accessors::Prune<'a>> {
+        let reader = self
+            .store
+            .write_guard(|slots, guard| slots.first().reader(guard.into_read_guard()))?;
+
+        let prune = self.quantizer.prune(reader);
+
+        Ok(crate::index::accessors::Prune::new(
+            prune,
+            self.store.neighbors(),
+            counters,
+        ))
+    }
 }
 
-impl repr::InspectNeighbors for Quantized {
-    fn inspect_neighbors(&mut self) -> repr::NeighborSnapshot<'_> {
-        self.store.neighbors_mut().snapshot()
-    }
+impl repr::Insert for Quantized {
+    type Vector<'a> = &'a [f32];
 }
 
 //-------//
@@ -1270,9 +1264,9 @@ mod tests {
 
         let quantized = config.build().unwrap();
 
-        assert_eq!(repr::Representation::id_limit(&quantized), TEST_LIMIT);
+        assert_eq!(repr::RepresentationImpl::id_limit(&quantized), TEST_LIMIT);
         assert_eq!(
-            repr::Representation::capacity(&quantized).value(),
+            repr::RepresentationImpl::capacity(&quantized).value(),
             data.nrows()
         );
         assert_eq!(quantized.dim(), usize::from(grid.dim()));
@@ -1281,7 +1275,7 @@ mod tests {
 
         if fill {
             for (i, row) in data.rows().enumerate() {
-                let guard = repr::Set::set(&quantized, row).unwrap();
+                let guard = repr::InsertImpl::set(&quantized, row).unwrap();
                 let id = repr::Guard::id(&guard);
 
                 reference.insert(LogicalId(i), SlotId(id), row);
@@ -1322,7 +1316,7 @@ mod tests {
         ctx: &dyn std::fmt::Display,
     ) {
         assert_eq!(
-            repr::Representation::id_limit(quantized),
+            repr::RepresentationImpl::id_limit(quantized),
             TEST_LIMIT,
             "{ctx}"
         );
@@ -1344,13 +1338,13 @@ mod tests {
         let i3_deleted = LogicalId(8);
         let s3_deleted = reference.slot_id_for(i3_deleted);
 
-        repr::Representation::retire(quantized, s3_deleted.value()).unwrap();
+        repr::RepresentationImpl::retire(quantized, s3_deleted.value()).unwrap();
         reference.delete(i3_deleted);
 
         let i4_deleted = LogicalId(4);
         let s4_deleted = reference.slot_id_for(i4_deleted);
 
-        repr::Representation::retire(quantized, s4_deleted.value()).unwrap();
+        repr::RepresentationImpl::retire(quantized, s4_deleted.value()).unwrap();
         reference.delete(i4_deleted);
 
         // Extract values.
@@ -1381,7 +1375,7 @@ mod tests {
         // Insert
         {
             let counters = Counters::new();
-            let mut sa = repr::Insert::insert_search_accessor(
+            let mut sa = repr::InsertImpl::insert_search_accessor(
                 quantized,
                 insert_vector.as_slice(),
                 None,
@@ -1407,7 +1401,7 @@ mod tests {
         // Search
         {
             let counters = Counters::new();
-            let mut sa = repr::Search::search_accessor(
+            let mut sa = repr::SearchImpl::search_accessor(
                 quantized,
                 query_vector.as_slice(),
                 None,
@@ -1471,7 +1465,7 @@ mod tests {
             ]);
 
             let counters = Counters::new();
-            let mut pa = repr::Insert::prune_accessor(quantized, counters.local()).unwrap();
+            let mut pa = repr::InsertImpl::prune_accessor(quantized, counters.local()).unwrap();
 
             test_prune(
                 pa.get_prune(),
@@ -1632,7 +1626,7 @@ mod tests {
     fn test_set_capacity_exhaustion() {
         let (quantized, _) = make_test_repr(Metric::SquaredL2, Rerank::None, true);
 
-        let err = repr::Set::set(&quantized, &[1.0, 2.0]).unwrap_err();
+        let err = repr::InsertImpl::set(&quantized, &[1.0, 2.0]).unwrap_err();
         assert_contains!(err.to_string(), "could not allocate a new slot",);
     }
 
@@ -1640,7 +1634,7 @@ mod tests {
     fn test_set_dim_mismatch() {
         let (quantized, _) = make_test_repr(Metric::SquaredL2, Rerank::None, false);
 
-        let err = repr::Set::set(&quantized, &[1.0, 2.0, 3.0]).unwrap_err();
+        let err = repr::InsertImpl::set(&quantized, &[1.0, 2.0, 3.0]).unwrap_err();
         assert_contains!(
             err.to_string(),
             "vector dim 3 does not match quantizer dim 2",
@@ -1653,7 +1647,7 @@ mod tests {
 
         let counters = Counters::new();
         let err =
-            repr::Search::search_accessor(&quantized, &[1.0], None, counters.local()).unwrap_err();
+            repr::SearchImpl::search_accessor(&quantized, &[1.0], None, counters.local()).unwrap_err();
 
         assert_contains!(
             err.to_string(),
@@ -1673,14 +1667,14 @@ mod tests {
 
         // Free up one slot.
         let slot = quantized.start_point_ids.end();
-        repr::Representation::retire(&quantized, slot).unwrap();
+        repr::RepresentationImpl::retire(&quantized, slot).unwrap();
 
         // Insert something that is incompressible.
-        let err = repr::Set::set(&quantized, &[f32::INFINITY, f32::INFINITY]).unwrap_err();
+        let err = repr::InsertImpl::set(&quantized, &[f32::INFINITY, f32::INFINITY]).unwrap_err();
         assert_contains!(err.to_string(), "infinity");
 
         // If we insert again, this should succeed.
-        let guard = repr::Set::set(&quantized, &[1.0, 2.0]).unwrap();
+        let guard = repr::InsertImpl::set(&quantized, &[1.0, 2.0]).unwrap();
         assert_eq!(repr::Guard::id(&guard), slot);
     }
 }

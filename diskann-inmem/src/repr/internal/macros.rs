@@ -11,6 +11,11 @@ macro_rules! representation {
         impl<$($generics),*> $crate::repr::Representation for $T
         where
             $($where)*
+        {}
+
+        impl<$($generics),*> $crate::repr::RepresentationImpl for $T
+        where
+            $($where)*
         {
             fn max_degree(&self) -> MaxDegree {
                 self.store.neighbors().max_degree()
@@ -36,12 +41,22 @@ macro_rules! representation {
                 self.store.try_drain()
             }
 
-            fn read_guard(&self) -> ANNResult<$crate::repr::ReadGuard<'_>> {
-                Ok($crate::repr::ReadGuard::new(self.store.read_guard(|_, g| g)?))
+            fn read_guard(&self) -> Result<
+                $crate::epoch::ReadGuard<'_>,
+                $crate::epoch::Unavailable,
+            > {
+                self.store.read_guard(|_, g| g)
             }
 
-            fn write_guard(&self) -> ANNResult<$crate::repr::WriteGuard<'_>> {
-                Ok($crate::repr::WriteGuard::new(self.store.write_guard(|_, g| g)?))
+            fn write_guard(&self) -> Result<
+                $crate::epoch::WriteGuard<'_>,
+                $crate::epoch::Unavailable,
+            > {
+                self.store.write_guard(|_, g| g)
+            }
+
+            fn inspect_neighbors(&mut self) -> $crate::repr::NeighborSnapshot<'_> {
+                self.store.neighbors_mut().snapshot()
             }
         }
     };

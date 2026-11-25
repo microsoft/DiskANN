@@ -16,6 +16,7 @@ use crate::{
     bitvector::BitVector,
     counters::{Counters, LocalCounters},
     ids::IdMap,
+    epoch,
     num::{Capacity, IdLimit, MaxDegree},
     poll::{poll, ready},
     repr,
@@ -27,6 +28,9 @@ use crate::{
 
 pub(crate) mod accessors;
 mod algorithms;
+
+#[doc(hidden)]
+pub mod buildonly;
 
 ///////////
 // Index //
@@ -75,12 +79,12 @@ where
     }
 
     pub fn read(&self) -> ANNResult<Read<'_, R, M>> {
-        let guard = repr::Representation::read_guard(&self.representation)?;
+        let guard = repr::RepresentationImpl::read_guard(&self.representation)?;
         Ok(Read { index: self, guard })
     }
 
     pub fn write(&self) -> ANNResult<Write<'_, R, M>> {
-        let guard = repr::Representation::write_guard(&self.representation)?;
+        let guard = repr::RepresentationImpl::write_guard(&self.representation)?;
         Ok(Write {
             index: &self,
             guard,
@@ -99,7 +103,7 @@ where
 
     /// Advance the epoch - returning the number of reclaimed IDs, if any.
     pub fn reclaim(&self) -> Option<usize> {
-        repr::Representation::reclaim(&self.representation)
+        repr::RepresentationImpl::reclaim(&self.representation)
     }
 
     fn id_limit(&self) -> IdLimit {
@@ -119,7 +123,7 @@ where
     }
 
     fn is_readable(&self, id: u32) -> Option<bool> {
-        <_ as repr::Representation>::is_readable(&self.representation, id)
+        <_ as repr::RepresentationImpl>::is_readable(&self.representation, id)
     }
 
     fn temp_delete(&self, id: &M) -> ANNResult<u32> {
@@ -139,7 +143,7 @@ where
 
         // An early return here will cause `entry` to be dropped, which will *not* cause
         // the delete to commit.
-        <R as repr::Representation>::retire(&self.representation, internal)?;
+        <R as repr::RepresentationImpl>::retire(&self.representation, internal)?;
 
         // Successfully retired the internal slot. We can safely release the ID mapping.
         entry.delete();
@@ -160,7 +164,7 @@ where
         handle: &'a tokio::runtime::Handle,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ANNResult<()>> + 'a>>
     where
-        R: for<'q> repr::Insert<Query<'q> = &'q [T]>,
+        R: for<'q> repr::Insert<Vector<'q> = &'q [T]>,
         T: std::fmt::Debug + Send + Sync + 'static,
     {
         use diskann_utils::views::rowmajor::Matrix;
@@ -195,8 +199,6 @@ where
     }
 
     /// A local set of counters that update the provider-wide counters in bulk.
-    ///
-    /// FIXME: Make more private.
     fn local_counters(&self) -> LocalCounters<'_> {
         self.counters.local()
     }
@@ -220,7 +222,7 @@ where
     M: Id,
 {
     index: &'a Index<R, M>,
-    guard: repr::ReadGuard<'a>,
+    guard: epoch::ReadGuard<'a>,
 }
 
 impl<R, M> Read<'_, R, M>
@@ -238,7 +240,7 @@ where
         R: repr::Search,
         O: SearchOutputBuffer<M> + Send + ?Sized,
     {
-        let mut accessor = repr::Search::search_accessor(
+        let mut accessor = repr::SearchImpl::search_accessor(
             &self.index.representation,
             query,
             Some(self.guard.share()),
@@ -280,7 +282,7 @@ where
         R: repr::Search,
         F: FnMut(&M) -> bool,
     {
-        let search = <R as repr::Search>::search_accessor(
+        let search = repr::SearchImpl::search_accessor(
             &self.index.representation,
             query,
             Some(self.guard.share()),
@@ -303,7 +305,7 @@ where
         R: repr::Representation,
         F: FnMut(&M) -> bool,
     {
-        let mut bitvec = BitVector::new(<R as repr::Representation>::id_limit(
+        let mut bitvec = BitVector::new(<R as repr::RepresentationImpl>::id_limit(
             &self.index.representation,
         ));
 
@@ -463,7 +465,7 @@ where
     M: Id,
 {
     index: &'a Index<R, M>,
-    guard: repr::WriteGuard<'a>,
+    guard: epoch::WriteGuard<'a>,
 }
 
 impl<'a, R, M> Write<'a, R, M>
@@ -472,16 +474,17 @@ where
     M: Id,
 {
     // FIXME: Add a proper roll-back guard.
-    fn set(&self, vector: R::Query<'_>, id: M) -> ANNResult<u32>
+    fn set<'q>(&self, vector: R::Vector<'q>, id: M) -> ANNResult<u32>
     where
         R: repr::Insert,
+        'a: 'q,
     {
         // TODO: Proper cleanup via `Guard` or some other mechanism on the event of
         // insert failure after `set_element` returns.
         //
         // The internal `Guard` is sufficient for local rollback, but not after
         // `set_element` returns.
-        let guard = <R as repr::Set<R::Query<'_>>>::set(&self.index.representation, vector)?;
+        let guard = repr::InsertImpl::set(&self.index.representation, vector)?;
         let internal = <_ as repr::Guard>::id(&guard);
         self.index.mapping().insert(id.clone(), internal)?;
 
@@ -497,7 +500,7 @@ where
         Ok(internal)
     }
 
-    pub fn insert<'q>(&self, vector: R::Query<'q>, id: M) -> ANNResult<()>
+    pub fn insert<'q>(&self, vector: R::Vector<'q>, id: M) -> ANNResult<()>
     where
         R: repr::Insert,
         'a: 'q,
@@ -538,16 +541,16 @@ where
     /// Construct an [`algorithms::Insert`] with `vector`.
     ///
     /// This function does *not* any persistent data.
-    fn insert_access<'q>(&self, vector: R::Query<'q>) -> ANNResult<algorithms::Insert<'q>>
+    fn insert_access<'q>(&self, vector: R::Vector<'q>) -> ANNResult<algorithms::Insert<'q>>
     where
         R: repr::Insert,
         'a: 'q,
     {
         Ok(algorithms::Insert::new(
-            repr::Insert::insert_search_accessor(
+            repr::InsertImpl::insert_search_accessor(
                 &self.index.representation,
                 vector,
-                Some(self.guard.as_read_guard()),
+                Some(self.guard.read_guard().share()),
                 self.index.local_counters(),
             )?,
             self.prune_accessor()?,
@@ -559,7 +562,7 @@ where
     where
         R: repr::Insert,
     {
-        repr::Insert::prune_accessor(&self.index.representation, self.index.local_counters())
+        repr::InsertImpl::prune_accessor(&self.index.representation, self.index.local_counters())
     }
 }
 

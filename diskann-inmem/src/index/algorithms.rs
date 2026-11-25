@@ -157,7 +157,7 @@ where
 #[cfg(feature = "diskann-builtins")]
 impl<R, M, T> diskann::graph::algorithms::batch::insert::Standard for BatchInsert<R, M, T>
 where
-    for<'a> R: repr::Insert<Query<'a> = &'a [T]>,
+    for<'a> R: repr::Insert<Vector<'a> = &'a [T]>,
     M: Id,
     T: std::fmt::Debug + Send + Sync + 'static,
 {
