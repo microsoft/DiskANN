@@ -150,7 +150,7 @@ impl<'a> Search<'a> {
     {
         let mapping = translate.0;
         let mut count = 0;
-        let mut push = |neighbor: Neighbor<u32>| -> bool {
+        let push = |neighbor: Neighbor<u32>| -> bool {
             if let Some(ext) = mapping.to_external(*neighbor.id()) {
                 if output
                     .push(Neighbor::new(ext, *neighbor.distance()))

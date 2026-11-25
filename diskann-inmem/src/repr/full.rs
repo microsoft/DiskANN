@@ -1103,10 +1103,6 @@ mod tests {
                     reader.read(slot).unwrap(),
                     bytemuck::must_cast_slice::<f32, u8>(start),
                 );
-                assert_eq!(
-                    repr::RepresentationImpl::is_readable(&full, slot),
-                    Some(true)
-                );
                 reference.insert(LogicalId(usize::MAX - i), SlotId(slot), start);
             }
         }
@@ -1277,10 +1273,6 @@ mod tests {
 
         let id = LogicalId(2);
         let slot = reference.slot_id_for(id);
-        assert_eq!(
-            repr::RepresentationImpl::is_readable(&full, slot.value()),
-            Some(true),
-        );
 
         // Create a reader.
         //
@@ -1297,10 +1289,6 @@ mod tests {
             reference.delete(id);
 
             assert!(reader.read(slot.value()).is_none());
-            assert_eq!(
-                repr::RepresentationImpl::is_readable(&full, slot.value()),
-                Some(false),
-            );
 
             let err = repr::InsertImpl::set(&full, &[-2.0, 1.0])
                 .unwrap_err()
@@ -1323,17 +1311,9 @@ mod tests {
 
             let reader = full.reader(None).unwrap();
             assert!(reader.read(slot.value()).is_none());
-            assert_eq!(
-                repr::RepresentationImpl::is_readable(&full, slot.value()),
-                Some(false),
-            );
 
             // Dropping means the slot is reclaimed.
         }
-        assert_eq!(
-            repr::RepresentationImpl::is_readable(&full, slot.value()),
-            Some(false),
-        );
 
         {
             let reader = full.reader(None).unwrap();
@@ -1343,17 +1323,8 @@ mod tests {
                 slot.value(),
                 "expected the same slot to be reused because of the tight capacity"
             );
-            assert_eq!(
-                repr::RepresentationImpl::is_readable(&full, slot.value()),
-                Some(false),
-            );
 
             repr::Guard::publish(guard);
-            assert_eq!(
-                repr::RepresentationImpl::is_readable(&full, slot.value()),
-                Some(true),
-            );
-
             assert_eq!(
                 reader.read(slot.value()).unwrap(),
                 bytemuck::bytes_of(&[-10.0f32, -10.0]),

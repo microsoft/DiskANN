@@ -602,6 +602,7 @@ where
     /// slot's specific reader.
     ///
     /// Returns `None` if `i` is not within [`Self::id_limit`].
+    #[cfg(test)]
     pub(crate) fn can_read_approximate(&self, i: usize) -> Option<bool> {
         self.tags
             .get(i)

@@ -95,23 +95,6 @@ where
         Ok(())
     }
 
-    pub(crate) fn contains_external<Q>(&self, external: &Q) -> bool
-    where
-        I: std::borrow::Borrow<Q>,
-        Q: Eq + Hash + ?Sized,
-    {
-        self.forward.contains_key(external)
-    }
-
-    /// Look up the internal id for an external id.
-    pub(crate) fn to_internal<Q>(&self, external: &Q) -> Option<u32>
-    where
-        I: std::borrow::Borrow<Q>,
-        Q: Eq + Hash + ?Sized,
-    {
-        self.forward.get(external).map(|v| *v)
-    }
-
     /// Look up the external id for an internal id.
     pub(crate) fn to_external(&self, internal: u32) -> Option<I>
     where
@@ -244,14 +227,14 @@ mod tests {
         let map = IdMap::<u32>::new(IdLimit::new(16));
         assert!(map.insert(100, 3).is_ok());
 
-        assert_eq!(map.to_internal(&100), Some(3));
         assert_eq!(map.to_external(3), Some(100));
-        assert!(map.contains_external(&100));
+        let entry = map.occupied_entry(100).unwrap();
+        assert_eq!(entry.external(), &100);
+        assert_eq!(entry.internal(), 3);
 
         // Unmapped ids return nothing.
-        assert_eq!(map.to_internal(&101), None);
         assert_eq!(map.to_external(4), None);
-        assert!(!map.contains_external(&101));
+        assert!(map.occupied_entry(100).is_none());
     }
 
     #[test]
@@ -275,9 +258,8 @@ mod tests {
         assert!(matches!(map.insert(7, 6), Err(InsertError::ExternalExists)));
 
         // The failed insert must not have established any partial mapping.
-        assert_eq!(map.to_internal(&7), Some(5));
+        assert_eq!(map.occupied_entry(7).unwrap().internal(), 5);
         assert_eq!(map.to_external(6), None);
-        assert!(!map.contains_external(&6));
     }
 
     #[test]
@@ -288,9 +270,9 @@ mod tests {
         assert!(matches!(map.insert(8, 5), Err(InsertError::InternalExists)));
 
         // The failed insert must not have established any partial mapping.
+        assert_eq!(map.occupied_entry(7).unwrap().internal(), 5);
+        assert!(map.occupied_entry(8).is_none());
         assert_eq!(map.to_external(5), Some(7));
-        assert_eq!(map.to_internal(&8), None);
-        assert!(!map.contains_external(&8));
     }
 
     #[test]
@@ -322,21 +304,23 @@ mod tests {
         }
 
         for (external, &internal) in ids.iter().enumerate() {
-            assert_eq!(map.to_internal(&(external as u32)), Some(internal));
             assert_eq!(map.to_external(internal), Some(external as u32));
+
+            let entry = map.occupied_entry(external as u32).unwrap();
+            assert_eq!(entry.external(), &(external as u32));
+            assert_eq!(entry.internal(), internal);
+
         }
     }
 
     #[test]
-    fn lookup_supports_borrowed_query() {
+    fn strings_work() {
         let map = IdMap::<String>::new(IdLimit::new(16));
         map.insert("alpha".to_string(), 1).unwrap();
 
         // Borrowed `&str` lookups against `String` keys.
-        assert!(map.contains_external("alpha"));
-        assert_eq!(map.to_internal("alpha"), Some(1));
-        assert!(!map.contains_external("beta"));
-        assert_eq!(map.to_internal("beta"), None);
+        assert_eq!(map.occupied_entry("alpha".to_string()).unwrap().internal(), 1);
+        assert!(map.occupied_entry("beta".to_string()).is_none());
     }
 
     #[test]
@@ -362,16 +346,13 @@ mod tests {
 
         // Just creating and dropping an `occupied_entry` does not clear it.
         {
-            let _ = map.occupied_entry(42).unwrap();
-            assert!(map.contains_external(&42));
-            assert_eq!(map.to_internal(&42), Some(9));
+            assert_eq!(map.occupied_entry(42).unwrap().internal(), 9);
             assert_eq!(map.to_external(9), Some(42));
         }
 
         map.occupied_entry(42).expect("entry should exist").delete();
 
-        assert!(!map.contains_external(&42));
-        assert_eq!(map.to_internal(&42), None);
+        assert!(map.occupied_entry(42).is_none());
         assert_eq!(map.to_external(9), None);
 
         // The freed external and internal ids can be reused.

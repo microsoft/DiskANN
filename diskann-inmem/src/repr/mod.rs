@@ -104,10 +104,6 @@ pub(crate) trait RepresentationImpl: std::fmt::Debug + Send + Sync + 'static {
     /// Attempt to reclaim internal IDs, returning the number of IDs reclaimed.
     fn reclaim(&self) -> Option<usize>;
 
-    /// Return `true` if internal ID `i` is currently readable, returning `None` if `i`
-    /// is outside `0..self.id_limit()`.
-    fn is_readable(&self, i: u32) -> Option<bool>;
-
     /// Protect the [`Representation`] against recycling IDs.
     ///
     /// Holding onto the resulting [`ReadGuard`] prevents ID reuse in the parent and thus

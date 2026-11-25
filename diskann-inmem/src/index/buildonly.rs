@@ -3,17 +3,13 @@
  * Licensed under the MIT license.
  */
 
-use std::num::NonZeroUsize;
-
 use diskann::{
     ANNError, ANNResult,
     graph::{SearchOutputBuffer, glue},
     neighbor::Neighbor,
 };
-use diskann_utils::views::rowmajor;
 
 use crate::{
-    bitvector::BitVector,
     counters::{Counters, LocalCounters},
     epoch,
     index::{accessors, algorithms},
@@ -98,12 +94,6 @@ impl<R> Index<R> {
     fn local_counters(&self) -> LocalCounters<'_> {
         self.counters.local()
     }
-
-    /// Strongly restrict access to `representation` since it needs to work in combination
-    /// with ID mapping.
-    fn repr(&self) -> &R {
-        &self.representation
-    }
 }
 
 /// A read-only view over [`Index`].
@@ -166,7 +156,7 @@ impl glue::SearchPostProcess<accessors::Search<'_>, u32> for PostProcess {
     {
         let work = || {
             let mut count = 0;
-            let mut push = |neighbor: Neighbor<u32>| -> bool {
+            let push = |neighbor: Neighbor<u32>| -> bool {
                 if output.push(neighbor).is_available() {
                     count += 1;
                     true

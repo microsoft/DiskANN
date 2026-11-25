@@ -25,10 +25,6 @@ macro_rules! representation {
                 Ok(self.store.retire(i.into_usize())?)
             }
 
-            fn is_readable(&self, i: u32) -> Option<bool> {
-                self.store.can_read_approximate(i.into_usize())
-            }
-
             fn id_limit(&self) -> IdLimit {
                 self.store.id_limit()
             }

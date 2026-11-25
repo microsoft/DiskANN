@@ -114,18 +114,6 @@ where
         &self.mapping
     }
 
-    fn to_internal(&self, id: &M) -> Option<u32> {
-        self.mapping.to_internal(id)
-    }
-
-    fn to_external(&self, id: u32) -> Option<M> {
-        self.mapping.to_external(id)
-    }
-
-    fn is_readable(&self, id: u32) -> Option<bool> {
-        <_ as repr::RepresentationImpl>::is_readable(&self.representation, id)
-    }
-
     fn temp_delete(&self, id: &M) -> ANNResult<u32> {
         // This guarantees that we have a valid mapping, but defers the actual deletion until
         // we know it's also safe to retire the internal slot.
@@ -201,12 +189,6 @@ where
     /// A local set of counters that update the provider-wide counters in bulk.
     fn local_counters(&self) -> LocalCounters<'_> {
         self.counters.local()
-    }
-
-    /// Strongly restrict access to `representation` since it needs to work in combination
-    /// with ID mapping.
-    fn repr(&self) -> &R {
-        &self.representation
     }
 }
 
@@ -327,14 +309,6 @@ where
         }
 
         bitvec
-    }
-
-    // FIXME: Make it go away
-    fn share(&self) -> Self {
-        Self {
-            index: self.index,
-            guard: self.guard.share(),
-        }
     }
 }
 
@@ -643,23 +617,6 @@ mod tests {
             }
         }
 
-        // Verify that each ID round trips.
-        for i in 0..data.nrows() {
-            let i = (10 * i + 1) as u64;
-            let internal = index.to_internal(&i).unwrap();
-            assert_ne!(
-                internal as u64,
-                i + 1,
-                "this relies on the start points being located at the beginning of the id space\
-                 this is **NOT** guaranteed",
-            );
-
-            assert!(index.is_readable(internal).unwrap());
-        }
-
-        // Assert that out-of-bounds translations returns errors.
-        assert!(index.to_internal(&0).is_none());
-
         // Searches should return something reasonable.
         let knn = Knn::new(10, None).unwrap();
         let mut neighbors = Vec::<Neighbor<u64>>::new();
@@ -722,12 +679,7 @@ mod tests {
         }
 
         // If we run inplace delete on point 61, it longer be present.
-        let internal = index.to_internal(&61).unwrap();
-        assert!(index.is_readable(internal).unwrap());
         index.write().unwrap().delete(&61).unwrap();
-
-        assert!(index.to_internal(&61).is_none());
-        assert!(!index.is_readable(internal).unwrap());
 
         // We can't delete the same thing twice.
         assert!(index.write().unwrap().delete(&61).is_err());
