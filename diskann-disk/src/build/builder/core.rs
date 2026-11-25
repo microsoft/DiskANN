@@ -30,7 +30,7 @@ use tracing::info;
 use crate::{
     QuantizationType, SphericalBits,
     build::builder::{backend::Backend, build::build_inmem_index},
-    build::configuration::{DiskIndexBuildConfig, VamanaBuildConfig},
+    build::configuration::{SharedBuildConfig, VamanaBuildConfig},
     disk_index_build_parameter::BYTES_IN_GB,
     storage::DiskIndexWriter,
     utils::instrumentation::{BuildMergedVamanaIndexCheckpoint, PerfLogger},
@@ -77,7 +77,7 @@ where
     Data: GraphDataType<VectorIdType = u32>,
     StorageProvider: StorageReadProvider + StorageWriteProvider,
 {
-    config: &'a DiskIndexBuildConfig,
+    config: &'a SharedBuildConfig,
     index_writer: &'a DiskIndexWriter,
     backend: &'a Backend<Data::VectorDataType>,
     storage_provider: &'a StorageProvider,
@@ -91,7 +91,7 @@ where
     StorageProvider: StorageReadProvider<Reader: Send> + StorageWriteProvider + 'static,
 {
     pub(super) fn new(
-        config: &'a DiskIndexBuildConfig,
+        config: &'a SharedBuildConfig,
         index_writer: &'a DiskIndexWriter,
         backend: &'a Backend<Data::VectorDataType>,
         storage_provider: &'a StorageProvider,
@@ -559,7 +559,7 @@ pub(crate) mod disk_index_builder_tests {
     use crate::{
         build::{
             builder::{backend::BuildElement, build::DiskIndexBuilder},
-            configuration::{DiskIndexBuildConfig, GraphBuildConfig, VamanaBuildConfig},
+            configuration::{DiskIndexBuildConfig, VamanaBuildConfig},
         },
         data_model::{CachingStrategy, GraphHeader},
         disk_index_build_parameter::{MemoryBudget, NumPQChunks},
@@ -692,12 +692,12 @@ pub(crate) mod disk_index_builder_tests {
                 self.params.metric,
                 self.params.num_threads,
                 NumPQChunks::new_with(self.params.num_pq_chunks, self.params.full_dim)?,
-                GraphBuildConfig::Vamana(VamanaBuildConfig {
+                VamanaBuildConfig {
                     graph: config,
                     memory_budget: MemoryBudget::try_from_gb(self.params.index_build_ram_gb)?,
                     build_quantization: self.params.build_quantization_type,
                     prefetch_lookahead: None,
-                }),
+                },
             )
             .with_seed(100);
             if let Some(count) = self.params.data_compression_chunk_vector_count {
@@ -1129,12 +1129,12 @@ pub(crate) mod disk_index_builder_tests {
             L2,
             1,
             num_pq_chunks,
-            GraphBuildConfig::Vamana(VamanaBuildConfig {
+            VamanaBuildConfig {
                 graph,
                 memory_budget,
                 build_quantization: build_quantization_type,
                 prefetch_lookahead: None,
-            }),
+            },
         );
 
         let disk_index_writer = DiskIndexWriter::new(

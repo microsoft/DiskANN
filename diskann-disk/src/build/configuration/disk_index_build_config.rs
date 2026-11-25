@@ -14,9 +14,11 @@ use super::{
     DEFAULT_DATA_COMPRESSION_CHUNK_VECTOR_COUNT, MemoryBudget, NumPQChunks, QuantizationType,
 };
 
-/// Shared build policies; dataset shape is read from the input file.
-#[derive(Clone, Debug)]
-pub struct DiskIndexBuildConfig {
+/// Build policies shared across graph construction algorithms.
+///
+/// Dataset shape is read from the input file.
+#[derive(Clone, Copy, Debug)]
+pub struct SharedBuildConfig {
     /// Dataset metric.
     pub metric: Metric,
     /// Worker count; zero selects the system default.
@@ -27,8 +29,41 @@ pub struct DiskIndexBuildConfig {
     pub compression_chunk_vector_count: usize,
     /// Seed for search-PQ training and medoid sampling.
     pub seed: Option<u64>,
+}
+
+impl SharedBuildConfig {
+    /// Configures shared disk-build policies with default compression batching
+    /// and unseeded PQ sampling.
+    pub fn new(metric: Metric, num_threads: usize, search_pq_chunks: NumPQChunks) -> Self {
+        Self {
+            metric,
+            num_threads,
+            search_pq_chunks,
+            compression_chunk_vector_count: DEFAULT_DATA_COMPRESSION_CHUNK_VECTOR_COUNT,
+            seed: None,
+        }
+    }
+
+    /// Seeds search-PQ training and medoid sampling; graph-specific seeds stay independent.
+    pub fn with_seed(mut self, seed: u64) -> Self {
+        self.seed = Some(seed);
+        self
+    }
+
+    /// Sets the number of vectors compressed per batch.
+    pub fn with_data_compression_chunk_vector_count(mut self, count: usize) -> Self {
+        self.compression_chunk_vector_count = count;
+        self
+    }
+}
+
+/// Shared build policies paired with algorithm-specific graph settings `G`.
+#[derive(Clone, Debug)]
+pub struct DiskIndexBuildConfig<G = VamanaBuildConfig> {
+    /// Build policies shared across graph construction algorithms.
+    pub shared: SharedBuildConfig,
     /// Parameters used only by the selected graph algorithm.
-    pub graph: GraphBuildConfig,
+    pub graph: G,
 }
 
 /// Vamana settings for one-shot and sharded disk builds.
@@ -44,44 +79,34 @@ pub struct VamanaBuildConfig {
     pub prefetch_lookahead: Option<NonZeroUsize>,
 }
 
-/// Graph-specific configuration; search-PQ settings stay outside it.
-#[derive(Clone, Debug)]
-#[non_exhaustive]
-pub enum GraphBuildConfig {
-    /// Vamana insertion and build-provider settings.
-    Vamana(VamanaBuildConfig),
-    /// PiPNN partitioning and pruning policy.
-    #[cfg(feature = "pipnn")]
-    Pipnn(diskann::graph::pipnn::Config),
-}
-
-impl DiskIndexBuildConfig {
+impl<G> DiskIndexBuildConfig<G> {
     /// Configures a disk build with default compression batching and unseeded PQ sampling.
     pub fn new(
         metric: Metric,
         num_threads: usize,
         search_pq_chunks: NumPQChunks,
-        graph: GraphBuildConfig,
+        graph: G,
     ) -> Self {
         Self {
-            metric,
-            num_threads,
-            search_pq_chunks,
+            shared: SharedBuildConfig::new(metric, num_threads, search_pq_chunks),
             graph,
-            compression_chunk_vector_count: DEFAULT_DATA_COMPRESSION_CHUNK_VECTOR_COUNT,
-            seed: None,
         }
+    }
+
+    /// Pairs an existing [`SharedBuildConfig`] with algorithm-specific graph settings.
+    pub fn from_shared(shared: SharedBuildConfig, graph: G) -> Self {
+        Self { shared, graph }
     }
 
     /// Seeds search-PQ training and medoid sampling; graph-specific seeds stay independent.
     pub fn with_seed(mut self, seed: u64) -> Self {
-        self.seed = Some(seed);
+        self.shared = self.shared.with_seed(seed);
         self
     }
 
     /// Sets the number of vectors compressed per batch.
     pub fn with_data_compression_chunk_vector_count(mut self, count: usize) -> Self {
-        self.compression_chunk_vector_count = count;
+        self.shared = self.shared.with_data_compression_chunk_vector_count(count);
         self
     }
 }

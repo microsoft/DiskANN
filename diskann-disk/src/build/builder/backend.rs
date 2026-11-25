@@ -7,8 +7,6 @@
 
 use std::num::NonZeroUsize;
 
-#[cfg(feature = "pipnn")]
-use diskann::graph::pipnn::Element;
 use diskann::{ANNError, ANNResult, utils::VectorRepr};
 use diskann_inmem::{self as di, repr::quantized};
 use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
@@ -31,7 +29,7 @@ use tracing::info;
 use crate::{
     QuantizationType, SphericalBits,
     build::builder::inmem_builder::{self, CreateBuilder},
-    build::configuration::DiskIndexBuildConfig,
+    build::configuration::SharedBuildConfig,
     error::{ErrorKind, diskann_error},
 };
 
@@ -55,26 +53,10 @@ use crate::{
 /// * [`QuantizationType::PQ`]: The quantizer is saved according to [`PQPathNames`].
 /// * [`QuantizationType::SQ`]: The quantizer is saved according to [`SQStorage`].
 /// * All other types: No current side-effects.
-#[cfg(not(feature = "pipnn"))]
 pub trait BuildElement: std::fmt::Debug + Sized + Send + Sync + 'static {
     fn backend<P>(
         quantization: &QuantizationType,
-        config: &DiskIndexBuildConfig,
-        num_points: usize,
-        data_path: &str,
-        index_path_prefix: &str,
-        storage_provider: &P,
-    ) -> ANNResult<Backend<Self>>
-    where
-        P: StorageReadProvider + StorageWriteProvider;
-}
-
-/// Build-compatible elements with PiPNN row conversion and distance support.
-#[cfg(feature = "pipnn")]
-pub trait BuildElement: Element {
-    fn backend<P>(
-        quantization: &QuantizationType,
-        config: &DiskIndexBuildConfig,
+        config: &SharedBuildConfig,
         num_points: usize,
         data_path: &str,
         index_path_prefix: &str,
@@ -94,7 +76,7 @@ impl<T> Backend<T> {
     /// Construct a new [`Backend`] using [`BuildElement`].
     pub fn new<P>(
         quantization: &QuantizationType,
-        config: &DiskIndexBuildConfig,
+        config: &SharedBuildConfig,
         num_points: usize,
         data_path: &str,
         index_path_prefix: &str,
@@ -147,7 +129,7 @@ macro_rules! full_precision {
         impl BuildElement for $T {
             fn backend<P>(
                 quantization: &QuantizationType,
-                config: &DiskIndexBuildConfig,
+                config: &SharedBuildConfig,
                 num_points: usize,
                 data_path: &str,
                 index_path_prefix: &str,
@@ -175,7 +157,7 @@ full_precision!(f32, half::f16, u8, i8);
 
 fn full_precision<T, P>(
     quantization: &QuantizationType,
-    config: &DiskIndexBuildConfig,
+    config: &SharedBuildConfig,
     num_points: usize,
     data_path: &str,
     index_path_prefix: &str,
@@ -210,7 +192,7 @@ where
 {
     fn backend<P>(
         quantization: &QuantizationType,
-        config: &DiskIndexBuildConfig,
+        config: &SharedBuildConfig,
         num_points: usize,
         data_path: &str,
         index_path_prefix: &str,
@@ -303,7 +285,7 @@ impl inmem_builder::QuantizedBackend for Product {
 /// Returns `None` if `quantization` is [`QuantizationType::FP`].
 fn train_quantizer<T, StorageProvider>(
     quantization: &QuantizationType,
-    config: &DiskIndexBuildConfig,
+    config: &SharedBuildConfig,
     num_points: usize,
     data_path: &str,
     index_path_prefix: &str,

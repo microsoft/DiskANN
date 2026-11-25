@@ -185,81 +185,53 @@ pub(super) mod inner {
     }
 }
 
-/// An element type of [`Rows`].
-///
-/// `f32`, `f16`, `u8` and `i8` implement it. A compressed element type
-/// implements it with its own decoding.
-pub trait Element: Copy + Debug + Send + Sync + 'static {
-    /// Distance between two rows of `Self`.
-    type Distance: for<'a, 'b> DistanceFunction<&'a [Self], &'b [Self], f32> + Debug + Send + Sync;
+mod sealed {
+    use std::fmt::Debug;
 
-    /// Number of `f32` values in `row` after conversion.
-    ///
-    /// The default is `row.len()`. A compressed type reads it from the row.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if `row` is not a valid row of the type.
-    fn dimensions(row: &[Self]) -> ANNResult<usize> {
-        Ok(row.len())
-    }
+    use diskann_utils::views::rowmajor;
+    use diskann_vector::{DistanceFunction, distance::Metric};
 
-    /// Write `row` as `f32` values into `output`.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if `row` cannot be decoded.
-    ///
-    /// # Panics
-    ///
-    /// May panic if `output.len()` is not the dimension of `row`.
-    fn convert(row: &[Self], output: &mut [f32]) -> ANNResult<()>;
+    pub trait Element: Copy + Debug + Send + Sync + 'static {
+        type Distance: for<'a, 'b> DistanceFunction<&'a [Self], &'b [Self], f32>
+            + Debug
+            + Send
+            + Sync;
 
-    /// Distance between rows of `ncols` elements under `metric`.
-    fn distance(metric: Metric, ncols: usize) -> Self::Distance;
+        fn distance(metric: Metric, ncols: usize) -> Self::Distance;
 
-    /// Write rows `ids` of `data` as `f32` values, one row of `output` for
-    /// each ID.
-    ///
-    /// The default converts one row at a time with [`Element::convert`]. A
-    /// type can override it to convert the whole batch at once.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if a row cannot be decoded.
-    ///
-    /// # Panics
-    ///
-    /// May panic if an ID is not below `data.nrows()`, or if `output` does not
-    /// have one row of the converted dimension for each ID.
-    fn gather(
-        data: rowmajor::Ref<'_, Self>,
-        ids: &[u32],
-        mut output: rowmajor::Mut<'_, f32>,
-    ) -> ANNResult<()> {
-        for (&id, destination) in ids.iter().zip(output.rows_mut()) {
-            Self::convert(data.row(id as usize), destination)?;
-        }
-        Ok(())
+        fn gather(data: rowmajor::Ref<'_, Self>, ids: &[u32], output: rowmajor::Mut<'_, f32>);
     }
 }
 
-/// Implement [`Element`] for a type whose values convert to `f32` one by one
-/// and whose distances come from [`DistanceProvider`].
+/// Scalar element types supported by [`Rows`]: `f32`, [`half::f16`], `u8`, and `i8`.
+///
+/// Sealed: non-scalar or compressed representations should implement
+/// [`Dataset`] directly with upfront layout validation.
+pub trait Element: sealed::Element {}
+
+impl<T: sealed::Element> Element for T {}
+
+/// Implement [`sealed::Element`] for a scalar type whose values convert to
+/// `f32` one by one and whose distances come from [`DistanceProvider`].
 macro_rules! plain_element {
     ($T:ty) => {
-        impl Element for $T {
+        impl sealed::Element for $T {
             type Distance = Distance<$T, $T>;
-
-            fn convert(row: &[Self], output: &mut [f32]) -> ANNResult<()> {
-                for (destination, &value) in output.iter_mut().zip(row) {
-                    *destination = value.into();
-                }
-                Ok(())
-            }
 
             fn distance(metric: Metric, ncols: usize) -> Self::Distance {
                 Self::distance_comparer(metric, Some(ncols))
+            }
+
+            fn gather(
+                data: rowmajor::Ref<'_, Self>,
+                ids: &[u32],
+                mut output: rowmajor::Mut<'_, f32>,
+            ) {
+                for (&id, destination) in ids.iter().zip(output.rows_mut()) {
+                    for (slot, &value) in destination.iter_mut().zip(data.row(id as usize)) {
+                        *slot = value.into();
+                    }
+                }
             }
         }
     };
@@ -277,25 +249,15 @@ plain_element!(i8);
 // repository's `x86-64-v3` target flag, so a conversion compiled for the build
 // target would run in software, many times slower. `gather` dispatches once for
 // the whole batch, so the selection stays out of the row loop.
-impl Element for f16 {
+impl sealed::Element for f16 {
     type Distance = Distance<f16, f16>;
-
-    fn convert(row: &[Self], output: &mut [f32]) -> ANNResult<()> {
-        arch::dispatch2(SliceCast::<f32, f16>::new(), output, row);
-        Ok(())
-    }
 
     fn distance(metric: Metric, ncols: usize) -> Self::Distance {
         Self::distance_comparer(metric, Some(ncols))
     }
 
-    fn gather(
-        data: rowmajor::Ref<'_, Self>,
-        ids: &[u32],
-        output: rowmajor::Mut<'_, f32>,
-    ) -> ANNResult<()> {
+    fn gather(data: rowmajor::Ref<'_, Self>, ids: &[u32], output: rowmajor::Mut<'_, f32>) {
         arch::dispatch3(GatherFp16, data, ids, output);
-        Ok(())
     }
 }
 
@@ -321,34 +283,22 @@ where
     }
 }
 
-/// A row-major matrix of an [`Element`] type as a [`Dataset`].
+/// A row-major matrix of a scalar [`Element`] type as a [`Dataset`].
 #[derive(Debug)]
 pub struct Rows<'a, T: Element> {
     data: rowmajor::Ref<'a, T>,
-    dimensions: usize,
     metric: Metric,
     distance: T::Distance,
 }
 
 impl<'a, T: Element> Rows<'a, T> {
     /// Use `data` as the rows of a build for search under `metric`.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if [`Element::dimensions`] rejects the first row.
-    pub fn new(data: rowmajor::Ref<'a, T>, metric: Metric) -> ANNResult<Self> {
-        // A compressed type stores more elements per row than it decodes to, so
-        // the first row gives the `f32` row length, not `data.ncols()`.
-        let dimensions = match data.get_row(0) {
-            Some(first_row) => T::dimensions(first_row)?,
-            None => 0,
-        };
-        Ok(Self {
+    pub fn new(data: rowmajor::Ref<'a, T>, metric: Metric) -> Self {
+        Self {
             data,
-            dimensions,
             metric,
             distance: T::distance(metric, data.ncols()),
-        })
+        }
     }
 }
 
@@ -358,7 +308,7 @@ impl<T: Element> Dataset for Rows<'_, T> {
     }
 
     fn dimensions(&self) -> usize {
-        self.dimensions
+        self.data.ncols()
     }
 
     fn metric(&self) -> Metric {
@@ -366,12 +316,11 @@ impl<T: Element> Dataset for Rows<'_, T> {
     }
 
     fn gather(&self, ids: &[u32], output: rowmajor::Mut<'_, f32>) -> ANNResult<()> {
-        T::gather(self.data, ids, output)
+        T::gather(self.data, ids, output);
+        Ok(())
     }
 
     fn distance(&self, source: u32, target: u32) -> f32 {
-        // The distance works on the stored elements, so a compressed type
-        // measures its codes, as a search over the index does.
         self.distance.evaluate_similarity(
             self.data.row(source as usize),
             self.data.row(target as usize),
@@ -401,8 +350,7 @@ mod tests {
                 &ids,
                 rowmajor::Mut::try_from_data(output.as_flattened_mut(), output_rows, dimensions)
                     .unwrap(),
-            )
-            .unwrap();
+            );
 
             assert_eq!(output, expected, "{}", std::any::type_name::<T>());
         }

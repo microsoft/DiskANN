@@ -276,7 +276,7 @@ mod disk_index_build_tests {
             |fixture| {
                 use crate::build::{
                     builder::build::DiskIndexBuilder,
-                    configuration::{DiskIndexBuildConfig, GraphBuildConfig, NumPQChunks},
+                    configuration::{DiskIndexBuildConfig, NumPQChunks},
                 };
                 use crate::storage::DiskIndexWriter;
                 use std::num::NonZeroUsize;
@@ -294,7 +294,7 @@ mod disk_index_build_tests {
                     params.metric,
                     params.num_threads,
                     NumPQChunks::new_with(params.num_pq_chunks, params.full_dim)?,
-                    GraphBuildConfig::Pipnn(graph),
+                    graph,
                 )
                 .with_seed(100);
                 if let Some(count) = params.data_compression_chunk_vector_count {
@@ -306,8 +306,10 @@ mod disk_index_build_tests {
                     params.associated_data_path.clone(),
                     params.block_size,
                 )?;
-                DiskIndexBuilder::<GraphDataMinMaxVectorUnitData, _>::new(storage, config, writer)
-                    .build()
+                DiskIndexBuilder::<GraphDataMinMaxVectorUnitData, _, _>::new(
+                    storage, config, writer,
+                )
+                .build()
             },
         );
     }
@@ -357,5 +359,36 @@ mod disk_index_build_tests {
         } else {
             1.0
         }
+    }
+
+    // Regression check: enabling `pipnn` must not add PiPNN bounds to `BuildElement`
+    // or Vamana-only callers of `DiskIndexBuilder::build`.
+    #[test]
+    fn vamana_builder_requires_only_build_element() {
+        use crate::{
+            build::{
+                builder::{backend::BuildElement, build::DiskIndexBuilder},
+                configuration::{DiskIndexBuildConfig, SharedBuildConfig, VamanaBuildConfig},
+            },
+            data_model::AdHoc,
+            storage::DiskIndexWriter,
+        };
+        use diskann::utils::VectorRepr;
+
+        fn check<T, P>(
+            storage: &P,
+            shared: SharedBuildConfig,
+            vamana: VamanaBuildConfig,
+            writer: DiskIndexWriter,
+        ) -> ANNResult<()>
+        where
+            T: VectorRepr + BuildElement,
+            P: StorageReadProvider<Reader: Send> + StorageWriteProvider + 'static,
+        {
+            let config = DiskIndexBuildConfig::from_shared(shared, vamana);
+            DiskIndexBuilder::<AdHoc<T>, P>::new(storage, config, writer).build()
+        }
+
+        let _ = check::<f32, VirtualStorageProvider<OverlayFS>>;
     }
 }

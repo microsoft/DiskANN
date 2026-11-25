@@ -11,7 +11,7 @@ use diskann_benchmark_runner::utils::MicroSeconds;
 use diskann_disk::{
     build::{
         builder::{backend::BuildElement, build::DiskIndexBuilder},
-        configuration::{DiskIndexBuildConfig, GraphBuildConfig, VamanaBuildConfig},
+        configuration::{DiskIndexBuildConfig, VamanaBuildConfig},
     },
     data_model::AdHoc,
     disk_index_build_parameter::{MemoryBudget, NumPQChunks, DISK_SECTOR_LEN},
@@ -95,12 +95,12 @@ where
         metric,
         params.num_threads,
         NumPQChunks::new_with(params.num_pq_chunks.get(), metadata.ndims())?,
-        GraphBuildConfig::Vamana(VamanaBuildConfig {
+        VamanaBuildConfig {
             graph: config,
             memory_budget: MemoryBudget::try_from_gb(params.build_ram_limit_gb)?,
             build_quantization: params.quantization_type,
             prefetch_lookahead: None,
-        }),
+        },
     )
     .with_seed(DEFAULT_SEED_FOR_TESTS);
 
