@@ -185,91 +185,48 @@ pub(super) mod inner {
     }
 }
 
-/// An element type of [`Rows`].
+/// Scalar element types supported by [`Rows`]: `f32`, [`half::f16`], `u8`, and `i8`.
 ///
-/// `f32`, `f16`, `u8` and `i8` implement it. A compressed element type
-/// implements it with its own decoding.
-pub trait Element: Copy + Debug + Send + Sync + 'static {
-    /// Distance between two rows of `Self`.
-    type Distance: for<'a, 'b> DistanceFunction<&'a [Self], &'b [Self], f32> + Debug + Send + Sync;
-
-    /// Number of `f32` values in `row` after conversion.
-    ///
-    /// The default is `row.len()`. A compressed type reads it from the row.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if `row` is not a valid row of the type.
-    fn dimensions(row: &[Self]) -> ANNResult<usize> {
-        Ok(row.len())
-    }
-
-    /// Write `row` as `f32` values into `output`.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if `row` cannot be decoded.
-    ///
-    /// # Panics
-    ///
-    /// May panic if `output.len()` is not the dimension of `row`.
-    fn convert(row: &[Self], output: &mut [f32]) -> ANNResult<()>;
-
-    /// Distance between rows of `ncols` elements under `metric`.
-    fn distance(metric: Metric, ncols: usize) -> Self::Distance;
-
-    /// Write rows `ids` of `data` as `f32` values, one row of `output` for
-    /// each ID.
-    ///
-    /// The default converts one row at a time with [`Element::convert`]. A
-    /// type can override it to convert the whole batch at once.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if a row cannot be decoded.
-    ///
-    /// # Panics
-    ///
-    /// May panic if an ID is not below `data.nrows()`, or if `output` does not
-    /// have one row of the converted dimension for each ID.
-    fn gather(
-        data: rowmajor::Ref<'_, Self>,
-        ids: &[u32],
-        mut output: rowmajor::Mut<'_, f32>,
-    ) -> ANNResult<()> {
-        for (&id, destination) in ids.iter().zip(output.rows_mut()) {
-            Self::convert(data.row(id as usize), destination)?;
-        }
-        Ok(())
-    }
-}
-
-/// Implement [`Element`] for a type whose values convert to `f32` one by one
-/// and whose distances come from [`DistanceProvider`].
-macro_rules! plain_element {
-    ($T:ty) => {
-        impl Element for $T {
-            type Distance = Distance<$T, $T>;
-
-            fn convert(row: &[Self], output: &mut [f32]) -> ANNResult<()> {
-                for (destination, &value) in output.iter_mut().zip(row) {
-                    *destination = value.into();
-                }
-                Ok(())
-            }
-
-            fn distance(metric: Metric, ncols: usize) -> Self::Distance {
-                Self::distance_comparer(metric, Some(ncols))
-            }
-        }
-    };
+/// Non-scalar or compressed representations should implement [`Dataset`]
+/// directly with upfront layout validation.
+pub trait Element: Copy + Debug + DistanceProvider<Self> + Send + Sync + 'static {
+    #[doc(hidden)]
+    fn gather(data: rowmajor::Ref<'_, Self>, ids: &[u32], output: rowmajor::Mut<'_, f32>);
 }
 
 // The baseline x86-64 target has SSE2 instructions that convert `u8` and `i8`
-// to `f32`, so the compiler vectorizes these loops for any target.
-plain_element!(f32);
-plain_element!(u8);
-plain_element!(i8);
+// to `f32`, so the compiler vectorizes this loop for any target.
+fn gather_into<T: Copy + Into<f32>>(
+    data: rowmajor::Ref<'_, T>,
+    ids: &[u32],
+    mut output: rowmajor::Mut<'_, f32>,
+) {
+    for (&id, destination) in ids.iter().zip(output.rows_mut()) {
+        for (slot, &value) in destination.iter_mut().zip(data.row(id as usize)) {
+            *slot = value.into();
+        }
+    }
+}
+
+impl Element for f32 {
+    fn gather(data: rowmajor::Ref<'_, Self>, ids: &[u32], mut output: rowmajor::Mut<'_, f32>) {
+        for (&id, destination) in ids.iter().zip(output.rows_mut()) {
+            destination.copy_from_slice(data.row(id as usize));
+        }
+    }
+}
+
+impl Element for u8 {
+    fn gather(data: rowmajor::Ref<'_, Self>, ids: &[u32], output: rowmajor::Mut<'_, f32>) {
+        gather_into(data, ids, output);
+    }
+}
+
+impl Element for i8 {
+    fn gather(data: rowmajor::Ref<'_, Self>, ids: &[u32], output: rowmajor::Mut<'_, f32>) {
+        gather_into(data, ids, output);
+    }
+}
 
 // `f16` conversion selects the FP16 instructions of the running CPU. The
 // baseline x86-64 target has no `f16` conversion instruction; F16C starts at
@@ -278,24 +235,8 @@ plain_element!(i8);
 // target would run in software, many times slower. `gather` dispatches once for
 // the whole batch, so the selection stays out of the row loop.
 impl Element for f16 {
-    type Distance = Distance<f16, f16>;
-
-    fn convert(row: &[Self], output: &mut [f32]) -> ANNResult<()> {
-        arch::dispatch2(SliceCast::<f32, f16>::new(), output, row);
-        Ok(())
-    }
-
-    fn distance(metric: Metric, ncols: usize) -> Self::Distance {
-        Self::distance_comparer(metric, Some(ncols))
-    }
-
-    fn gather(
-        data: rowmajor::Ref<'_, Self>,
-        ids: &[u32],
-        output: rowmajor::Mut<'_, f32>,
-    ) -> ANNResult<()> {
+    fn gather(data: rowmajor::Ref<'_, Self>, ids: &[u32], output: rowmajor::Mut<'_, f32>) {
         arch::dispatch3(GatherFp16, data, ids, output);
-        Ok(())
     }
 }
 
@@ -321,34 +262,22 @@ where
     }
 }
 
-/// A row-major matrix of an [`Element`] type as a [`Dataset`].
+/// A row-major matrix of a scalar [`Element`] type as a [`Dataset`].
 #[derive(Debug)]
 pub struct Rows<'a, T: Element> {
     data: rowmajor::Ref<'a, T>,
-    dimensions: usize,
     metric: Metric,
-    distance: T::Distance,
+    distance: Distance<T, T>,
 }
 
 impl<'a, T: Element> Rows<'a, T> {
     /// Use `data` as the rows of a build for search under `metric`.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if [`Element::dimensions`] rejects the first row.
-    pub fn new(data: rowmajor::Ref<'a, T>, metric: Metric) -> ANNResult<Self> {
-        // A compressed type stores more elements per row than it decodes to, so
-        // the first row gives the `f32` row length, not `data.ncols()`.
-        let dimensions = match data.get_row(0) {
-            Some(first_row) => T::dimensions(first_row)?,
-            None => 0,
-        };
-        Ok(Self {
+    pub fn new(data: rowmajor::Ref<'a, T>, metric: Metric) -> Self {
+        Self {
             data,
-            dimensions,
             metric,
-            distance: T::distance(metric, data.ncols()),
-        })
+            distance: T::distance_comparer(metric, Some(data.ncols())),
+        }
     }
 }
 
@@ -358,7 +287,7 @@ impl<T: Element> Dataset for Rows<'_, T> {
     }
 
     fn dimensions(&self) -> usize {
-        self.dimensions
+        self.data.ncols()
     }
 
     fn metric(&self) -> Metric {
@@ -366,12 +295,11 @@ impl<T: Element> Dataset for Rows<'_, T> {
     }
 
     fn gather(&self, ids: &[u32], output: rowmajor::Mut<'_, f32>) -> ANNResult<()> {
-        T::gather(self.data, ids, output)
+        T::gather(self.data, ids, output);
+        Ok(())
     }
 
     fn distance(&self, source: u32, target: u32) -> f32 {
-        // The distance works on the stored elements, so a compressed type
-        // measures its codes, as a search over the index does.
         self.distance.evaluate_similarity(
             self.data.row(source as usize),
             self.data.row(target as usize),
@@ -401,8 +329,7 @@ mod tests {
                 &ids,
                 rowmajor::Mut::try_from_data(output.as_flattened_mut(), output_rows, dimensions)
                     .unwrap(),
-            )
-            .unwrap();
+            );
 
             assert_eq!(output, expected, "{}", std::any::type_name::<T>());
         }

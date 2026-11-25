@@ -22,7 +22,7 @@ use half::f16;
 
 use crate::{
     disk_index::{
-        build::{build_disk_index, DiskBuildStats},
+        build::{build_disk_index, DiskBuildElement, DiskBuildStats},
         search::{search_disk_index, DiskSearchStats},
     },
     inputs::disk::{DiskIndexLoad, DiskIndexOperation, DiskIndexSource},
@@ -52,7 +52,7 @@ where
 
 impl<T> Benchmark for DiskIndex<T>
 where
-    T: crate::utils::BuildElement + AsDataType,
+    T: DiskBuildElement + AsDataType,
 {
     type Input = DiskIndexOperation;
     type Output = DiskIndexStats;
@@ -286,7 +286,7 @@ fn check_metric(
 
 impl<T> Regression for DiskIndex<T>
 where
-    T: crate::utils::BuildElement + AsDataType,
+    T: DiskBuildElement + AsDataType,
 {
     type Tolerances = DiskIndexTolerance;
     type Pass = DiskIndexCheckResult;

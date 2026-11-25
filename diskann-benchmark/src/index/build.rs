@@ -143,7 +143,7 @@ where
     let started = std::time::Instant::now();
     let config = parameters.config(&graph)?;
     let adjacency = pool.install(|| {
-        let rows = diskann::graph::pipnn::Rows::new(data.as_view(), metric)?;
+        let rows = diskann::graph::pipnn::Rows::new(data.as_view(), metric);
         diskann::graph::pipnn::build_graph(&rows, &config)
     })?;
     let start_points = input

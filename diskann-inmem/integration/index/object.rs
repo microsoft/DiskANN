@@ -6,7 +6,7 @@
 use std::{future::Future, pin::Pin, sync::Arc};
 
 use diskann::{
-    graph::{DiskANNIndex, search::Knn},
+    graph::{DiskANNIndex, glue, search::Knn},
     neighbor::Neighbor,
     utils::IntoUsize,
 };
@@ -21,7 +21,7 @@ use diskann_utils::views::rowmajor::Matrix;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use diskann_inmem::{Context, Provider, Strategy, integration, repr};
+use diskann_inmem::{self as di, Context, Provider, Strategy, integration, repr};
 
 use crate::support::datatype::{AsDataType, DatasetView, Slice, TryCast};
 
@@ -344,3 +344,73 @@ macro_rules! index {
 
 index!({ T } repr::Full<T> where T: repr::FullPrecision + TryCast + AsDataType);
 index!(repr::Quantized);
+
+impl Index for DiskANNIndex<di::provider::buildonly::Provider<repr::Full<f32>>> {
+    fn search<'a>(
+        &'a self,
+        query: Slice<'a>,
+        knn: Knn,
+        neighbors: &'a mut Vec<Neighbor<u64>>,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<KnnSearch>> + 'a>> {
+        let fut = async move {
+            let query = query.try_cast()?;
+            let mut neighbors_u32 = Vec::<Neighbor<u32>>::new();
+            let post_process = glue::Pipeline::new(glue::FilterStartPoints, glue::CopyIds);
+
+            let stats = self
+                .search_with(
+                    knn,
+                    &Strategy,
+                    post_process,
+                    &Context,
+                    query,
+                    &mut neighbors_u32,
+                )
+                .await?;
+
+            neighbors.extend(
+                neighbors_u32
+                    .into_iter()
+                    .map(|n| Neighbor::new(u64::from(*n.id()), *n.distance())),
+            );
+
+            Ok(stats.into())
+        };
+
+        Box::pin(fut)
+    }
+
+    fn insert<'a>(
+        &'a self,
+        vector: Slice<'a>,
+        id: u64,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + 'a>> {
+        let fut = async move {
+            let id: u32 =
+                u32::try_from(id).map_err(|_| anyhow::anyhow!("id {id} exceeds u32::MAX"))?;
+            let vector = vector.try_cast()?;
+            self.insert(&Strategy, &Context, &id, vector).await?;
+
+            Ok(())
+        };
+
+        Box::pin(fut)
+    }
+
+    fn multi_insert(
+        self: Arc<Self>,
+        _batch: DatasetView<'_>,
+        _ids: std::ops::Range<u64>,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + '_>> {
+        // NOTE: If you update this - make sure to update matching in `dbr::Benchmark`.
+        let fut = std::future::ready(Err(anyhow::anyhow!(
+            "multi-insert is not enabled for static builds to save compile-time",
+        )));
+
+        Box::pin(fut)
+    }
+
+    fn counters(&self) -> Counters {
+        self.provider().counters().into()
+    }
+}

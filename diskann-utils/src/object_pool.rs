@@ -85,6 +85,11 @@ impl<T> ObjectPool<T> {
         })
     }
 
+    /// Return the capacity of the pool.
+    pub fn capacity(&self) -> Option<usize> {
+        self.capacity
+    }
+
     /// Try to retrieve an object from the pool. If the pool is non-empty, then invoke
     /// [`TryAsPooled::try_modify`] on the object with the given arguments. Otherwise, invoke
     /// [`TryAsPooled::try_create`] to create a new object.
@@ -547,14 +552,17 @@ mod tests {
     fn test_pool_basic_tests() {
         let pool = ObjectPool::<TestItem>::new(42, 2, None);
         assert_eq!(pool.len(), 2);
+        assert_eq!(pool.capacity(), None);
 
         let item1 = pool.get_ref(100);
         assert_eq!(*item1.value, 100);
         assert_eq!(pool.len(), 1);
+        assert_eq!(pool.capacity(), None);
 
         let item2 = pool.get_ref(200);
         assert_eq!(*item2.value, 200);
         assert_eq!(pool.len(), 0);
+        assert_eq!(pool.capacity(), None);
 
         let item = pool.get_ref(300);
         assert_eq!(*item.value, 300);
@@ -584,15 +592,18 @@ mod tests {
     fn test_pool_with_capacity() {
         let pool = ObjectPool::<TestItem>::with_capacity(Some(4));
         assert!(pool.is_empty());
+        assert_eq!(pool.capacity(), Some(4));
 
         let _ = pool.get_ref(100);
         assert_eq!(pool.len(), 1);
+        assert_eq!(pool.capacity(), Some(4));
 
         {
             let _v0 = pool.get_ref(100);
             let _v1 = pool.get_ref(100);
         }
         assert_eq!(pool.len(), 2);
+        assert_eq!(pool.capacity(), Some(4));
 
         {
             let _v0 = pool.get_ref(100);

@@ -233,6 +233,11 @@ impl Neighbors {
             Ok(())
         }
     }
+
+    /// Construct a [`Snapshot`] of `self`.
+    pub(crate) fn snapshot(&mut self) -> Snapshot<'_> {
+        Snapshot(self)
+    }
 }
 
 /// Errors returned by [`Neighbors::new`].
@@ -406,6 +411,60 @@ impl std::fmt::Debug for Lock<'_> {
             .field("capacity", &self.capacity)
             .field("lock", &())
             .finish()
+    }
+}
+
+//----------//
+// Snapshot //
+//----------//
+
+/// A snapshot of an adjacency list.
+///
+/// While the [`Snapshot`] is held, the underlying adjacency list will not be mutated.
+///
+/// Adjacency lists are indexed from `0..self.entries`.
+#[derive(Debug)]
+pub struct Snapshot<'a>(&'a mut Neighbors);
+
+impl<'a> Snapshot<'a> {
+    /// Return the maximum possible length of any adjacency list in the [`Snapshot`].
+    ///
+    /// This does not guarantee that any entry is, in fact, this long.
+    pub fn max_degree(&self) -> MaxDegree {
+        self.0.max_degree()
+    }
+
+    /// Return the number of adjacency lists.
+    pub fn entries(&self) -> u32 {
+        self.0.entries()
+    }
+
+    /// Return the adjacency list for entry `i` if `i < self.entries()`.
+    pub fn get(&self, i: u32) -> Option<&[u32]> {
+        self.0.check(i).ok()?;
+
+        // SAFETY: We've checked that `i` is in-bounds.
+        let (prefix, rest) =
+            unsafe { self.0.neighbors.get_unchecked(i.into_usize()) }.split(Bytes::size_of::<Id>());
+
+        debug_assert_eq!(prefix.len(), Bytes::size_of::<Id>());
+        debug_assert!(prefix.as_ptr().cast::<Id>().is_aligned());
+
+        // SAFETY: We have a mutable reference to `Neighbors` so access to this pointer is
+        // free from concurrent modifications. The `Snapthot` only provides read access to
+        // `Neighbors`.
+        //
+        // We trust `Neighbors` to ensure the pointer is aligned and readable since `i` is
+        // in-bounds.
+        let len: usize = unsafe { prefix.as_ptr().cast::<Id>().read() }
+            .into_usize()
+            .min(self.max_degree().value());
+
+        // SAFETY: Like the previous justification, the mutable reference to `Neighbors`
+        // prevents concurrent modification.
+        //
+        // We trust `Neighbors` to ensure materializing the slice for in-bounds `i` is safe.
+        Some(unsafe { std::slice::from_raw_parts(rest.as_ptr().cast::<Id>(), len) })
     }
 }
 
@@ -718,5 +777,48 @@ mod tests {
         list.sort();
 
         assert_eq!(&*list, &*expected);
+    }
+
+    //----------//
+    // Snapshot //
+    //----------//
+
+    #[test]
+    fn test_snapshot() {
+        let empty: &[u32] = &[];
+
+        let entries: u32 = 10;
+        let max_degree = MaxDegree::new(4);
+
+        let mut neighbors =
+            Neighbors::new(IdLimit::new(10), max_degree.value().try_into().unwrap()).unwrap();
+        assert_eq!(neighbors.entries(), entries);
+        assert_eq!(neighbors.max_degree(), max_degree);
+
+        let snapshot = neighbors.snapshot();
+        assert_eq!(snapshot.entries(), entries);
+        assert_eq!(snapshot.max_degree(), max_degree);
+        for i in 0..snapshot.entries() {
+            assert_eq!(snapshot.get(i), Some(empty));
+        }
+        assert!(snapshot.get(snapshot.entries()).is_none());
+
+        // Use randomized testing to test all entries and lengths.
+        let generate =
+            |round: u32, entry: u32| -> Vec<u32> { (0..(round + 1)).map(|r| entry + r).collect() };
+
+        for round in 0..neighbors.max_degree_u32() {
+            for i in 0..neighbors.entries() {
+                let v = generate(round, i);
+                neighbors.set(i, &v).unwrap();
+            }
+
+            let snapshot = neighbors.snapshot();
+            assert_eq!(snapshot.entries(), entries);
+            for i in 0..snapshot.entries() {
+                let expected = generate(round, i);
+                assert_eq!(snapshot.get(i).unwrap(), &expected);
+            }
+        }
     }
 }

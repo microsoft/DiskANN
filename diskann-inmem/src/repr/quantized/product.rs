@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use std::num::NonZeroUsize;
+use std::{num::NonZeroUsize, sync::Arc};
 
 use diskann::{ANNError, ANNResult, error::ErrorContext};
 use diskann_quantization::{distances as quant_distances, product::tables};
@@ -16,11 +16,16 @@ use diskann_utils::{
 use crate::{num::Bytes, repr::quantized};
 
 #[derive(Debug)]
-pub struct Product {
+struct Tables {
     /// The PQ table representation used for compression and creation of query computers.
     transposed: tables::TransposedTable,
     /// The PQ table representation used for pruning.
     padded: tables::PaddedTable,
+}
+
+#[derive(Debug)]
+pub struct Product {
+    tables: Arc<Tables>,
     metric: Metric,
 
     /// An object pool for distance lookup tables.
@@ -64,22 +69,39 @@ impl Product {
         let padded = tables::PaddedTable::from_basic(table.as_view());
         let cache = ObjectPool::with_capacity(Some(cache_size.map(|v| v.get()).unwrap_or(0)));
 
+        let tables = Arc::new(Tables { transposed, padded });
         Ok(Self {
-            transposed,
-            padded,
+            tables,
             metric,
             cache,
         })
+    }
+
+    /// Return the capacity of the distance table cache.
+    pub fn cache_capacity(&self) -> Option<NonZeroUsize> {
+        self.cache.capacity().and_then(NonZeroUsize::new)
+    }
+
+    /// Effectively clone the PQ schema resident in `self` but with an independent distance
+    /// table cache.
+    ///
+    /// Argument `cache_size` controls the cache size of the shared [`Product`].
+    pub fn share(&self, cache_size: Option<NonZeroUsize>) -> Self {
+        Self {
+            tables: self.tables.clone(),
+            metric: self.metric,
+            cache: ObjectPool::with_capacity(Some(cache_size.map(|v| v.get()).unwrap_or(0))),
+        }
     }
 }
 
 impl quantized::Quantizer for Product {
     fn bytes(&self) -> Bytes {
-        Bytes::new(self.transposed.nchunks())
+        Bytes::new(self.tables.transposed.nchunks())
     }
 
     fn dim(&self) -> usize {
-        self.transposed.dim()
+        self.tables.transposed.dim()
     }
 
     fn quantize(&self, quantized: &mut [u8], data: &[f32]) -> ANNResult<()> {
@@ -107,7 +129,8 @@ impl quantized::Quantizer for Product {
             )));
         }
 
-        self.transposed
+        self.tables
+            .transposed
             .compress_into(data, quantized)
             .map_err(ANNError::new)?;
         Ok(())
@@ -117,7 +140,7 @@ impl quantized::Quantizer for Product {
     where
         V: quantized::DistanceVisitor<'a>,
     {
-        visitor.visit(Distance::new(&self.padded, self.metric))
+        visitor.visit(Distance::new(&self.tables.padded, self.metric))
     }
 
     fn query_distance<'a, V>(&'a self, query: &'a [f32], visitor: V) -> ANNResult<V::Output>
@@ -138,8 +161,8 @@ impl quantized::Quantizer for Product {
         }
 
         let args = DistanceTableArgs {
-            nchunks: self.transposed.nchunks(),
-            ncenters: self.transposed.ncenters(),
+            nchunks: self.tables.transposed.nchunks(),
+            ncenters: self.tables.transposed.ncenters(),
             metric: self.metric,
         };
 
@@ -147,15 +170,18 @@ impl quantized::Quantizer for Product {
 
         match &mut *distance_table {
             DistanceTable::SquaredL2(table) => {
-                self.transposed
+                self.tables
+                    .transposed
                     .process_into::<quant_distances::SquaredL2, _>(query, table.as_view_mut());
             }
             DistanceTable::InnerProduct(table) => {
-                self.transposed
+                self.tables
+                    .transposed
                     .process_into::<quant_distances::InnerProduct, _>(query, table.as_view_mut());
             }
             DistanceTable::Cosine { table, query_norm } => {
-                self.transposed
+                self.tables
+                    .transposed
                     .process_into::<quant_distances::Cosine, _>(query, table.as_view_mut());
                 *query_norm = (FastL2Norm).evaluate(query);
             }
@@ -521,6 +547,42 @@ mod tests {
                     &|x, y| reference.call(x, y),
                     &format_args!("metric = {:?}, query = {:?}", metric, query),
                 );
+            }
+        }
+    }
+
+    //-------------//
+    // Cache Usage //
+    //-------------//
+
+    #[test]
+    fn test_cache_size_and_sharing() {
+        use diskann_quantization::views::ChunkOffsets;
+
+        let dim = NonZeroUsize::new(5).unwrap();
+        let nchunks = NonZeroUsize::new(3).unwrap();
+        let ncenters = 4;
+
+        let data = rowmajor::Owned::from_element(ncenters, dim.get(), 0.0);
+        let offsets = ChunkOffsets::partition(dim, nchunks).unwrap();
+        let table = tables::BasicTable::new(data, offsets).unwrap();
+
+        let cache_sizes = [None, NonZeroUsize::new(1), NonZeroUsize::new(2)];
+
+        for cache_size in cache_sizes {
+            let product = Product::new(table.clone(), Metric::SquaredL2, cache_size).unwrap();
+            assert_eq!(product.cache_capacity(), cache_size);
+
+            for shared_size in cache_sizes {
+                let shared = product.share(shared_size);
+                assert_eq!(shared.cache_capacity(), shared_size);
+
+                assert_eq!(
+                    quantized::Quantizer::bytes(&shared),
+                    Bytes::new(nchunks.get()),
+                );
+
+                assert_eq!(quantized::Quantizer::dim(&shared), dim.get(),);
             }
         }
     }

@@ -372,7 +372,7 @@ mod tests {
         let initial_buffers = 0;
         let buffers = StripeBufferPool::new((), initial_buffers, None);
         assign_to_leaders(
-            Rows::new(data, Metric::L2).unwrap().backend().dataset(),
+            Rows::new(data, Metric::L2).backend().dataset(),
             &*kernels::select(Metric::L2),
             ids,
             leaders,
@@ -399,7 +399,7 @@ mod tests {
         };
         let buffers = StripeBufferPool::new((), initial_buffers, None);
         split_cluster(
-            Rows::new(data, Metric::L2).unwrap().backend().dataset(),
+            Rows::new(data, Metric::L2).backend().dataset(),
             &*kernels::select(Metric::L2),
             config,
             fanout,
@@ -412,7 +412,7 @@ mod tests {
     /// Partition `data` under L2.
     fn partition_l2(data: rowmajor::Ref<'_, f32>, config: &PartitionConfig) -> Vec<Vec<u32>> {
         partition(
-            Rows::new(data, Metric::L2).unwrap().backend().dataset(),
+            Rows::new(data, Metric::L2).backend().dataset(),
             &*kernels::select(Metric::L2),
             config,
         )
@@ -527,8 +527,7 @@ mod tests {
         let rows = Rows::new(
             rowmajor::Ref::try_from_data(x.as_slice(), x.len(), dimensions).unwrap(),
             Metric::L2,
-        )
-        .unwrap();
+        );
         let backend = rows.backend();
         let data = backend.dataset();
         let kernels = kernels::select(Metric::L2);

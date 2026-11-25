@@ -4,15 +4,15 @@
  */
 
 //! Disk index builders and related functionality.
+pub mod backend;
 pub mod build;
 pub mod core;
-pub mod quantizer;
 
-pub mod inmem_builder;
+mod inmem_builder;
 pub mod tokio;
 
 #[cfg(feature = "pipnn")]
-mod pipnn;
+pub mod pipnn;
 
 #[cfg(test)]
 mod tests;
