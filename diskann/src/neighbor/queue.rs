@@ -251,6 +251,11 @@ impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
             [] => {}
             [neighbor] => self.insert(neighbor),
             _ => {
+                // Sequential `insert` puts later candidates first when distances are equal.
+                // With stable ascending order, merging from the end would keep input
+                // order for ties, so each equal-distance group would need to be reversed.
+                // Use stable descending order instead: read from the start and write
+                // backward to get the same tie order as sequential `insert`.
                 neighbors.sort_by(super::ord::reverse(super::ord::fast_distance));
                 self.merge_sorted(neighbors);
             }
@@ -258,91 +263,60 @@ impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
     }
 
     /// Merge a nonempty, NaN-free batch sorted by descending distance.
-    /// Candidates precede old entries on ties; ties within the batch reverse its order.
+    ///
+    /// Output order:
+    /// - Smaller distances first.
+    /// - At equal distances, new candidates before old entries.
+    /// - Among equal-distance candidates, later batch entries first.
+    /// - Among equal-distance old entries, keep the existing order.
+    ///
+    /// With a stable batch sort, these rules match sequential `insert`.
     fn merge_sorted(&mut self, neighbors: &[Neighbor<I>]) {
-        let merged_size = self.capacity.min(self.size + neighbors.len());
-        let mut old_end = self.count_old_entries_to_keep(neighbors, merged_size);
-        let new_count = merged_size - old_end;
+        let mut old_end = self.size;
+        let mut new_end = neighbors.len();
+        let total = old_end + new_end;
+        let merged_size = self.capacity.min(total);
 
-        // Keep discarded old slots ready for overwrite; initialize only actual growth.
+        // The queue is in ascending distance order; candidates are in descending order.
+        // Read old entries from the end and candidates from the start.
+        for _ in merged_size..total {
+            if new_end == 0
+                || (old_end > 0
+                    && self.distances[old_end - 1] >= neighbors[neighbors.len() - new_end].distance)
+            {
+                old_end -= 1;
+            } else {
+                new_end -= 1;
+            }
+        }
+
         self.id_visiteds
             .resize(merged_size, (neighbors[0].id, false));
         self.distances.resize(merged_size, 0.0);
 
-        let mut pending = neighbors[neighbors.len() - new_count..].iter();
-        while let Some(neighbor) = pending.next() {
-            let old_before =
-                Self::lower_bound_from_right(&self.distances, old_end, neighbor.distance);
-
-            // The remaining candidates precede this one in the output.
-            let write = old_before + pending.len();
-            if old_before < old_end {
-                let destination = write + 1;
-                self.distances.copy_within(old_before..old_end, destination);
-                self.id_visiteds
-                    .copy_within(old_before..old_end, destination);
+        while new_end > 0 {
+            let candidate = neighbors[neighbors.len() - new_end];
+            let run_end = old_end;
+            while old_end > 0 && self.distances[old_end - 1] >= candidate.distance {
+                old_end -= 1;
             }
-            self.id_visiteds[write] = (neighbor.id, false);
-            self.distances[write] = neighbor.distance;
-            old_end = old_before;
+
+            if old_end < run_end {
+                // Shift the old run past all unread candidates.
+                let destination = old_end + new_end;
+                self.distances.copy_within(old_end..run_end, destination);
+                self.id_visiteds.copy_within(old_end..run_end, destination);
+            }
+
+            new_end -= 1;
+            let write = old_end + new_end;
+            self.distances[write] = candidate.distance;
+            self.id_visiteds[write] = (candidate.id, false);
         }
 
         self.size = merged_size;
         // Old entries before the first retained new entry stay at their original indices.
         self.cursor = self.cursor.min(old_end);
-    }
-
-    /// Finds the first distance at least `target` in the sorted, NaN-free prefix `d[..hi]`.
-    /// `target` must not be NaN.
-    #[inline(always)]
-    fn lower_bound_from_right(d: &[f32], hi: usize, target: f32) -> usize {
-        let mut right = hi; // Distances in d[right..hi] are at least target.
-        let mut step = 1;
-        while step <= right && d[right - step] >= target {
-            right -= step;
-            step <<= 1;
-        }
-        let left = right.saturating_sub(step);
-        left + d[left..right].partition_point(|&x| x < target)
-    }
-
-    /// Returns how many old entries remain when the queue keeps the
-    /// `merged_size` best entries out of the old entries and `batch`.
-    ///
-    /// `batch` is sorted from farthest to closest, so its best `n` candidates are
-    /// `batch[batch.len() - n..]`. Ties favor candidates over old entries.
-    ///
-    /// Keeping `k` old entries means keeping `merged_size - k` candidates. `k` is too
-    /// small if the next old entry is closer than the worst kept candidate. This
-    /// predicate is monotonic in `k`, so the answer is found by binary search.
-    ///
-    /// ```text
-    /// old   (closest first): [1, 4, 7]
-    /// batch (farthest first): [6, 4, 2]          merged_size = 3
-    ///
-    /// k = 1: keep old [1], batch [4, 2]; next old 4 < worst kept candidate 4? no -> k = 1
-    /// ```
-    fn count_old_entries_to_keep(&self, batch: &[Neighbor<I>], merged_size: usize) -> usize {
-        // i-th best candidate; i = 0 is the closest.
-        let best_candidate = |i: usize| batch[batch.len() - 1 - i].distance;
-
-        let keeps_too_few_old = |k: usize| {
-            let kept_candidates = merged_size - k;
-            self.distances[k] < best_candidate(kept_candidates - 1)
-        };
-
-        // At least `merged_size - batch.len()` old entries survive, at most all of them.
-        // `batch.len() <= capacity` and `size <= merged_size`, so neither bound overflows.
-        let (mut lo, mut hi) = (merged_size - batch.len(), self.size);
-        while lo < hi {
-            let k = lo + (hi - lo) / 2;
-            if keeps_too_few_old(k) {
-                lo = k + 1
-            } else {
-                hi = k
-            }
-        }
-        lo
     }
 
     /// Drain candidates from the front, signaling that they have been consumed.
