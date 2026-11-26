@@ -17,13 +17,12 @@ use diskann_benchmark_runner::{
     },
     Benchmark, Checker, Checkpoint, Input, Registry,
 };
-use diskann_disk::build::builder::backend::BuildElement;
 use diskann_providers::storage::FileStorageProvider;
 use half::f16;
 
 use crate::{
     disk_index::{
-        build::{build_disk_index, DiskBuildStats},
+        build::{build_disk_index, DiskBuildElement, DiskBuildStats},
         search::{search_disk_index, DiskSearchStats},
     },
     inputs::disk::{DiskIndexLoad, DiskIndexOperation, DiskIndexSource},
@@ -53,7 +52,7 @@ where
 
 impl<T> Benchmark for DiskIndex<T>
 where
-    T: VectorRepr + AsDataType + BuildElement,
+    T: DiskBuildElement + AsDataType,
 {
     type Input = DiskIndexOperation;
     type Output = DiskIndexStats;
@@ -287,7 +286,7 @@ fn check_metric(
 
 impl<T> Regression for DiskIndex<T>
 where
-    T: VectorRepr + AsDataType + BuildElement,
+    T: DiskBuildElement + AsDataType,
 {
     type Tolerances = DiskIndexTolerance;
     type Pass = DiskIndexCheckResult;

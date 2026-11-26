@@ -6,12 +6,12 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
-use diskann::{graph::config, utils::VectorRepr};
+use diskann::graph::config;
 use diskann_benchmark_runner::utils::MicroSeconds;
 use diskann_disk::{
     build::{
-        builder::{backend::BuildElement, build::DiskIndexBuilder},
-        configuration::{DiskIndexBuildConfig, VamanaBuildConfig},
+        builder::build::DiskIndexBuilder,
+        configuration::{CommonBuildConfig, DiskIndexBuildConfig, VamanaBuildConfig},
     },
     data_model::AdHoc,
     disk_index_build_parameter::{MemoryBudget, NumPQChunks, DISK_SECTOR_LEN},
@@ -25,7 +25,36 @@ use opentelemetry::trace::Tracer;
 use opentelemetry_sdk::trace::SdkTracerProvider;
 use scopeguard::defer;
 
-use crate::{disk_index::json_spancollector::JsonSpanCollector, inputs::disk::DiskIndexBuild};
+use crate::{
+    disk_index::json_spancollector::JsonSpanCollector,
+    inputs::{build_algorithm::BuildAlgorithm, disk::DiskIndexBuild},
+};
+
+#[cfg(feature = "pipnn")]
+pub(super) trait DiskBuildElement:
+    diskann::utils::VectorRepr
+    + diskann_disk::build::builder::backend::BuildElement
+    + diskann_disk::build::builder::pipnn::PipnnBuildElement
+{
+}
+#[cfg(feature = "pipnn")]
+impl<T> DiskBuildElement for T where
+    T: diskann::utils::VectorRepr
+        + diskann_disk::build::builder::backend::BuildElement
+        + diskann_disk::build::builder::pipnn::PipnnBuildElement
+{
+}
+
+#[cfg(not(feature = "pipnn"))]
+pub(super) trait DiskBuildElement:
+    diskann::utils::VectorRepr + diskann_disk::build::builder::backend::BuildElement
+{
+}
+#[cfg(not(feature = "pipnn"))]
+impl<T> DiskBuildElement for T where
+    T: diskann::utils::VectorRepr + diskann_disk::build::builder::backend::BuildElement
+{
+}
 
 #[derive(Serialize, Deserialize, Debug)]
 pub(super) struct DiskBuildStats {
@@ -58,7 +87,7 @@ pub(super) fn build_disk_index<T, StorageProviderType>(
     params: &DiskIndexBuild,
 ) -> anyhow::Result<DiskBuildStats>
 where
-    T: VectorRepr + BuildElement,
+    T: DiskBuildElement,
     StorageProviderType: StorageReadProvider + StorageWriteProvider + 'static,
     <StorageProviderType as StorageReadProvider>::Reader: std::marker::Send,
 {
@@ -82,6 +111,7 @@ where
         params.l_build,
         metric.into(),
         |b| {
+            b.alpha(params.alpha);
             b.saturate_after_prune(true);
         },
     )
@@ -91,16 +121,10 @@ where
 
     let metadata = load_metadata_from_file(storage_provider, &data_path)?;
 
-    let config = DiskIndexBuildConfig::new(
+    let common = CommonBuildConfig::new(
         metric,
         params.num_threads,
         NumPQChunks::new_with(params.num_pq_chunks.get(), metadata.ndims())?,
-        VamanaBuildConfig {
-            graph: config,
-            memory_budget: MemoryBudget::try_from_gb(params.build_ram_limit_gb)?,
-            build_quantization: params.quantization_type,
-            prefetch_lookahead: None,
-        },
     )
     .with_seed(DEFAULT_SEED_FOR_TESTS);
 
@@ -111,19 +135,42 @@ where
         DISK_SECTOR_LEN,
     )?;
 
-    let mut disk_index = DiskIndexBuilder::<AdHoc<T>, StorageProviderType>::new(
-        storage_provider,
-        config,
-        disk_index_writer,
-    );
-
     let span = {
         let tracer = opentelemetry::global::tracer("benchmark");
         tracer.start("disk-index-build")
     };
 
     let start = std::time::Instant::now();
-    disk_index.build()?;
+    match &params.build_algorithm {
+        BuildAlgorithm::Vamana => {
+            let build_config = DiskIndexBuildConfig::from_common(
+                common,
+                VamanaBuildConfig {
+                    graph: config,
+                    memory_budget: MemoryBudget::try_from_gb(params.build_ram_limit_gb)?,
+                    build_quantization: params.quantization_type.unwrap_or_default(),
+                    prefetch_lookahead: None,
+                },
+            );
+            DiskIndexBuilder::<AdHoc<T>, StorageProviderType>::new(
+                storage_provider,
+                build_config,
+                disk_index_writer,
+            )
+            .build()?;
+        }
+        #[cfg(feature = "pipnn")]
+        BuildAlgorithm::PiPNN(parameters) => {
+            let build_config =
+                DiskIndexBuildConfig::from_common(common, parameters.config(&config)?);
+            DiskIndexBuilder::<AdHoc<T>, StorageProviderType, _>::new(
+                storage_provider,
+                build_config,
+                disk_index_writer,
+            )
+            .build()?;
+        }
+    }
     let total_time: MicroSeconds = start.elapsed().into();
 
     drop(span);

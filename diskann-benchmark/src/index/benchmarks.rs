@@ -46,7 +46,10 @@ use crate::{
         search::plugins,
         streaming::{self, managed, stats::StreamStats, FullPrecisionStream, Managed},
     },
-    inputs::graph_index::{DynamicIndexRun, IndexBuild, IndexOperation, IndexSource, SearchPhase},
+    inputs::{
+        build_algorithm::BuildAlgorithm,
+        graph_index::{DynamicIndexRun, IndexBuild, IndexOperation, IndexSource, SearchPhase},
+    },
     utils::{
         self,
         datafiles::{self},
@@ -176,7 +179,7 @@ where
 
 impl<T> Benchmark for FullPrecision<T>
 where
-    T: VectorRepr + diskann::graph::SampleableForStart + AsDataType,
+    T: crate::utils::BuildElement + diskann::graph::SampleableForStart + AsDataType,
 {
     type Input = IndexOperation;
     type Output = BuildResult;
@@ -212,26 +215,36 @@ where
         writeln!(output, "{}", input)?;
         let (index, build_stats) = match &input.source {
             IndexSource::Build(build) => {
-                let (index, build_stats) = run_build(
-                    build,
-                    common::FullPrecision,
-                    None,
-                    output,
-                    |data| {
-                        let index = diskann_async::new_index::<T, _>(
-                            build.try_as_config()?.build()?,
-                            build.inmem_parameters(data.nrows(), data.ncols()),
-                            common::NoDeletes,
-                        )?;
-                        build::set_start_points(
-                            index.provider(),
-                            data.as_view(),
-                            *build.start_point_strategy(),
-                        )?;
-                        Ok(index)
-                    },
-                    single_or_multi_insert,
-                )?;
+                let (index, build_stats) = match build.build_algorithm() {
+                    // PiPNN uses the batch build path. Do not create an incremental
+                    // provider or run Vamana insertion.
+                    #[cfg(feature = "pipnn")]
+                    BuildAlgorithm::PiPNN(parameters) => {
+                        let data =
+                            Arc::new(datafiles::load_dataset(datafiles::BinFile(build.data()))?);
+                        build::pipnn_build(data, build, parameters)?
+                    }
+                    BuildAlgorithm::Vamana => run_build(
+                        build,
+                        common::FullPrecision,
+                        None,
+                        output,
+                        |data| {
+                            let index = diskann_async::new_index::<T, _>(
+                                build.try_as_config()?.build()?,
+                                build.inmem_parameters(data.nrows(), data.ncols()),
+                                common::NoDeletes,
+                            )?;
+                            build::set_start_points(
+                                index.provider(),
+                                data.as_view(),
+                                *build.start_point_strategy(),
+                            )?;
+                            Ok(index)
+                        },
+                        single_or_multi_insert,
+                    )?,
+                };
 
                 // save the index if requested
                 if let Some(save_path) = build.save_path() {
@@ -281,7 +294,7 @@ impl<T> DynamicFullPrecision<T> {
 
 impl<T> Benchmark for DynamicFullPrecision<T>
 where
-    T: VectorRepr + diskann::graph::SampleableForStart + AsDataType,
+    T: crate::utils::BuildElement + diskann::graph::SampleableForStart + AsDataType,
 {
     type Input = DynamicIndexRun;
     type Output = Vec<managed::Stats<StreamStats>>;
