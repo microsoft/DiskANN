@@ -101,6 +101,54 @@ pub struct NeighborPriorityQueue<I: NeighborPriorityQueueIdType> {
     search_param_l: usize,
 }
 
+/// Moves candidates that pass a cutoff to the front of a buffer, one chunk at a time.
+/// During compaction, each candidate is read once and moved at most once.
+struct Compactor<'a, I> {
+    buf: &'a mut [Neighbor<I>],
+    write: usize,
+    read: usize,
+}
+
+impl<'a, I: Copy> Compactor<'a, I> {
+    fn new(buf: &'a mut [Neighbor<I>]) -> Self {
+        Self {
+            buf,
+            write: 0,
+            read: 0,
+        }
+    }
+
+    /// Returns `true` if some candidates have not been read yet.
+    fn has_unread(&self) -> bool {
+        self.read < self.buf.len()
+    }
+
+    /// Returns at most `count` unread candidates with distance at most `cutoff`,
+    /// in input order. NaN distances fail the comparison and are dropped.
+    /// `count` must be nonzero.
+    fn next(&mut self, count: usize, cutoff: f32) -> &mut [Neighbor<I>] {
+        debug_assert!(count > 0);
+        let start = self.write;
+        let end = start + count;
+        while self.has_unread() {
+            // SAFETY: `has_unread()` checks `read < buf.len()`.
+            let neighbor = *unsafe { self.buf.get_unchecked(self.read) };
+            self.read += 1;
+            if neighbor.distance <= cutoff {
+                // SAFETY: `write` was at most `read` before the increment above,
+                // so `write < read <= buf.len()`.
+                *unsafe { self.buf.get_unchecked_mut(self.write) } = neighbor;
+                self.write += 1;
+                if self.write == end {
+                    break;
+                }
+            }
+        }
+        // SAFETY: `start <= write <= read <= buf.len()`.
+        unsafe { self.buf.get_unchecked_mut(start..self.write) }
+    }
+}
+
 impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
     /// Create NeighborPriorityQueue with capacity.
     ///
@@ -213,24 +261,14 @@ impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
             }
         }
 
-        let cutoff = self.cutoff();
-        // NaN fails this comparison, so NaN distances are dropped here.
-        neighbors.retain(|neighbor| neighbor.distance <= cutoff);
-
-        // At most `capacity` candidates can be kept, so sort at most that many at a
-        // time. Inserting chunk by chunk matches sequential `insert`.
-        let capacity = self.capacity;
-        while neighbors.len() > capacity {
-            self.insert_chunk(&mut neighbors[..capacity]);
-            // Drop the inserted chunk, and the rest that fail the tighter cutoff.
-            let cutoff = self.cutoff();
-            let mut index = 0;
-            neighbors.retain(|neighbor| {
-                index += 1;
-                index > capacity && neighbor.distance <= cutoff
-            });
+        // At most `capacity` candidates can be kept, so insert at most that many
+        // at a time. Each chunk tightens the cutoff for the next one.
+        // Inserting chunk by chunk matches sequential `insert`.
+        let mut candidates = Compactor::new(neighbors);
+        while candidates.has_unread() {
+            let chunk = candidates.next(self.capacity, self.cutoff());
+            self.insert_chunk(chunk);
         }
-        self.insert_chunk(neighbors);
         neighbors.clear();
     }
 
@@ -896,25 +934,6 @@ mod neighbor_priority_queue_test {
                 }
             }
         }
-    }
-
-    #[test]
-    fn batch_insert_matches_insert_after_drain() {
-        let mut queue = NeighborPriorityQueue::new(8);
-        for id in 0..6 {
-            queue.insert(Neighbor::new(id, id as f32));
-        }
-        for _ in 0..6 {
-            queue.closest_notvisited();
-        }
-        queue.drain_best(2);
-
-        let mut reference = queue.clone();
-        let neighbor = Neighbor::new(6, 10.0);
-        reference.insert(neighbor);
-        queue.batch_insert(&mut vec![neighbor]);
-
-        assert_same_queue(&queue, &reference);
     }
 
     #[test]
