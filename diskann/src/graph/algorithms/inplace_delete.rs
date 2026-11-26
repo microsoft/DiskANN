@@ -9,20 +9,18 @@ use diskann_utils::{Reborrow, future::SendFuture};
 use diskann_vector::DistanceFunction;
 use hashbrown::{HashMap, HashSet};
 
-use crate::graph::{
-    AdjacencyList, Config, algorithms,
-    glue::{PruneAccessor, SearchAccessor},
-    internal::{BackedgeBuffer, prune},
-    search::record::NoopSearchRecord,
-    workingset::View,
-};
-
 use crate::{
-    ANNResult,
+    ANNResult, HasId,
     error::IntoANNResult,
+    graph::{
+        AdjacencyList, Config, algorithms,
+        glue::{NeighborAccessor, NeighborAccessorMut, PruneAccessor, SearchAccessor},
+        internal::{BackedgeBuffer, prune},
+        search::record::NoopSearchRecord,
+        workingset::View,
+    },
     internal,
     neighbor::{self, Neighbor},
-    provider::{HasId, NeighborAccessor, NeighborAccessorMut},
     utils::VectorId,
 };
 

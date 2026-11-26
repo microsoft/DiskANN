@@ -309,7 +309,6 @@ mod tests {
             let entry = map.occupied_entry(external as u32).unwrap();
             assert_eq!(entry.external(), &(external as u32));
             assert_eq!(entry.internal(), internal);
-
         }
     }
 
@@ -319,7 +318,10 @@ mod tests {
         map.insert("alpha".to_string(), 1).unwrap();
 
         // Borrowed `&str` lookups against `String` keys.
-        assert_eq!(map.occupied_entry("alpha".to_string()).unwrap().internal(), 1);
+        assert_eq!(
+            map.occupied_entry("alpha".to_string()).unwrap().internal(),
+            1
+        );
         assert!(map.occupied_entry("beta".to_string()).is_none());
     }
 

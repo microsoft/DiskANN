@@ -22,8 +22,8 @@ use crate::{
     error::{RankedError, ToRanked, TransientError},
     flat::DistancesUnordered,
     graph::test::synthetic::Grid,
+    id::has_id,
     internal::counter::{Counter, LocalCounter},
-    provider::has_id,
     utils::VectorRepr,
 };
 

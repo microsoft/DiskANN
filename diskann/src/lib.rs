@@ -7,9 +7,11 @@
 
 pub mod error;
 pub mod neighbor;
-pub mod provider;
 pub mod tracing;
 pub mod utils;
+
+mod id;
+pub use id::HasId;
 
 // Runtime
 pub mod tokio;

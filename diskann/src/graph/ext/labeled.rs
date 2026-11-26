@@ -32,10 +32,9 @@
 //! * As of writing, [`QueryLabelProvider`] does not have batched accesses.
 
 use crate::{
-    ANNResult,
+    ANNResult, HasId,
     graph::glue::{self, Accept, Decision},
     neighbor::Neighbor,
-    provider::HasId,
     utils::VectorId,
 };
 

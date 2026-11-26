@@ -18,12 +18,12 @@ use crate::{
     graph::{
         self, AdjacencyList,
         algorithms::consolidate::ConsolidateKind,
+        glue::NeighborAccessor,
         test::{
             self,
             index::{Index, Options},
         },
     },
-    provider::NeighborAccessor,
     test::tokio::current_thread_runtime,
 };
 

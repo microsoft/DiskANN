@@ -13,11 +13,11 @@ use diskann_vector::DistanceFunction;
 use hashbrown::HashSet;
 
 use crate::{
-    ANNResult,
+    ANNResult, HasId,
     error::ErrorExt,
     graph::{
         AdjacencyList, Config, algorithms,
-        glue::{PruneAccessor, SearchAccessor},
+        glue::{NeighborAccessor, NeighborAccessorMut, PruneAccessor, SearchAccessor},
         internal::prune,
         search::{
             record,
@@ -27,7 +27,6 @@ use crate::{
     },
     internal,
     neighbor::Neighbor,
-    provider::{HasId, NeighborAccessor, NeighborAccessorMut},
     tracked_trace,
     utils::{IntoUsize, VectorId},
 };

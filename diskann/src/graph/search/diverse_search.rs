@@ -186,7 +186,7 @@ where
     where
         A: SearchAccessor<Id = P::Id>,
         O: Send,
-        PP: SearchPostProcess<A, O> + Send + Sync,
+        PP: SearchPostProcess<A, O> + Send,
         OB: SearchOutputBuffer<O> + Send + ?Sized,
     {
         let mut diverse_scratch =

@@ -8,7 +8,6 @@ use std::{ops::Range, sync::Arc};
 use diskann::{
     ANNResult,
     graph::{self, compat},
-    provider,
 };
 
 use crate::build::{Build, ids::ToIdSized};
@@ -59,7 +58,7 @@ impl<DP> Build for DropDeleted<DP>
 where
     DP: compat::DataProvider<Context: Default> + compat::Delete + compat::DefaultAccessor,
     for<'a> <DP as compat::DefaultAccessor>::Accessor<'a>:
-        provider::NeighborAccessorMut<Id = DP::InternalId>,
+        graph::glue::NeighborAccessorMut<Id = DP::InternalId>,
 {
     type Output = ();
 

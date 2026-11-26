@@ -14,7 +14,7 @@ use diskann_utils::views::rowmajor::Matrix;
 use diskann_vector::{PreprocessedDistanceFunction, distance::Metric};
 
 use crate::{
-    ANNResult,
+    ANNResult, HasId,
     error::IntoANNResult,
     flat::{
         SearchStats, knn_search,
@@ -25,7 +25,6 @@ use crate::{
         glue::{CopyIds, SearchPostProcess},
     },
     neighbor::{self, BackInserter, Neighbor},
-    provider::HasId,
     test::tokio::current_thread_runtime,
     utils::VectorRepr,
 };

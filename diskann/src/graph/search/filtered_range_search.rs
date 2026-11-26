@@ -25,6 +25,7 @@ use crate::{
         search_output_buffer::SearchOutputBuffer,
     },
     neighbor::Neighbor,
+    utils::VectorId,
 };
 
 /// Parameters for range-based search.
@@ -115,7 +116,10 @@ impl From<Range> for FilteredRange {
     }
 }
 
-impl FilteredSearch for FilteredRange {
+impl<I> FilteredSearch<I> for FilteredRange
+where
+    I: VectorId,
+{
     type Output = SearchStats;
 
     fn filtered_search<A, O, PP, OB>(
@@ -125,9 +129,9 @@ impl FilteredSearch for FilteredRange {
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<Self::Output>>
     where
-        A: FilteredAccessor,
+        A: FilteredAccessor<Id = I>,
         O: Send,
-        PP: glue::SearchPostProcess<A, O> + Send + Sync,
+        PP: glue::SearchPostProcess<A, O> + Send,
         OB: SearchOutputBuffer<O> + Send + ?Sized,
     {
         async move {

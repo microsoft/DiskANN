@@ -5,7 +5,7 @@
 
 use std::{borrow::BorrowMut, sync::Arc};
 
-use diskann::{ANNResult, graph::AdjacencyList, provider};
+use diskann::{ANNResult, graph::AdjacencyList};
 use diskann_utils::views::rowmajor::{self, Matrix};
 use hashbrown::HashMap;
 
@@ -33,7 +33,7 @@ impl<'a> Insert<'a> {
     }
 }
 
-impl provider::HasId for Insert<'_> {
+impl diskann::HasId for Insert<'_> {
     type Id = u32;
 }
 
@@ -72,7 +72,7 @@ impl<'a> InplaceDelete<'a> {
     }
 }
 
-impl provider::HasId for InplaceDelete<'_> {
+impl diskann::HasId for InplaceDelete<'_> {
     type Id = u32;
 }
 
@@ -147,7 +147,7 @@ impl<R, M: Id, T> Clone for BatchInsert<R, M, T> {
 }
 
 #[cfg(feature = "diskann-builtins")]
-impl<R, M, T> provider::HasId for BatchInsert<R, M, T>
+impl<R, M, T> diskann::HasId for BatchInsert<R, M, T>
 where
     M: Id,
 {

@@ -10,17 +10,16 @@ use hashbrown::HashMap;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::{
-    ANNError, ANNResult,
+    ANNError, ANNResult, HasId,
     error::ErrorExt,
     graph::{
         AdjacencyList, Config, algorithms,
         glue::PruneAccessor,
         internal::{BackedgeBuffer, prune},
     },
-    provider::HasId,
     utils::{
         VectorId,
-        balancer::{Balancer, BatchPosition},
+        balancer::{Balancer, BatchItem},
     },
 };
 
@@ -242,7 +241,7 @@ where
         &mut self,
         forward_edges: &mut ForwardEdges<I>,
         accessor: &mut A,
-        batch: BatchPosition<'_, I>,
+        batch: BatchItem<'_, I>,
         config: &Config,
     ) -> impl SendFuture<ANNResult<()>>
     where
@@ -271,7 +270,7 @@ where
         &mut self,
         forward_edges: &mut ForwardEdges<I>,
         accessor: &mut A,
-        batch: BatchPosition<'_, ForwardEdge<I>>,
+        batch: BatchItem<'_, ForwardEdge<I>>,
         config: &Config,
     ) -> ANNResult<()>
     where
@@ -303,7 +302,7 @@ where
         Ok(())
     }
 
-    fn prepare_bootstrap_candidates(&mut self, batch: BatchPosition<'_, ForwardEdge<I>>) {
+    fn prepare_bootstrap_candidates(&mut self, batch: BatchItem<'_, ForwardEdge<I>>) {
         let current = batch.current();
         self.buf
             .replace_from_iter_untrusted(current.destinations.iter().copied().chain(
@@ -697,7 +696,7 @@ async fn apply_forward<S>(
 where
     S: Standard,
 {
-    use crate::provider::NeighborAccessorMut;
+    use crate::graph::glue::NeighborAccessorMut;
 
     let mut accessor = standard.prune_accessor()?;
     while let Some(edge) = balancer.next() {

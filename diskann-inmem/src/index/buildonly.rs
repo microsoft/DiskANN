@@ -127,7 +127,7 @@ impl<R> Read<'_, R> {
             self.index.local_counters(),
         )?;
 
-        let fut = <_ as diskann::graph::search::Search>::search(
+        let fut = <_ as diskann::graph::search::Search<u32>>::search(
             params,
             &mut accessor,
             PostProcess,

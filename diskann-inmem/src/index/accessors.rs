@@ -12,7 +12,6 @@ use diskann::{
         workingset,
     },
     neighbor::Neighbor,
-    provider,
 };
 
 use crate::{
@@ -218,7 +217,7 @@ impl<'a> Search<'a> {
     }
 }
 
-impl diskann::provider::HasId for Search<'_> {
+impl diskann::HasId for Search<'_> {
     type Id = u32;
 }
 
@@ -277,7 +276,7 @@ impl<'a> Filtered<'a> {
     }
 }
 
-impl diskann::provider::HasId for Filtered<'_> {
+impl diskann::HasId for Filtered<'_> {
     type Id = u32;
 }
 
@@ -354,7 +353,7 @@ impl glue::FilteredAccessor for Filtered<'_> {
 
 /// The [`glue::PruneAccessor`] implementation for [`Provider`].
 ///
-/// This type implements zero-copy access to the data within its parent provider during prunes.
+/// This type implements zero-copy access to the data within its parent during prunes.
 #[derive(Debug)]
 pub(crate) struct Prune<'a> {
     prune: Box<dyn repr::Prune + 'a>,
@@ -432,7 +431,7 @@ impl diskann_vector::DistanceFunction<ElementRef<'_>, ElementRef<'_>, f32> for D
     }
 }
 
-impl diskann::provider::HasId for Prune<'_> {
+impl diskann::HasId for Prune<'_> {
     type Id = u32;
 }
 
@@ -469,7 +468,7 @@ impl glue::PruneAccessor for Prune<'_> {
     }
 }
 
-impl provider::NeighborAccessor for Prune<'_> {
+impl glue::NeighborAccessor for Prune<'_> {
     fn get_neighbors(
         &mut self,
         id: Self::Id,
@@ -483,7 +482,7 @@ impl provider::NeighborAccessor for Prune<'_> {
     }
 }
 
-impl provider::NeighborAccessorMut for Prune<'_> {
+impl glue::NeighborAccessorMut for Prune<'_> {
     fn set_neighbors(
         &mut self,
         id: u32,

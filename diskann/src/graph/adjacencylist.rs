@@ -49,6 +49,9 @@ impl<I> AdjacencyList<I> {
     }
 
     /// Retains only the elements specified by the predicate.
+    ///
+    /// This method operats in place, visiting each element exactly once in the original
+    /// order, and preserves the order of the retained elements.
     pub fn retain<F>(&mut self, f: F)
     where
         F: FnMut(&I) -> bool,
@@ -104,12 +107,18 @@ where
         }
     }
 
-    /// Append an element to the back of the collection, assumint it does not already exist.
+    /// Append an element to the back of the collection, assuming it does not already exist.
+    ///
+    /// Uniqueness is checked in debug builds.
     ///
     /// # Panics
     ///
     /// Panics if `Vec::push` would panic while inserting `i`.
-    pub(crate) fn push_unique(&mut self, i: I) {
+    pub(crate) fn push_unique(&mut self, i: I)
+    where
+        I: ContainsSimd,
+    {
+        debug_assert!(!self.contains(i), "items should be unique");
         self.edges.push(i)
     }
 
@@ -157,6 +166,7 @@ where
         }
     }
 
+    /// Replace the contents of `self` with those of `itr`.
     pub(crate) fn replace_from_iter_unique<Itr>(&mut self, itr: Itr)
     where
         Itr: UniqueIter<Item = I>,
@@ -224,6 +234,9 @@ where
         Self { edges }
     }
 
+    /// Replace the contents of `self` with the unique items from `itr`.
+    ///
+    /// The order of elements yielded from `itr` is not preserved.
     pub(crate) fn replace_from_iter_untrusted<Itr>(&mut self, itr: Itr)
     where
         Itr: IntoIterator<Item = I>,
@@ -252,6 +265,10 @@ where
         self.debug_check_uniqueness();
     }
 
+    /// Overwrite the contents of `self` with the contents of `itr` with the assumption
+    /// that the contents of `itr` are all unique.
+    ///
+    /// Uniqueness will be checked in debug builds but not in release builds.
     pub(crate) fn replace_from_iter_trusted<Itr>(&mut self, itr: Itr)
     where
         Itr: IntoIterator<Item = I>,
@@ -603,6 +620,25 @@ mod tests {
     }
 
     #[test]
+    fn test_empty() {
+        let mut x = AdjacencyList::<u32>::from_iter_unique(0..10);
+        assert!(!x.is_empty());
+        let _ = x.as_empty();
+        assert!(
+            x.is_empty(),
+            "calling `as_empty` should clear as a side-effect"
+        );
+
+        let mut x = AdjacencyList::<u32>::from_iter_unique(0..10);
+        let empty = x.as_empty();
+        let y = empty.take();
+        assert!(y.is_empty());
+        y.push(10);
+
+        assert_eq!(&*x, &[10]);
+    }
+
+    #[test]
     fn test_truncate() {
         let mut x = AdjacencyList::<u32>::from_iter_unique(0..10);
         assert!(x.all_unique());
@@ -762,6 +798,58 @@ mod tests {
 
         let x = AdjacencyList::<u32>::from_iter_untrusted([1, 2, 1]);
         assert_eq!(&*x, &[1, 2]);
+    }
+
+    #[test]
+    fn test_replace_from_iter_unique() {
+        let mut x = AdjacencyList::<u32>::from_iter_unique(99..101);
+        let items = hashbrown::HashSet::<u32>::from([4, 1, 3]);
+        let expected: Vec<_> = items.iter().copied().collect();
+
+        x.replace_from_iter_unique(items.iter().copied());
+        assert_eq!(&*x, expected.as_slice());
+
+        x.replace_from_iter_unique(std::iter::once(8));
+        assert_eq!(&*x, &[8]);
+
+        x.replace_from_iter_unique(0..0);
+        assert!(x.is_empty());
+    }
+
+    #[test]
+    fn test_replace_from_iter_untrusted() {
+        let mut x = AdjacencyList::<u32>::from_iter_unique(99..101);
+
+        x.replace_from_iter_untrusted([4, 1, 4, 2, 1]);
+        assert_eq!(&*x, &[1, 2, 4]);
+
+        x.replace_from_iter_untrusted([8]);
+        assert_eq!(&*x, &[8]);
+
+        x.replace_from_iter_untrusted([]);
+        assert!(x.is_empty());
+    }
+
+    #[test]
+    fn test_replace_from_iter_trusted() {
+        let mut x = AdjacencyList::<u32>::from_iter_unique(99..101);
+
+        x.replace_from_iter_trusted([4, 1, 3]);
+        assert_eq!(&*x, &[4, 1, 3]);
+
+        x.replace_from_iter_trusted([8]);
+        assert_eq!(&*x, &[8]);
+
+        x.replace_from_iter_trusted([]);
+        assert!(x.is_empty());
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "duplicate items detected")]
+    fn test_replace_from_iter_trusted_rejects_duplicates() {
+        let mut x = AdjacencyList::<u32>::new();
+        x.replace_from_iter_trusted([4, 1, 4]);
     }
 
     #[test]

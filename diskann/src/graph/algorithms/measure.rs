@@ -9,7 +9,10 @@ use std::collections::VecDeque;
 
 use hashbrown::HashSet;
 
-use crate::{ANNResult, graph::AdjacencyList, provider::NeighborAccessor};
+use crate::{
+    ANNResult,
+    graph::{AdjacencyList, glue::NeighborAccessor},
+};
 
 /// Count the number of distinct nodes reachable from the start points.
 ///

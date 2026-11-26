@@ -10,11 +10,11 @@ use std::{fmt::Debug, marker::PhantomData, num::NonZeroUsize};
 use diskann_utils::future::SendFuture;
 use thiserror::Error;
 
-use super::{Search, SearchFor};
 use crate::{
     ANNResult, convert_error,
     error::IntoANNResult,
     graph::{
+        Search,
         algorithms::{self, SearchStats},
         glue::{SearchAccessor, SearchPostProcess},
         search::record::NoopSearchRecord,
@@ -119,7 +119,10 @@ impl Knn {
     }
 }
 
-impl Search for Knn {
+impl<I> Search<I> for Knn
+where
+    I: VectorId,
+{
     type Output = SearchStats;
 
     /// Execute the k-NN search on the given index.
@@ -154,9 +157,9 @@ impl Search for Knn {
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<Self::Output>>
     where
-        A: SearchAccessor,
+        A: SearchAccessor<Id = I>,
         O: Send,
-        PP: SearchPostProcess<A, O> + Send + Sync,
+        PP: SearchPostProcess<A, O> + Send,
         OB: SearchOutputBuffer<O> + Send + ?Sized,
     {
         async move {
@@ -211,14 +214,14 @@ impl<'r, I, SR: ?Sized> RecordedKnn<'r, I, SR> {
     }
 }
 
-impl<I, SR> SearchFor<I> for RecordedKnn<'_, I, SR>
+impl<I, SR> Search<I> for RecordedKnn<'_, I, SR>
 where
     I: VectorId,
     SR: super::record::SearchRecord<I> + ?Sized,
 {
     type Output = SearchStats;
 
-    fn search_for<A, O, PP, OB>(
+    fn search<A, O, PP, OB>(
         self,
         accessor: &mut A,
         processor: PP,
@@ -227,7 +230,7 @@ where
     where
         A: SearchAccessor<Id = I>,
         O: Send,
-        PP: SearchPostProcess<A, O> + Send + Sync,
+        PP: SearchPostProcess<A, O> + Send,
         OB: SearchOutputBuffer<O> + Send + ?Sized,
     {
         async move {

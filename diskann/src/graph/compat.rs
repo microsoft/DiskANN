@@ -15,7 +15,7 @@ use hashbrown::{HashMap, HashSet};
 use thiserror::Error;
 
 use crate::{
-    ANNError, ANNResult,
+    ANNError, ANNResult, HasId,
     error::{ErrorExt, IntoANNResult, StandardError, ToRanked},
     graph::{
         self, AdjacencyList, SearchOutputBuffer,
@@ -26,12 +26,11 @@ use crate::{
             inplace_delete::{self, OneHop, TwoHopAndOneHop, VisitedAndTopK},
         },
         glue::{
-            Batch, DefaultPostProcessor, FilteredAccessor, PruneAccessor, SearchAccessor,
-            SearchPostProcess,
+            Batch, DefaultPostProcessor, FilteredAccessor, NeighborAccessor, NeighborAccessorMut,
+            PruneAccessor, SearchAccessor, SearchPostProcess,
         },
-        search::{FilteredSearch, PagedSearch, SearchFor},
+        search::{FilteredSearch, PagedSearch, Search},
     },
-    provider::{HasId, NeighborAccessor, NeighborAccessorMut},
     utils::{Bool, VectorId},
 };
 
@@ -79,7 +78,7 @@ impl<DP> DiskANNIndex<DP> {
         DP: DataProvider,
         S: SearchStrategy<'a, DP, T>,
         S::SearchAccessor: SearchAccessor + DefaultPostProcessor<O>,
-        P: SearchFor<DP::InternalId> + Send,
+        P: Search<DP::InternalId> + Send,
         T: Send,
         O: Send,
         OB: SearchOutputBuffer<O> + Send + ?Sized,
@@ -89,9 +88,7 @@ impl<DP> DiskANNIndex<DP> {
                 .search_accessor(self.provider(), context, query)
                 .into_ann_result()?;
             let processor = accessor.default_post_processor();
-            search_params
-                .search_for(&mut accessor, processor, output)
-                .await
+            search_params.search(&mut accessor, processor, output).await
         }
     }
 
@@ -109,8 +106,8 @@ impl<DP> DiskANNIndex<DP> {
         DP: DataProvider,
         S: SearchStrategy<'a, DP, T>,
         S::SearchAccessor: SearchAccessor,
-        P: SearchFor<DP::InternalId> + Send,
-        PP: SearchPostProcess<S::SearchAccessor, O> + Send + Sync,
+        P: Search<DP::InternalId> + Send,
+        PP: SearchPostProcess<S::SearchAccessor, O> + Send,
         T: Send,
         O: Send,
         OB: SearchOutputBuffer<O> + Send + ?Sized,
@@ -119,9 +116,7 @@ impl<DP> DiskANNIndex<DP> {
             let mut accessor = strategy
                 .search_accessor(self.provider(), context, query)
                 .into_ann_result()?;
-            search_params
-                .search_for(&mut accessor, processor, output)
-                .await
+            search_params.search(&mut accessor, processor, output).await
         }
     }
 
@@ -138,7 +133,7 @@ impl<DP> DiskANNIndex<DP> {
         DP: DataProvider,
         S: SearchStrategy<'a, DP, T>,
         S::SearchAccessor: FilteredAccessor + DefaultPostProcessor<O>,
-        P: FilteredSearch + Send,
+        P: FilteredSearch<DP::InternalId> + Send,
         T: Send,
         O: Send,
         OB: SearchOutputBuffer<O> + Send + ?Sized,
@@ -168,8 +163,8 @@ impl<DP> DiskANNIndex<DP> {
         DP: DataProvider,
         S: SearchStrategy<'a, DP, T>,
         S::SearchAccessor: FilteredAccessor,
-        P: FilteredSearch + Send,
-        PP: SearchPostProcess<S::SearchAccessor, O> + Send + Sync,
+        P: FilteredSearch<DP::InternalId> + Send,
+        PP: SearchPostProcess<S::SearchAccessor, O> + Send,
         T: Send,
         O: Send,
         OB: SearchOutputBuffer<O> + Send + ?Sized,
@@ -1469,9 +1464,7 @@ where
     type DeleteElementError: StandardError;
     type PruneStrategy: PruneStrategy<Provider>;
     type DeleteSearchAccessor<'a>: SearchAccessor<Id = Provider::InternalId>;
-    type SearchPostProcessor: for<'a> SearchPostProcess<Self::DeleteSearchAccessor<'a>>
-        + Send
-        + Sync;
+    type SearchPostProcessor: for<'a> SearchPostProcess<Self::DeleteSearchAccessor<'a>> + Send;
     type SearchStrategy: for<'a> SearchStrategy<
             'a,
             Provider,

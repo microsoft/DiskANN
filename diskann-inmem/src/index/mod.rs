@@ -229,7 +229,7 @@ where
             self.index.local_counters(),
         )?;
 
-        let fut = <_ as diskann::graph::search::Search>::search(
+        let fut = <_ as diskann::graph::search::Search<u32>>::search(
             params,
             &mut accessor,
             Translate(self.index.mapping()),
@@ -392,7 +392,7 @@ where
     where
         O: diskann::graph::SearchOutputBuffer<M> + Send,
     {
-        let fut = <_ as diskann::graph::search::FilteredSearch>::filtered_search(
+        let fut = <_ as diskann::graph::search::FilteredSearch<u32>>::filtered_search(
             params,
             &mut self.accessor,
             self.translate,
@@ -411,7 +411,7 @@ where
     where
         O: diskann::graph::SearchOutputBuffer<M> + Send,
     {
-        let fut = <_ as diskann::graph::search::FilteredSearch>::filtered_search(
+        let fut = <_ as diskann::graph::search::FilteredSearch<u32>>::filtered_search(
             params,
             &mut self.accessor,
             self.translate,

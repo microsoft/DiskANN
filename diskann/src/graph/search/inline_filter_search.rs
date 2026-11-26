@@ -101,7 +101,10 @@ impl InlineFilterSearch {
     }
 }
 
-impl FilteredSearch for InlineFilterSearch {
+impl<I> FilteredSearch<I> for InlineFilterSearch
+where
+    I: VectorId,
+{
     type Output = SearchStats;
 
     fn filtered_search<A, O, PP, OB>(
@@ -111,9 +114,9 @@ impl FilteredSearch for InlineFilterSearch {
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<Self::Output>>
     where
-        A: FilteredAccessor,
+        A: FilteredAccessor<Id = I>,
         O: Send,
-        PP: SearchPostProcess<A, O> + Send + Sync,
+        PP: SearchPostProcess<A, O> + Send,
         OB: SearchOutputBuffer<O> + Send + ?Sized,
     {
         async move {

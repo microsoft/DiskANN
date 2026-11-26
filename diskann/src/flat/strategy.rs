@@ -9,7 +9,7 @@ use std::fmt::Debug;
 
 use diskann_utils::future::SendFuture;
 
-use crate::{error::ToRanked, provider::HasId};
+use crate::{HasId, error::ToRanked};
 
 /// A complete, unordered scan of a candidate set.
 ///

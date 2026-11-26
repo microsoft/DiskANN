@@ -24,6 +24,7 @@ use crate::{
         search_output_buffer::SearchOutputBuffer,
     },
     neighbor::Neighbor,
+    utils::VectorId,
 };
 
 /// Error type for [`Range`] parameter validation.
@@ -295,7 +296,10 @@ impl RangeBuilder {
     }
 }
 
-impl Search for Range {
+impl<I> Search<I> for Range
+where
+    I: VectorId,
+{
     type Output = SearchStats;
 
     fn search<A, O, PP, OB>(
@@ -305,9 +309,9 @@ impl Search for Range {
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<Self::Output>>
     where
-        A: SearchAccessor,
+        A: SearchAccessor<Id = I>,
         O: Send,
-        PP: glue::SearchPostProcess<A, O> + Send + Sync,
+        PP: glue::SearchPostProcess<A, O> + Send,
         OB: SearchOutputBuffer<O> + Send + ?Sized,
     {
         async move {

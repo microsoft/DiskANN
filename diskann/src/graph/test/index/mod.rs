@@ -28,9 +28,9 @@ use crate::{
         self, AdjacencyList, SearchOutputBuffer, adjacencylist::Empty, algorithms, ext::labeled,
         glue, search::PagedSearch, test::synthetic, workingset,
     },
+    id::has_id,
     internal::counter::{Counter, LocalCounter},
     neighbor::Neighbor,
-    provider,
     utils::{Bool, VectorRepr},
 };
 
@@ -186,14 +186,14 @@ convert_error!(ConfigError);
 /// The following is a list of properties this provider seeks to maintain:
 ///
 /// * Start points provided at construction time are immutable and cannot be deleted or modified.
-/// * All calls to [`provider::NeighborAccessorMut::set_neighbors`] do not contain duplicates.
-/// * All calls to [`provider::NeighborAccessorMut::append_vector`] do not contain duplicates
+/// * All calls to [`NeighborAccessorMut::set_neighbors`] do not contain duplicates.
+/// * All calls to [`NeighborAccessorMut::append_vector`] do not contain duplicates
 ///   and are disjoint with the current adjacency list.
 /// * Vectors can be marked as deleted, removing access to their data but keeping access to
 ///   their adjacency lists.
 /// * Scoped operatios to protect IDs during critical sections.
 /// * Attempting to retrieve and ID that is not present is an error.
-/// * All attempts to mutate the graph via [`provider::NeighborAccessorMut`] must be preceeded
+/// * All attempts to mutate the graph via [`NeighborAccessorMut`] must be preceeded
 ///   by [`provider::SetElement`].
 ///
 /// This provider allows for some amount of concurrent access, but is not optimized for performance.
@@ -622,7 +622,7 @@ impl Index {
         knn: Option<NonZeroUsize>,
     ) -> ANNResult<(Vec<Neighbor<u32>>, P::Output)>
     where
-        P: graph::Search,
+        P: graph::Search<u32>,
     {
         let mut accessor = self.search_accessor(vector)?;
         let mut buf = MaybeCapped::new(knn);
@@ -650,7 +650,7 @@ impl Index {
         knn: Option<NonZeroUsize>,
     ) -> ANNResult<(Vec<Neighbor<u32>>, P::Output)>
     where
-        P: graph::FilteredSearch,
+        P: graph::FilteredSearch<u32>,
     {
         let mut accessor = labeled::FilteredAccessor::new(self.search_accessor(vector)?, predicate);
 
@@ -989,7 +989,7 @@ struct Insert<'a> {
     prune: PruneAccessor<'a>,
 }
 
-provider::has_id!(Insert<'_> = u32);
+has_id!(Insert<'_> = u32);
 
 impl<'a> algorithms::insert::Access for Insert<'a> {
     type SearchAccessor<'b>
@@ -1021,7 +1021,7 @@ struct BatchInsert {
     options: Options,
 }
 
-provider::has_id!(BatchInsert = u32);
+has_id!(BatchInsert = u32);
 
 impl algorithms::batch::insert::Standard for BatchInsert {
     type InsertAccessor<'a> = Insert<'a>;
@@ -1061,7 +1061,7 @@ struct Consolidate<'a> {
     prune: PruneAccessor<'a>,
 }
 
-provider::has_id!(Consolidate<'_> = u32);
+has_id!(Consolidate<'_> = u32);
 
 impl<'a> algorithms::consolidate::Access for Consolidate<'a> {
     type PruneAccessor<'b>
@@ -1105,7 +1105,7 @@ impl<'a> InplaceDelete<'a> {
     }
 }
 
-provider::has_id!(InplaceDelete<'_> = u32);
+has_id!(InplaceDelete<'_> = u32);
 
 impl<'a> algorithms::inplace_delete::Access for InplaceDelete<'a> {
     type PruneAccessor<'x>
@@ -1135,7 +1135,7 @@ impl<'a> TopKInplaceDelete<'a> {
     }
 }
 
-provider::has_id!(TopKInplaceDelete<'_> = u32);
+has_id!(TopKInplaceDelete<'_> = u32);
 
 impl<'a> algorithms::inplace_delete::Access for TopKInplaceDelete<'a> {
     type PruneAccessor<'x>
@@ -1174,7 +1174,7 @@ struct BatchInplaceDelete {
     options: Options,
 }
 
-provider::has_id!(BatchInplaceDelete = u32);
+has_id!(BatchInplaceDelete = u32);
 
 impl algorithms::batch::inplace_delete::Standard for BatchInplaceDelete {
     type PruneAccessor<'a> = PruneAccessor<'a>;
@@ -1452,9 +1452,9 @@ impl<'a> NeighborAccessor<'a> {
     }
 }
 
-provider::has_id!(NeighborAccessor<'_> = u32);
+has_id!(NeighborAccessor<'_> = u32);
 
-impl provider::NeighborAccessor for NeighborAccessor<'_> {
+impl glue::NeighborAccessor for NeighborAccessor<'_> {
     async fn get_neighbors(
         &mut self,
         id: Self::Id,
@@ -1465,7 +1465,7 @@ impl provider::NeighborAccessor for NeighborAccessor<'_> {
     }
 }
 
-impl provider::NeighborAccessorMut for NeighborAccessor<'_> {
+impl glue::NeighborAccessorMut for NeighborAccessor<'_> {
     async fn set_neighbors(&mut self, id: Self::Id, neighbors: &[Self::Id]) -> ANNResult<()> {
         if neighbors.len() > self.provider.max_degree() {
             return Err(message!(
@@ -1558,7 +1558,7 @@ impl<'a> PruneAccessor<'a> {
     }
 }
 
-provider::has_id!(PruneAccessor<'_> = u32);
+has_id!(PruneAccessor<'_> = u32);
 
 impl glue::PruneAccessor for PruneAccessor<'_> {
     type ElementRef<'a> = &'a [f32];
@@ -1659,7 +1659,7 @@ pub struct DimMismatch {
 
 convert_error!(DimMismatch);
 
-provider::has_id!(Accessor<'_> = u32);
+has_id!(Accessor<'_> = u32);
 
 impl glue::SearchAccessor for Accessor<'_> {
     fn starting_points(&self) -> impl Future<Output = ANNResult<Vec<u32>>> + Send {
@@ -2049,7 +2049,7 @@ mod tests {
 
     #[test]
     fn test_neighbor_accessor() {
-        use provider::NeighborAccessor;
+        use glue::NeighborAccessor;
 
         let provider = create_test_provider();
         let mut accessor = provider.neighbors();
@@ -2084,7 +2084,7 @@ mod tests {
 
     #[test]
     fn test_set_neighbors() {
-        use provider::{NeighborAccessor, NeighborAccessorMut};
+        use crate::graph::glue::{NeighborAccessor, NeighborAccessorMut};
 
         let provider = create_test_provider();
         let mut accessor = provider.neighbors();
@@ -2166,7 +2166,7 @@ mod tests {
 
     #[test]
     fn test_append_vector() {
-        use provider::{NeighborAccessor, NeighborAccessorMut};
+        use crate::graph::glue::{NeighborAccessor, NeighborAccessorMut};
 
         let provider = create_test_provider();
         let mut accessor = provider.neighbors();

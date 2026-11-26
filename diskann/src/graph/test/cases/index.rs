@@ -7,8 +7,7 @@ use std::num::NonZeroUsize;
 
 use super::helpers::{generate_2d_square_adjacency_list, setup_2d_square};
 use crate::{
-    graph::{self, AdjacencyList, algorithms, test},
-    provider::NeighborAccessor,
+    graph::{self, AdjacencyList, algorithms, glue::NeighborAccessor, test},
     test::cmp::assert_eq_verbose,
 };
 

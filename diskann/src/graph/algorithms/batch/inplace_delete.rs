@@ -10,14 +10,13 @@ use hashbrown::{HashMap, HashSet};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::{
-    ANNError, ANNResult,
+    ANNError, ANNResult, HasId,
     graph::{
         Config, algorithms,
         algorithms::inplace_delete::{self, OneHop, TwoHopAndOneHop, VisitedAndTopK},
-        glue::PruneAccessor,
+        glue::{NeighborAccessorMut, PruneAccessor},
         internal::BackedgeBuffer,
     },
-    provider::{HasId, NeighborAccessorMut},
     utils::{VectorId, balancer::Balancer},
 };
 

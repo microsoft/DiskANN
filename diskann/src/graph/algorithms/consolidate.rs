@@ -12,14 +12,16 @@ use std::{borrow::BorrowMut, fmt::Debug};
 use diskann_utils::future::SendFuture;
 use hashbrown::HashSet;
 
-use crate::graph::{
-    AdjacencyList, Config, adjacencylist::Empty, algorithms, glue::PruneAccessor, internal::prune,
-};
-
 use crate::{
-    ANNResult,
+    ANNResult, HasId,
     error::ErrorExt,
-    provider::{HasId, NeighborAccessorMut},
+    graph::{
+        AdjacencyList, Config,
+        adjacencylist::Empty,
+        algorithms,
+        glue::{NeighborAccessorMut, PruneAccessor},
+        internal::prune,
+    },
     utils::{Bool, VectorId},
 };
 

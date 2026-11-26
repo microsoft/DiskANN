@@ -1365,7 +1365,8 @@ where
                     &mut accessor,
                     post_process,
                     &mut result_output_buffer,
-                ).await?
+                )
+                .await?
             }
             SearchMode::InlineFilter { filter, adaptive_l } => {
                 // Strategy is passed by value into `filter_search` so that the
@@ -1407,7 +1408,8 @@ where
                     &mut accessor,
                     processor,
                     &mut result_output_buffer,
-                ).await?
+                )
+                .await?
             }
         };
         query_stats.total_comparisons = stats.cmps;
@@ -2122,14 +2124,14 @@ mod disk_provider_tests {
         let mut accessor =
             DiskAccessor::new(&search_engine.provider, query_vector, &strategy).unwrap();
         let post_processor = accessor.default_post_processor();
-            graph::search::SearchFor::search_for(
-                recorded_search,
-                &mut accessor,
-                post_processor,
-                &mut result_output_buffer,
-            )
-            .await
-            .unwrap();
+        graph::search::SearchFor::search_for(
+            recorded_search,
+            &mut accessor,
+            post_processor,
+            &mut result_output_buffer,
+        )
+        .await
+        .unwrap();
 
         let ids = search_record
             .visited
@@ -2986,14 +2988,14 @@ mod disk_provider_tests {
         let mut accessor =
             DiskAccessor::new(&search_engine.provider, query_vector, &strategy).unwrap();
         let post_processor = accessor.default_post_processor();
-            graph::search::SearchFor::search_for(
-                recorded_search,
-                &mut accessor,
-                post_processor,
-                &mut result_output_buffer,
-            )
-            .await
-            .unwrap();
+        graph::search::SearchFor::search_for(
+            recorded_search,
+            &mut accessor,
+            post_processor,
+            &mut result_output_buffer,
+        )
+        .await
+        .unwrap();
 
         let visited_ids = search_record
             .visited

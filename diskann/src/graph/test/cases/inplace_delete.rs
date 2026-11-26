@@ -7,15 +7,11 @@ use std::{iter, num::NonZeroUsize, sync::Arc};
 
 use diskann_vector::distance::Metric;
 
-use crate::{
-    graph::{
-        self, AdjacencyList,
-        algorithms::inplace_delete::{
-            InplaceDeleteMethod, OneHop, TwoHopAndOneHop, VisitedAndTopK,
-        },
-        test::{self, index::Index},
-    },
-    provider::NeighborAccessor,
+use crate::graph::{
+    self, AdjacencyList,
+    algorithms::inplace_delete::{InplaceDeleteMethod, OneHop, TwoHopAndOneHop, VisitedAndTopK},
+    glue::NeighborAccessor,
+    test::{self, index::Index},
 };
 
 use super::helpers::{

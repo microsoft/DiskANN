@@ -265,7 +265,7 @@ where
 /// Trait for providing attribute values for vector IDs.
 /// Implementations of this trait can be used with diverse search to retrieve
 /// attribute values for vectors during search operations.
-pub trait AttributeValueProvider: crate::provider::HasId + Send + Sync + std::fmt::Debug {
+pub trait AttributeValueProvider: crate::HasId + Send + Sync + std::fmt::Debug {
     type Value: Attribute;
 
     /// Get the attribute value for a given vector ID.
@@ -304,7 +304,7 @@ mod diverse_priority_queue_test {
         }
     }
 
-    impl crate::provider::HasId for TestAttributeValueProvider {
+    impl crate::HasId for TestAttributeValueProvider {
         type Id = u32;
     }
 
