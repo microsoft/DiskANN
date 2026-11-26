@@ -14,10 +14,7 @@ pub(crate) mod test_utils;
 pub mod error;
 
 pub mod build;
-pub use build::{
-    DiskIndexBuildParameters, QuantizationType, SphericalBits, disk_index_build_parameter,
-    filter_parameter,
-};
+pub use build::{QuantizationType, SphericalBits, disk_index_build_parameter, filter_parameter};
 
 pub mod data_model;
 pub mod search;

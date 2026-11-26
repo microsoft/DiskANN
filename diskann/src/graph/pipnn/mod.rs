@@ -27,7 +27,7 @@
 //!
 //! let points: Vec<f32> = (0..64).map(|i| i as f32).collect();
 //! let data = rowmajor::Ref::try_from_data(points.as_slice(), 32, 2).unwrap();
-//! let rows = Rows::new(data, Metric::L2).unwrap();
+//! let rows = Rows::new(data, Metric::L2);
 //! let config = pipnn::Config::builder(NonZeroUsize::new(8).unwrap())
 //!     .build()
 //!     .unwrap();
@@ -747,7 +747,7 @@ mod construction_tests {
         views::rowmajor::{self, Matrix},
     };
     use diskann_vector::DistanceFunction;
-    use diskann_vector::distance::Metric;
+    use diskann_vector::distance::{DistanceProvider, Metric};
     use half::f16;
     use std::fs::File;
     use test_support::nz;
@@ -851,7 +851,7 @@ mod construction_tests {
         let point_count = data.nrows();
         let dimensions = data.ncols();
         let runtime = current_thread_runtime();
-        let distance = <f32 as Element>::distance(metric, dimensions);
+        let distance = f32::distance_comparer(metric, Some(dimensions));
         let mut mismatches = 0;
         let mut example = String::new();
 
@@ -902,7 +902,7 @@ mod construction_tests {
     ) {
         let config = sift_pipnn_config();
 
-        let adjacency = build_graph(&Rows::new(build_data, metric).unwrap(), &config).unwrap();
+        let adjacency = build_graph(&Rows::new(build_data, metric), &config).unwrap();
 
         let index = searchable_index(reference, sift_graph(metric), metric, adjacency);
         assert_exact_top_10(&index, reference, metric, case);
@@ -1024,7 +1024,7 @@ mod construction_tests {
             (2, 0, DatasetError::NoDimensions),
         ] {
             let data = rowmajor::Ref::try_from_data(&[] as &[f32], rows, columns).unwrap();
-            let rows = Rows::new(data, Metric::L2).unwrap();
+            let rows = Rows::new(data, Metric::L2);
 
             let error = build_graph(&rows, &config).unwrap_err();
 

@@ -165,7 +165,7 @@ mod tests {
         let dimensions = 1;
         let data = rowmajor::Ref::try_from_data(x, x.len(), dimensions).unwrap();
         let candidates = build_leaf_candidates(
-            Rows::new(data, Metric::L2).unwrap().backend().dataset(),
+            Rows::new(data, Metric::L2).backend().dataset(),
             &*kernels::select(Metric::L2),
             leaves,
             k,
@@ -279,7 +279,7 @@ mod tests {
         );
 
         let actual = build_leaf_candidates(
-            Rows::new(data, Metric::L2).unwrap().backend().dataset(),
+            Rows::new(data, Metric::L2).backend().dataset(),
             &*kernels::select(Metric::L2),
             leaves,
             k,
@@ -355,7 +355,7 @@ mod tests {
             .collect();
 
         add_leaf_candidates(
-            Rows::new(data, Metric::L2).unwrap().backend().dataset(),
+            Rows::new(data, Metric::L2).backend().dataset(),
             &*kernels::select(Metric::L2),
             leaf,
             k,

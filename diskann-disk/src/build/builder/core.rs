@@ -13,20 +13,24 @@ use byteorder::{LittleEndian, ReadBytesExt};
 use diskann::ANNResult;
 use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::{
-    model::{GRAPH_SLACK_FACTOR, IndexConfiguration, MAX_PQ_TRAINING_SET_SIZE},
+    model::{GRAPH_SLACK_FACTOR, MAX_PQ_TRAINING_SET_SIZE},
     utils::{
         READ_WRITE_BLOCK_SIZE, RayonThreadPoolRef, SampleVectorReader, SamplingDensity,
         load_metadata_from_file,
     },
 };
 use diskann_quantization::spherical::DataRef;
-use diskann_utils::{io::read_bin, views::rowmajor::Matrix};
+use diskann_utils::{
+    io::{Metadata, read_bin},
+    views::rowmajor::Matrix,
+};
 use rand::seq::SliceRandom;
 use tracing::info;
 
 use crate::{
-    DiskIndexBuildParameters, QuantizationType, SphericalBits,
+    QuantizationType, SphericalBits,
     build::builder::{backend::Backend, build::build_inmem_index},
+    build::configuration::{CommonBuildConfig, VamanaBuildConfig},
     disk_index_build_parameter::BYTES_IN_GB,
     storage::DiskIndexWriter,
     utils::instrumentation::{BuildMergedVamanaIndexCheckpoint, PerfLogger},
@@ -73,8 +77,7 @@ where
     Data: GraphDataType<VectorIdType = u32>,
     StorageProvider: StorageReadProvider + StorageWriteProvider,
 {
-    index_configuration: &'a IndexConfiguration,
-    disk_build_param: &'a DiskIndexBuildParameters,
+    config: &'a CommonBuildConfig,
     index_writer: &'a DiskIndexWriter,
     backend: &'a Backend<Data::VectorDataType>,
     storage_provider: &'a StorageProvider,
@@ -88,38 +91,38 @@ where
     StorageProvider: StorageReadProvider<Reader: Send> + StorageWriteProvider + 'static,
 {
     pub(super) fn new(
-        index_configuration: &'a IndexConfiguration,
-        disk_build_param: &'a DiskIndexBuildParameters,
+        config: &'a CommonBuildConfig,
         index_writer: &'a DiskIndexWriter,
         backend: &'a Backend<Data::VectorDataType>,
         storage_provider: &'a StorageProvider,
     ) -> Self {
         Self {
-            index_configuration,
-            disk_build_param,
+            config,
             index_writer,
             backend,
             storage_provider,
-            rng: diskann_providers::utils::create_rnd_from_optional_seed(
-                index_configuration.random_seed,
-            ),
+            rng: diskann_providers::utils::create_rnd_from_optional_seed(config.seed),
             _phantom: PhantomData,
         }
     }
 
-    pub(super) async fn build(mut self, pool: RayonThreadPoolRef<'_>) -> ANNResult<()> {
+    pub(super) async fn build(
+        mut self,
+        vamana: &VamanaBuildConfig,
+        metadata: Metadata,
+        pool: RayonThreadPoolRef<'_>,
+    ) -> ANNResult<()> {
         let mut logger = PerfLogger::new_disk_index_build_logger();
         let dataset_file = self.index_writer.get_dataset_file();
         let merged_index_prefix = self.index_writer.get_merged_index_prefix();
         let output_vamana = self.index_writer.get_mem_index_file();
-        let max_degree = self.index_configuration.config.pruned_degree_u32().get();
+        let max_degree = vamana.graph.pruned_degree_u32().get();
 
-        let num_parts =
-            self.partition_data(&dataset_file, &merged_index_prefix, max_degree, pool)?;
+        let num_parts = self.partition_data(vamana, metadata, &merged_index_prefix, pool)?;
         logger.log_checkpoint(BuildMergedVamanaIndexCheckpoint::PartitionData);
 
         for shard_id in 0..num_parts {
-            self.build_shard_index(&dataset_file, &merged_index_prefix, shard_id)
+            self.build_shard_index(vamana, &dataset_file, &merged_index_prefix, shard_id)
                 .await?;
         }
         logger.log_checkpoint(BuildMergedVamanaIndexCheckpoint::BuildIndicesOnShards);
@@ -128,30 +131,6 @@ where
         logger.log_checkpoint(BuildMergedVamanaIndexCheckpoint::MergeIndices);
 
         Ok(())
-    }
-
-    fn create_shard_index_config(&self, shard_base_file: &str) -> ANNResult<IndexConfiguration> {
-        let base_config = self.index_configuration;
-        let storage_provider = self.storage_provider;
-
-        let search_list_size = base_config.config.l_build().get();
-        let pruned_degree = base_config.config.pruned_degree().get();
-
-        let low_degree_params = diskann::graph::config::Builder::new(
-            2 * pruned_degree / 3,
-            diskann::graph::config::MaxDegree::default_slack(),
-            search_list_size,
-            base_config.dist_metric.into(),
-        )
-        .build()?;
-
-        let metadata = load_metadata_from_file(storage_provider, shard_base_file)?;
-
-        let mut index_config = (*base_config).clone();
-        index_config.max_points = metadata.npoints();
-        index_config.config = low_degree_params;
-
-        Ok(index_config)
     }
 
     fn retrieve_shard_data_from_ids<T>(
@@ -210,6 +189,7 @@ where
 
     async fn build_shard_index(
         &self,
+        vamana: &VamanaBuildConfig,
         dataset_file: &str,
         merged_index_prefix: &str,
         shard_id: usize,
@@ -225,14 +205,28 @@ where
         )?;
         info!("Generated data for shard {}", shard_id);
 
-        let index_config = self.create_shard_index_config(&shard_base_file)?;
+        let graph = diskann::graph::config::Builder::new(
+            2 * vamana.graph.pruned_degree().get() / 3,
+            diskann::graph::config::MaxDegree::default_slack(),
+            vamana.graph.l_build().get(),
+            self.config.metric.into(),
+        )
+        .build()?;
+        let metadata = load_metadata_from_file(self.storage_provider, &shard_base_file)?;
+        let provider = super::inmem_builder::Config::new(
+            metadata.npoints(),
+            self.config.num_threads,
+            vamana.prefetch_lookahead,
+        )?;
         let shard_index_file = DiskIndexWriter::get_merged_index_subshard_mem_index_file(
             merged_index_prefix,
             shard_id,
         );
 
         build_inmem_index::<Data::VectorDataType, _>(
-            index_config,
+            graph,
+            provider,
+            self.config.seed,
             self.backend,
             &shard_base_file,
             &shard_index_file,
@@ -438,17 +432,18 @@ where
 
     fn partition_data(
         &mut self,
-        dataset_file: &str,
+        vamana: &VamanaBuildConfig,
+        metadata: Metadata,
         merged_index_prefix: &str,
-        max_degree: u32,
         pool: RayonThreadPoolRef<'_>,
     ) -> ANNResult<usize> {
-        let sampling_rate = MAX_PQ_TRAINING_SET_SIZE / self.index_configuration.max_points as f64;
-        let ram_budget_in_bytes = self.disk_build_param.build_memory_limit().in_bytes() as f64;
+        let sampling_rate = MAX_PQ_TRAINING_SET_SIZE / metadata.npoints() as f64;
+        let ram_budget_in_bytes = vamana.memory_budget.in_bytes() as f64;
+        let shard_degree = 2 * vamana.graph.pruned_degree_u32().get() / 3;
 
         partition_with_ram_budget::<Data::VectorDataType, _, _>(
-            dataset_file,
-            self.index_configuration.dim,
+            &self.index_writer.get_dataset_file(),
+            metadata.ndims(),
             sampling_rate,
             ram_budget_in_bytes,
             PARTITION_ASSIGNMENTS_PER_VECTOR,
@@ -458,13 +453,12 @@ where
             pool,
             |num_points, dim| {
                 let datasize = std::mem::size_of::<Data::VectorDataType>() as u64;
-                let graph_degree = 2 * max_degree / 3;
                 estimate_build_index_ram_usage(
                     num_points,
                     dim,
                     datasize,
-                    graph_degree as u64,
-                    self.disk_build_param.build_quantization(),
+                    u64::from(shard_degree),
+                    &vamana.build_quantization,
                 )
             },
         )
@@ -504,16 +498,16 @@ pub(crate) enum IndexBuildStrategy {
 }
 
 pub(crate) fn determine_build_strategy<Data: GraphDataType>(
-    index_configuration: &IndexConfiguration,
-    index_build_ram_limit_in_bytes: f64,
-    build_quantization_type: &QuantizationType,
+    metadata: Metadata,
+    vamana: &VamanaBuildConfig,
 ) -> IndexBuildStrategy {
+    let index_build_ram_limit_in_bytes = vamana.memory_budget.in_bytes() as f64;
     let estimated_index_ram_in_bytes = estimate_build_index_ram_usage(
-        index_configuration.max_points as u64,
-        index_configuration.dim as u64,
+        metadata.npoints() as u64,
+        metadata.ndims() as u64,
         mem::size_of::<Data::VectorDataType>() as u64,
-        index_configuration.config.max_degree().get() as u64,
-        build_quantization_type,
+        vamana.graph.max_degree().get() as u64,
+        &vamana.build_quantization,
     );
 
     info!(
@@ -546,7 +540,7 @@ pub(crate) mod disk_index_builder_tests {
     use diskann::{
         ANNResult,
         graph::config,
-        utils::{IntoUsize, ONE, VectorRepr},
+        utils::{IntoUsize, VectorRepr},
     };
     use diskann_providers::storage::VirtualStorageProvider;
     use diskann_providers::storage::{
@@ -563,9 +557,12 @@ pub(crate) mod disk_index_builder_tests {
 
     use super::*;
     use crate::{
-        build::builder::{backend::BuildElement, build::DiskIndexBuilder},
+        build::{
+            builder::{backend::BuildElement, build::DiskIndexBuilder},
+            configuration::{DiskIndexBuildConfig, VamanaBuildConfig},
+        },
         data_model::{CachingStrategy, GraphHeader},
-        disk_index_build_parameter::{DiskIndexBuildParameters, MemoryBudget, NumPQChunks},
+        disk_index_build_parameter::{MemoryBudget, NumPQChunks},
         search::provider::{
             aligned_file_reader::VirtualAlignedReaderFactory, disk_provider::DiskIndexSearcher,
             disk_vertex_provider_factory::DiskVertexProviderFactory,
@@ -667,17 +664,6 @@ pub(crate) mod disk_index_builder_tests {
             T: GraphDataType<VectorIdType = u32, VectorDataType: BuildElement>,
             StorageProvider::Reader: Send,
         {
-            // Create disk index build parameters
-            let mut disk_index_build_parameters = DiskIndexBuildParameters::new(
-                MemoryBudget::try_from_gb(self.params.index_build_ram_gb)?,
-                self.params.build_quantization_type,
-                NumPQChunks::new_with(self.params.num_pq_chunks, self.params.full_dim)?,
-            );
-            if let Some(chunk_vector_count) = self.params.data_compression_chunk_vector_count {
-                disk_index_build_parameters = disk_index_build_parameters
-                    .with_data_compression_chunk_vector_count(chunk_vector_count);
-            }
-
             let config = config::Builder::new_with(
                 self.params.max_degree.into_usize(),
                 config::MaxDegree::default_slack(),
@@ -701,15 +687,21 @@ pub(crate) mod disk_index_builder_tests {
                 metadata.ndims(),
             );
 
-            let config = IndexConfiguration::new(
+            let mut config = DiskIndexBuildConfig::new(
                 self.params.metric,
-                self.params.dim,
-                metadata.npoints(),
-                ONE,
                 self.params.num_threads,
-                config,
+                NumPQChunks::new_with(self.params.num_pq_chunks, self.params.full_dim)?,
+                VamanaBuildConfig {
+                    graph: config,
+                    memory_budget: MemoryBudget::try_from_gb(self.params.index_build_ram_gb)?,
+                    build_quantization: self.params.build_quantization_type,
+                    prefetch_lookahead: None,
+                },
             )
-            .with_pseudo_rng_from_seed(100);
+            .with_seed(100);
+            if let Some(count) = self.params.data_compression_chunk_vector_count {
+                config = config.with_data_compression_chunk_vector_count(count);
+            }
 
             let disk_index_writer = DiskIndexWriter::new(
                 self.params.data_path.clone(),
@@ -720,10 +712,9 @@ pub(crate) mod disk_index_builder_tests {
 
             let mut disk_index = DiskIndexBuilder::<T, _>::new(
                 self.storage_provider.as_ref(),
-                disk_index_build_parameters,
                 config,
                 disk_index_writer,
-            )?;
+            );
 
             let timer = Instant::now();
             disk_index.build()?;
@@ -929,12 +920,12 @@ pub(crate) mod disk_index_builder_tests {
     ) {
         let storage_provider = VirtualStorageProvider::new_overlay(test_data_root());
         let disk_index_builder = create_disk_index_builder(
-            1000, // num_points
-            128,  // dim
-            128,  // num_pq_chunks
+            128, // dim
+            128, // num_pq_chunks
             &storage_provider,
             build_quantization_type,
-        );
+        )
+        .and_then(|mut builder| builder.build());
 
         let err = disk_index_builder.err().unwrap();
         assert!(err.to_string().contains(error_message));
@@ -1113,7 +1104,6 @@ pub(crate) mod disk_index_builder_tests {
     }
 
     fn create_disk_index_builder(
-        num_points: usize,
         dim: usize,
         num_of_pq_chunks: usize,
         storage_provider: &VirtualStorageProvider<OverlayFS>,
@@ -1124,34 +1114,34 @@ pub(crate) mod disk_index_builder_tests {
         let memory_budget = MemoryBudget::try_from_gb(1.0)?;
         let num_pq_chunks = NumPQChunks::new_with(num_of_pq_chunks, dim)?;
 
-        let build_parameters =
-            DiskIndexBuildParameters::new(memory_budget, build_quantization_type, num_pq_chunks);
-
-        let index_configuration = IndexConfiguration::new(
-            L2,
-            dim,
-            num_points,
-            ONE,
-            1,
+        let graph =
             config::Builder::new_with(4, config::MaxDegree::default_slack(), 50, L2.into(), |b| {
                 b.saturate_after_prune(true);
             })
-            .build()?,
+            .build()?;
+        let config = DiskIndexBuildConfig::new(
+            L2,
+            1,
+            num_pq_chunks,
+            VamanaBuildConfig {
+                graph,
+                memory_budget,
+                build_quantization: build_quantization_type,
+                prefetch_lookahead: None,
+            },
         );
 
         let disk_index_writer = DiskIndexWriter::new(
-            "data_path".to_string(),
+            TEST_DATA_FILE.to_string(),
             "index_path_prefix".to_string(),
             None,
             DEFAULT_DISK_SECTOR_LEN,
         )?;
 
-        DiskIndexBuilder::<GraphDataF32VectorUnitData, VirtualStorageProvider<OverlayFS>>::new(
-            storage_provider,
-            build_parameters,
-            index_configuration,
-            disk_index_writer,
-        )
+        Ok(DiskIndexBuilder::<
+            GraphDataF32VectorUnitData,
+            VirtualStorageProvider<OverlayFS>,
+        >::new(storage_provider, config, disk_index_writer))
     }
 }
 
