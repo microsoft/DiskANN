@@ -319,7 +319,7 @@ where
 
             let starting_l = self.starting_l().get();
             let max_degree = algorithms::max_degree_from_hint(accessor.max_degree_hint());
-            let mut scratch = algorithms::search_scratch_2(max_degree, starting_l, num_start_ids);
+            let mut scratch = algorithms::search_scratch(max_degree, starting_l, num_start_ids);
 
             let initial_stats = algorithms::search(
                 accessor,

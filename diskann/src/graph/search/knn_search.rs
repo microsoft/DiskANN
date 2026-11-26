@@ -166,7 +166,7 @@ where
             let num_start_ids = accessor.num_starting_points().await?;
             let max_degree = algorithms::max_degree_from_hint(accessor.max_degree_hint());
             let mut scratch =
-                algorithms::search_scratch_2(max_degree, self.l_value.get(), num_start_ids);
+                algorithms::search_scratch(max_degree, self.l_value.get(), num_start_ids);
 
             let stats = algorithms::search(
                 accessor,
@@ -237,7 +237,7 @@ where
             let num_start_ids = accessor.num_starting_points().await?;
             let max_degree = algorithms::max_degree_from_hint(accessor.max_degree_hint());
             let mut scratch =
-                algorithms::search_scratch_2(max_degree, self.inner.l_value.get(), num_start_ids);
+                algorithms::search_scratch(max_degree, self.inner.l_value.get(), num_start_ids);
 
             let stats = algorithms::search(
                 accessor,

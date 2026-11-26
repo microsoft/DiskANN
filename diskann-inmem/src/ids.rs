@@ -228,13 +228,15 @@ mod tests {
         assert!(map.insert(100, 3).is_ok());
 
         assert_eq!(map.to_external(3), Some(100));
-        let entry = map.occupied_entry(100).unwrap();
-        assert_eq!(entry.external(), &100);
-        assert_eq!(entry.internal(), 3);
+        {
+            let entry = map.occupied_entry(100).unwrap();
+            assert_eq!(entry.external(), &100);
+            assert_eq!(entry.internal(), 3);
+        }
 
         // Unmapped ids return nothing.
         assert_eq!(map.to_external(4), None);
-        assert!(map.occupied_entry(100).is_none());
+        assert!(map.occupied_entry(101).is_none());
     }
 
     #[test]

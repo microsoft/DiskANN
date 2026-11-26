@@ -223,7 +223,7 @@ impl diskann::HasId for Search<'_> {
 
 impl glue::SearchAccessor for Search<'_> {
     fn starting_points(
-        &self,
+        &mut self,
     ) -> impl std::future::Future<Output = ANNResult<Vec<Self::Id>>> + Send {
         std::future::ready(Ok(self.start_points.iter().collect()))
     }
@@ -281,7 +281,9 @@ impl diskann::HasId for Filtered<'_> {
 }
 
 impl glue::FilteredAccessor for Filtered<'_> {
-    fn num_starting_points(&self) -> impl std::future::Future<Output = ANNResult<usize>> + Send {
+    fn num_starting_points(
+        &mut self,
+    ) -> impl std::future::Future<Output = ANNResult<usize>> + Send {
         std::future::ready(Ok(self.search.start_points.len()))
     }
 

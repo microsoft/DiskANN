@@ -397,7 +397,7 @@ impl VisitedAndTopK {
             let num_start_points = search_accessor.borrow_mut().num_starting_points().await?;
 
             let mut search_scratch =
-                algorithms::search_scratch(config, l_value.get(), num_start_points);
+                algorithms::search_scratch(config.max_degree(), l_value.get(), num_start_points);
 
             algorithms::search(
                 search_accessor.borrow_mut(),
@@ -632,37 +632,4 @@ where
     }
 
     Ok(())
-}
-
-//-------//
-// Batch //
-//-------//
-
-#[derive(Debug)]
-pub struct Delta<I> {
-    delta: HashMap<I, BackedgeBuffer<I>>,
-}
-
-impl<I> Delta<I> {
-    pub fn new() -> Self {
-        Self {
-            delta: HashMap::new(),
-        }
-    }
-
-    fn accumulate(&mut self, other: &HashMap<I, BackedgeBuffer<I>>)
-    where
-        I: VectorId,
-    {
-        for (src, dst) in other.iter() {
-            self.delta
-                .entry(*src)
-                .and_modify(|b| {
-                    for d in dst.iter() {
-                        b.push(*d);
-                    }
-                })
-                .or_insert_with(|| dst.clone());
-        }
-    }
 }

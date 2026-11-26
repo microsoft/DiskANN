@@ -82,6 +82,18 @@ impl<I> AdjacencyList<I> {
     pub fn swap_remove(&mut self, index: usize) -> I {
         self.edges.swap_remove(index)
     }
+
+    /// Swap the allocation in `self` with `raw`.
+    ///
+    /// After this call, `raw` will point to the vector in `self` and vice versa.
+    /// To maintain the uniqueness property of adjacency lists, `self` will be cleared
+    /// after the swap completes.
+    ///
+    /// This is useful to trade in and out allocated memory for memory buffering.
+    pub fn swap_with(&mut self, raw: &mut Vec<I>) {
+        std::mem::swap(&mut self.edges, raw);
+        self.clear();
+    }
 }
 
 impl<I> AdjacencyList<I>

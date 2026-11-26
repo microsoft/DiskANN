@@ -126,6 +126,7 @@ impl Tag {
     }
 
     /// Return `true` if `self` is in a state where it is legal to access tagged data.
+    #[cfg(any(test, feature = "quantization", feature = "integration-test"))]
     #[must_use = "this function has no side-effects"]
     pub(crate) fn can_read(self) -> bool {
         // Tags are split into `high` (readable) and `low` (non-readable) values so this

@@ -5,12 +5,14 @@
 
 use std::num::NonZeroUsize;
 
+#[cfg(feature = "diskann-builtins")]
+use diskann_utils::views::rowmajor;
+
 use diskann::{
     ANNError, ANNResult,
     graph::{SearchOutputBuffer, glue},
     neighbor::Neighbor,
 };
-use diskann_utils::views::rowmajor;
 
 use crate::{
     bitvector::BitVector,
@@ -31,6 +33,9 @@ mod algorithms;
 
 #[doc(hidden)]
 pub mod buildonly;
+
+#[cfg(feature = "diskann-builtins")]
+mod builtins;
 
 ///////////
 // Index //
@@ -78,13 +83,25 @@ where
         })
     }
 
+    /// Return a scoped version of `self` with read capabilities.
+    ///
+    /// The resulting [`Read`] can be used for multiple read operations (e.g. search) without
+    /// re-acquiring any epoch guards. However, it will prevent epoch advancement while alive,
+    /// so should be held for as short a duration as possible, or during periods where the
+    /// index it not under heavy mutation.
     pub fn read(&self) -> ANNResult<Read<'_, R, M>> {
-        let guard = repr::RepresentationImpl::read_guard(&self.representation)?;
+        let guard = repr::private::Representation::read_guard(&self.representation)?;
         Ok(Read { index: self, guard })
     }
 
+    /// Return a scoped version of `self` with write capabilities.
+    ///
+    /// The resulting [`Write`] can be used for multiple write operations (e.g. insert) without
+    /// re-acquiring any epoch guards. However, it will prevent epoch advancement while alive,
+    /// so should be held for as short a duration as possible, or during periods where the
+    /// index it not under deletion.
     pub fn write(&self) -> ANNResult<Write<'_, R, M>> {
-        let guard = repr::RepresentationImpl::write_guard(&self.representation)?;
+        let guard = repr::private::Representation::write_guard(&self.representation)?;
         Ok(Write {
             index: &self,
             guard,
@@ -103,7 +120,7 @@ where
 
     /// Advance the epoch - returning the number of reclaimed IDs, if any.
     pub fn reclaim(&self) -> Option<usize> {
-        repr::RepresentationImpl::reclaim(&self.representation)
+        repr::private::Representation::reclaim(&self.representation)
     }
 
     fn id_limit(&self) -> IdLimit {
@@ -131,11 +148,10 @@ where
 
         // An early return here will cause `entry` to be dropped, which will *not* cause
         // the delete to commit.
-        <R as repr::RepresentationImpl>::retire(&self.representation, internal)?;
+        repr::private::Representation::retire(&self.representation, internal)?;
 
         // Successfully retired the internal slot. We can safely release the ID mapping.
         entry.delete();
-
         Ok(internal)
     }
 
@@ -167,7 +183,7 @@ where
                 .map(|(v, id)| write.set(v, id.clone()))
                 .collect::<ANNResult<_>>()?;
 
-            let batch_insert = algorithms::BatchInsert::new(self.clone(), data, &ids)?;
+            let batch_insert = builtins::BatchInsert::new(self.clone(), data, &ids)?;
             diskann::graph::algorithms::batch::insert::standard(handle, ids, &self.graph, || {
                 batch_insert.clone()
             })
@@ -222,7 +238,7 @@ where
         R: repr::Search,
         O: SearchOutputBuffer<M> + Send + ?Sized,
     {
-        let mut accessor = repr::SearchImpl::search_accessor(
+        let mut accessor = repr::private::Search::search_accessor(
             &self.index.representation,
             query,
             Some(self.guard.share()),
@@ -264,7 +280,7 @@ where
         R: repr::Search,
         F: FnMut(&M) -> bool,
     {
-        let search = repr::SearchImpl::search_accessor(
+        let search = repr::private::Search::search_accessor(
             &self.index.representation,
             query,
             Some(self.guard.share()),
@@ -287,7 +303,7 @@ where
         R: repr::Representation,
         F: FnMut(&M) -> bool,
     {
-        let mut bitvec = BitVector::new(<R as repr::RepresentationImpl>::id_limit(
+        let mut bitvec = BitVector::new(repr::private::Representation::id_limit(
             &self.index.representation,
         ));
 
@@ -458,7 +474,7 @@ where
         //
         // The internal `Guard` is sufficient for local rollback, but not after
         // `set_element` returns.
-        let guard = repr::InsertImpl::set(&self.index.representation, vector)?;
+        let guard = repr::private::Insert::set(&self.index.representation, vector)?;
         let internal = <_ as repr::Guard>::id(&guard);
         self.index.mapping().insert(id.clone(), internal)?;
 
@@ -520,15 +536,17 @@ where
         R: repr::Insert,
         'a: 'q,
     {
-        Ok(algorithms::Insert::new(
-            repr::InsertImpl::insert_search_accessor(
+        let insert = algorithms::Insert::new(
+            repr::private::Insert::insert_search_accessor(
                 &self.index.representation,
                 vector,
                 Some(self.guard.read_guard().share()),
                 self.index.local_counters(),
             )?,
             self.prune_accessor()?,
-        ))
+        );
+
+        Ok(insert)
     }
 
     /// Construct an [`accessors::PruneAccessor`].
@@ -536,7 +554,10 @@ where
     where
         R: repr::Insert,
     {
-        repr::InsertImpl::prune_accessor(&self.index.representation, self.index.local_counters())
+        repr::private::Insert::prune_accessor(
+            &self.index.representation,
+            self.index.local_counters(),
+        )
     }
 }
 

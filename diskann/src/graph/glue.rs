@@ -118,7 +118,7 @@ use crate::{
 ///
 /// As such, data accessors used in conjunction with graph operations need to additionally
 /// provide an implementation of this trait.
-pub trait NeighborAccessor: HasId + Send + Sync {
+pub trait NeighborAccessor: HasId + Send {
     /// Get the neighbors for the node associated with `id`.
     ///
     /// Populate the neighbors into the `neighbors` out parameter.
@@ -196,10 +196,11 @@ pub trait NeighborAccessorMut: NeighborAccessor {
 /// points.
 ///
 /// See also: [`FilteredAccessor`].
-pub trait SearchAccessor: HasId + Send + Sync {
+pub trait SearchAccessor: HasId + Send {
     /// Return the starting points for this search.
-    fn starting_points(&self)
-    -> impl std::future::Future<Output = ANNResult<Vec<Self::Id>>> + Send;
+    fn starting_points(
+        &mut self,
+    ) -> impl std::future::Future<Output = ANNResult<Vec<Self::Id>>> + Send;
 
     /// Compute the distance to all start points, invoking `f` with all results.
     fn start_point_distances<F>(
@@ -312,7 +313,7 @@ pub trait SearchAccessor: HasId + Send + Sync {
     /// The closure returned by the provided implementation has complexity `O(1)` and takes
     /// `O(num_starting_points)` time to construct.
     fn is_not_start_point(
-        &self,
+        &mut self,
     ) -> impl std::future::Future<
         Output = ANNResult<impl Fn(Self::Id) -> bool + Send + Sync + 'static>,
     > + Send {
@@ -325,7 +326,9 @@ pub trait SearchAccessor: HasId + Send + Sync {
     }
 
     /// Return the number of starting points.
-    fn num_starting_points(&self) -> impl std::future::Future<Output = ANNResult<usize>> + Send {
+    fn num_starting_points(
+        &mut self,
+    ) -> impl std::future::Future<Output = ANNResult<usize>> + Send {
         self.starting_points()
             .map(|result: ANNResult<_>| result.map(|v: Vec<_>| v.len()))
     }
@@ -509,7 +512,7 @@ impl<T> From<Reject<T>> for Decision<T> {
 /// points.
 ///
 /// See also: [`SearchAccessor`].
-pub trait FilteredAccessor: HasId + Send + Sync {
+pub trait FilteredAccessor: HasId + Send {
     /// Compute the distance to all start points, invoking `f` with all results.
     fn start_point_distances<F>(
         &mut self,
@@ -577,7 +580,8 @@ pub trait FilteredAccessor: HasId + Send + Sync {
     }
 
     /// Return the number of starting points.
-    fn num_starting_points(&self) -> impl std::future::Future<Output = ANNResult<usize>> + Send;
+    fn num_starting_points(&mut self)
+    -> impl std::future::Future<Output = ANNResult<usize>> + Send;
 }
 
 /// A predicate evaluating `item`.

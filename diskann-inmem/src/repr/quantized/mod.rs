@@ -677,7 +677,7 @@ repr::internal::macros::set_guard!(
     for<'a> cons::Exclusive<intrusive::Exclusive<'a>, Option<simple::Exclusive<'a>>>
 );
 
-impl<'a> repr::SearchImpl<'a, &'a [f32]> for Quantized {
+impl<'a> repr::private::Search<'a, &'a [f32]> for Quantized {
     fn search_accessor(
         &'a self,
         query: &'a [f32],
@@ -692,7 +692,7 @@ impl repr::Search for Quantized {
     type Query<'a> = &'a [f32];
 }
 
-impl<'a> repr::InsertImpl<'a, &'a [f32]> for Quantized {
+impl<'a> repr::private::Insert<'a, &'a [f32]> for Quantized {
     type Guard = Guard<'a>;
 
     fn set(&self, v: &[f32]) -> ANNResult<Guard<'_>> {
@@ -1264,9 +1264,12 @@ mod tests {
 
         let quantized = config.build().unwrap();
 
-        assert_eq!(repr::RepresentationImpl::id_limit(&quantized), TEST_LIMIT);
         assert_eq!(
-            repr::RepresentationImpl::capacity(&quantized).value(),
+            repr::private::Representation::id_limit(&quantized),
+            TEST_LIMIT
+        );
+        assert_eq!(
+            repr::private::Representation::capacity(&quantized).value(),
             data.nrows()
         );
         assert_eq!(quantized.dim(), usize::from(grid.dim()));
@@ -1275,7 +1278,7 @@ mod tests {
 
         if fill {
             for (i, row) in data.rows().enumerate() {
-                let guard = repr::InsertImpl::set(&quantized, row).unwrap();
+                let guard = repr::private::Insert::set(&quantized, row).unwrap();
                 let id = repr::Guard::id(&guard);
 
                 reference.insert(LogicalId(i), SlotId(id), row);
@@ -1316,7 +1319,7 @@ mod tests {
         ctx: &dyn std::fmt::Display,
     ) {
         assert_eq!(
-            repr::RepresentationImpl::id_limit(quantized),
+            repr::private::Representation::id_limit(quantized),
             TEST_LIMIT,
             "{ctx}"
         );
@@ -1338,13 +1341,13 @@ mod tests {
         let i3_deleted = LogicalId(8);
         let s3_deleted = reference.slot_id_for(i3_deleted);
 
-        repr::RepresentationImpl::retire(quantized, s3_deleted.value()).unwrap();
+        repr::private::Representation::retire(quantized, s3_deleted.value()).unwrap();
         reference.delete(i3_deleted);
 
         let i4_deleted = LogicalId(4);
         let s4_deleted = reference.slot_id_for(i4_deleted);
 
-        repr::RepresentationImpl::retire(quantized, s4_deleted.value()).unwrap();
+        repr::private::Representation::retire(quantized, s4_deleted.value()).unwrap();
         reference.delete(i4_deleted);
 
         // Extract values.
@@ -1375,7 +1378,7 @@ mod tests {
         // Insert
         {
             let counters = Counters::new();
-            let mut sa = repr::InsertImpl::insert_search_accessor(
+            let mut sa = repr::private::Insert::insert_search_accessor(
                 quantized,
                 insert_vector.as_slice(),
                 None,
@@ -1401,7 +1404,7 @@ mod tests {
         // Search
         {
             let counters = Counters::new();
-            let mut sa = repr::SearchImpl::search_accessor(
+            let mut sa = repr::private::Search::search_accessor(
                 quantized,
                 query_vector.as_slice(),
                 None,
@@ -1465,7 +1468,8 @@ mod tests {
             ]);
 
             let counters = Counters::new();
-            let mut pa = repr::InsertImpl::prune_accessor(quantized, counters.local()).unwrap();
+            let mut pa =
+                repr::private::Insert::prune_accessor(quantized, counters.local()).unwrap();
 
             test_prune(
                 pa.get_prune(),
@@ -1626,7 +1630,7 @@ mod tests {
     fn test_set_capacity_exhaustion() {
         let (quantized, _) = make_test_repr(Metric::SquaredL2, Rerank::None, true);
 
-        let err = repr::InsertImpl::set(&quantized, &[1.0, 2.0]).unwrap_err();
+        let err = repr::private::Insert::set(&quantized, &[1.0, 2.0]).unwrap_err();
         assert_contains!(err.to_string(), "could not allocate a new slot",);
     }
 
@@ -1634,7 +1638,7 @@ mod tests {
     fn test_set_dim_mismatch() {
         let (quantized, _) = make_test_repr(Metric::SquaredL2, Rerank::None, false);
 
-        let err = repr::InsertImpl::set(&quantized, &[1.0, 2.0, 3.0]).unwrap_err();
+        let err = repr::private::Insert::set(&quantized, &[1.0, 2.0, 3.0]).unwrap_err();
         assert_contains!(
             err.to_string(),
             "vector dim 3 does not match quantizer dim 2",
@@ -1646,8 +1650,9 @@ mod tests {
         let (quantized, _) = make_test_repr(Metric::SquaredL2, Rerank::None, false);
 
         let counters = Counters::new();
-        let err = repr::SearchImpl::search_accessor(&quantized, &[1.0], None, counters.local())
-            .unwrap_err();
+        let err =
+            repr::private::Search::search_accessor(&quantized, &[1.0], None, counters.local())
+                .unwrap_err();
 
         assert_contains!(
             err.to_string(),
@@ -1667,14 +1672,15 @@ mod tests {
 
         // Free up one slot.
         let slot = quantized.start_point_ids.end();
-        repr::RepresentationImpl::retire(&quantized, slot).unwrap();
+        repr::private::Representation::retire(&quantized, slot).unwrap();
 
         // Insert something that is incompressible.
-        let err = repr::InsertImpl::set(&quantized, &[f32::INFINITY, f32::INFINITY]).unwrap_err();
+        let err =
+            repr::private::Insert::set(&quantized, &[f32::INFINITY, f32::INFINITY]).unwrap_err();
         assert_contains!(err.to_string(), "infinity");
 
         // If we insert again, this should succeed.
-        let guard = repr::InsertImpl::set(&quantized, &[1.0, 2.0]).unwrap();
+        let guard = repr::private::Insert::set(&quantized, &[1.0, 2.0]).unwrap();
         assert_eq!(repr::Guard::id(&guard), slot);
     }
 }

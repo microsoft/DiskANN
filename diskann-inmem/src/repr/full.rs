@@ -468,7 +468,7 @@ repr::internal::macros::set_guard!(
     for<'a> packed::Exclusive<'a>
 );
 
-impl<'a, T> repr::SearchImpl<'a, &'a [T]> for Full<T>
+impl<'a, T> repr::private::Search<'a, &'a [T]> for Full<T>
 where
     T: FullPrecision,
 {
@@ -489,7 +489,7 @@ where
     type Query<'a> = &'a [T];
 }
 
-impl<'a, T> repr::InsertImpl<'a, &'a [T]> for Full<T>
+impl<'a, T> repr::private::Insert<'a, &'a [T]> for Full<T>
 where
     T: FullPrecision,
 {
@@ -1086,9 +1086,9 @@ mod tests {
         assert_eq!(full.dim(), data.ncols());
         assert_eq!(full.bytes().value(), bytes);
         assert_eq!(full.metric(), metric);
-        assert_eq!(repr::RepresentationImpl::id_limit(&full), TEST_LIMIT,);
+        assert_eq!(repr::private::Representation::id_limit(&full), TEST_LIMIT,);
         assert_eq!(
-            repr::RepresentationImpl::capacity(&full),
+            repr::private::Representation::capacity(&full),
             Capacity::new(data.nrows())
         );
 
@@ -1108,7 +1108,7 @@ mod tests {
         }
 
         for (i, row) in data.rows().enumerate() {
-            let guard = repr::InsertImpl::set(&full, row).unwrap();
+            let guard = repr::private::Insert::set(&full, row).unwrap();
             let slot = repr::Guard::id(&guard);
             reference.insert(LogicalId(i), SlotId(slot), row);
             repr::Guard::publish(guard);
@@ -1133,7 +1133,7 @@ mod tests {
         ctx: &dyn std::fmt::Display,
     ) {
         assert_eq!(
-            repr::RepresentationImpl::id_limit(full),
+            repr::private::Representation::id_limit(full),
             TEST_LIMIT,
             "{ctx}"
         );
@@ -1154,13 +1154,13 @@ mod tests {
         let i3_deleted = LogicalId(8);
         let s3_deleted = reference.slot_id_for(i3_deleted);
 
-        repr::RepresentationImpl::retire(full, s3_deleted.value()).unwrap();
+        repr::private::Representation::retire(full, s3_deleted.value()).unwrap();
         reference.delete(i3_deleted);
 
         let i4_deleted = LogicalId(4);
         let s4_deleted = reference.slot_id_for(i4_deleted);
 
-        repr::RepresentationImpl::retire(full, s4_deleted.value()).unwrap();
+        repr::private::Representation::retire(full, s4_deleted.value()).unwrap();
         reference.delete(i4_deleted);
 
         // Extract values.
@@ -1180,8 +1180,8 @@ mod tests {
         // Search/Insert
         {
             let counters = Counters::new();
-            let guard = repr::RepresentationImpl::read_guard(full).unwrap();
-            let sa = repr::SearchImpl::search_accessor(
+            let guard = repr::private::Representation::read_guard(full).unwrap();
+            let sa = repr::private::Search::search_accessor(
                 full,
                 query.as_slice(),
                 Some(guard),
@@ -1225,7 +1225,7 @@ mod tests {
             ]);
 
             let counters = Counters::new();
-            let mut pa = repr::InsertImpl::prune_accessor(full, counters.local()).unwrap();
+            let mut pa = repr::private::Insert::prune_accessor(full, counters.local()).unwrap();
 
             repr::test::test_prune(
                 pa.get_prune(),
@@ -1266,7 +1266,7 @@ mod tests {
     fn test_guard_and_reuse() {
         let (full, mut reference) = make_test_repr(Metric::L2);
 
-        let err = repr::InsertImpl::set(&full, &[-10.0, -10.0])
+        let err = repr::private::Insert::set(&full, &[-10.0, -10.0])
             .unwrap_err()
             .to_string();
         assert_contains!(err, "could not allocate a new slot");
@@ -1285,12 +1285,12 @@ mod tests {
                 bytemuck::bytes_of(&[-1.0f32, 1.0])
             );
 
-            repr::RepresentationImpl::retire(&full, slot.value()).unwrap();
+            repr::private::Representation::retire(&full, slot.value()).unwrap();
             reference.delete(id);
 
             assert!(reader.read(slot.value()).is_none());
 
-            let err = repr::InsertImpl::set(&full, &[-2.0, 1.0])
+            let err = repr::private::Insert::set(&full, &[-2.0, 1.0])
                 .unwrap_err()
                 .to_string();
             assert_contains!(err, "could not allocate a new slot");
@@ -1302,7 +1302,7 @@ mod tests {
         //
         // Dropping a `guard` does not publish.
         {
-            let guard = repr::InsertImpl::set(&full, &[-10.0, -10.0]).unwrap();
+            let guard = repr::private::Insert::set(&full, &[-10.0, -10.0]).unwrap();
             assert_eq!(
                 repr::Guard::id(&guard),
                 slot.value(),
@@ -1317,7 +1317,7 @@ mod tests {
 
         {
             let reader = full.reader(None).unwrap();
-            let guard = repr::InsertImpl::set(&full, &[-10.0, -10.0]).unwrap();
+            let guard = repr::private::Insert::set(&full, &[-10.0, -10.0]).unwrap();
             assert_eq!(
                 repr::Guard::id(&guard),
                 slot.value(),
@@ -1337,7 +1337,7 @@ mod tests {
         let (full, _) = make_test_repr(Metric::L2);
 
         for dim in [1, 3] {
-            let err = repr::InsertImpl::set(&full, vec![1.0; dim].as_slice()).unwrap_err();
+            let err = repr::private::Insert::set(&full, vec![1.0; dim].as_slice()).unwrap_err();
             assert_contains!(
                 err.to_string(),
                 format!("expected slice of length 2 - instead got {dim}"),
@@ -1352,9 +1352,13 @@ mod tests {
 
         for dim in [1, 3] {
             let query = vec![1.0; dim];
-            let err =
-                repr::SearchImpl::search_accessor(&full, query.as_slice(), None, counters.local())
-                    .unwrap_err();
+            let err = repr::private::Search::search_accessor(
+                &full,
+                query.as_slice(),
+                None,
+                counters.local(),
+            )
+            .unwrap_err();
             assert_contains!(
                 err.to_string(),
                 format!("expected slice of length 2 - instead got {dim}"),
@@ -1471,7 +1475,7 @@ mod tests {
         // We know the internal start IDs begin at 0. This is not a stability guarantee.
         let start_id: u32 = 0;
         let internal_query = {
-            let guard = repr::InsertImpl::set(&full, &query).unwrap();
+            let guard = repr::private::Insert::set(&full, &query).unwrap();
             let id = <_ as repr::Guard>::id(&guard);
             <_ as repr::Guard>::publish(guard);
             id

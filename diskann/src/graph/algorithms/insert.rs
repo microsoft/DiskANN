@@ -3,6 +3,92 @@
  * Licensed under the MIT license.
  */
 
+//! # Insertion
+//!
+//! At a high level, a data point `v` is inserted into the graph by computing a set of
+//! neighbors `U` for `v` and adding directed edges:
+//!
+//! * `v => u` for all `u in U` (forward edges)
+//! * `u => v` for all `u in U` (backward edges)
+//!
+//! These edges support reaching `v` from its neighbors and navigating from `v` to them.
+//! The algorithm does not guarantee graph reachability.
+//!
+//! The candidate set `U` is determined by first running a typical graph search with `v` as
+//! the query (see [`Knn`](crate::graph::search::Knn)). The initial candidate pool `C` is
+//! taken from all nodes expanded during this search as opposed to taking just the best
+//! results since a larger candidate pool generally results in higher quality graphs. The
+//! candidate pool is then provided to the robust prune algorithm to obtain the final set `U`.
+//!
+//! During the backedge phase, whenever the modified adjacency list for a node `u` in `U`
+//! exceeds the configured maximum degree, it too is provided to the robust prune algorithm
+//! to bring it back down to a target degree.
+//!
+//! # Parameters
+//!
+//! Factors influencing the quality of search:
+//!
+//! * [`l_build`](Config::l_build): The size of the priority queue used as the stopping
+//!   criterion for the search phase. Higher values result in higher quality candidates at
+//!   the cost of extra search time.
+//!
+//! * [`pruned_degree`](Config::pruned_degree): The target adjacency list size after pruning.
+//!
+//! * [`max_degree`](Config::max_degree): The threshold at which a prune is triggered. Having
+//!   this be larger than `pruned_degree` is recommended since it provides some buffer room
+//!   for adjacency list lengths to grow during the back edge phase before triggering a prune.
+//!
+//!   Setting this equal to `pruned_degree` will result in a prune for every back edge added,
+//!   which is bad for performance.
+//!
+//!   Standard values include [`crate::graph::config::MaxDegree::default_slack`].
+//!
+//! * [`max_occlusion_size`](Config::max_occlusion_size): The maximum number of candidates
+//!   provided to prune. Since the search phase of candidate generation uses all visited
+//!   nodes, a smaller occlusion size can improve performance but may degrade quality.
+//!
+//! * [`prune_kind`](Config::prune_kind): The type of pruning rule that gets applied.
+//!   This is closely tied to the distance metric used to compare similarity of the underlying
+//!   neighbors. Using the wrong kind can be disastrous for recall. See:
+//!   [`crate::graph::config::PruneKind`].
+//!
+//! * [`alpha`](Config::alpha): The ratio used to prune candidates. The default value of
+//!   1.2 is usually sufficient.
+//!
+//! # Concurrency
+//!
+//! The algorithms in this module mutate the graph through separate interactions with
+//! [`NeighborAccessorMut`]. Particularly during the backedge phase, other concurrent inserts
+//! may attempt to modify the same adjacency lists.
+//!
+//! It's recommended that callers maintain the following behavior:
+//!
+//! * While inserting a vector `v`, it should be protected against redundant insertion or
+//!   deletion until the insert algorithm completes.
+//!
+//! * Prunes during the back edge phase are currently not performed in a mutually exclusive
+//!   way. That is, the adjacency list retrieval for `u` and its corresponding set with the
+//!   pruned list happen in two separate calls.
+//!
+//!   This is considered a bug in the [`NeighborAccessorMut`] API and will be fixed in the
+//!   future.
+//!
+//! * DiskANN currently does not gracefully handle cases where the adjacency list for a node
+//!   `u` becomes unavailable during insertion (say due to deletion). This will be fixed in
+//!   the future.
+//!
+//! # Error Handling
+//!
+//! Because the default behavior spreads the mutation of the graph across multiple calls,
+//! an error can leave the graph partially modified. This is generally tolerable in small
+//! quantities. The adjacency list for `v` is set first, followed by the back-edges. If
+//! failure occurs during a back-edge operation, the adjacency list for `v` is still navigable.
+//!
+//! Implementations that need stronger guarantees can implement [`NeighborAccessorMut`] in
+//! a way that mutations do not eagerly modify the graph. After insertion, the resulting
+//! delta list may potentially be applied transactionally. DiskANN does not currently provide
+//! tooling to help with this.
+
 use std::{borrow::BorrowMut, fmt::Debug, num::NonZeroUsize};
 
 use diskann_utils::{

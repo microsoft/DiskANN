@@ -93,7 +93,7 @@ where
         async move {
             let num_starting_points = accessor.num_starting_points().await?;
             let max_degree = algorithms::max_degree_from_hint(accessor.max_degree_hint());
-            let mut scratch = algorithms::search_scratch_2(
+            let mut scratch = algorithms::search_scratch(
                 max_degree,
                 self.knn().l_value().get(),
                 num_starting_points,

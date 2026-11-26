@@ -13,7 +13,7 @@ macro_rules! representation {
             $($where)*
         {}
 
-        impl<$($generics),*> $crate::repr::RepresentationImpl for $T
+        impl<$($generics),*> $crate::repr::private::Representation for $T
         where
             $($where)*
         {

@@ -33,7 +33,6 @@ impl<R> Index<R>
 where
     R: repr::Representation, // FIXME: Remove structural bounds
 {
-    // FIXME: Cut out `provider` once feasible.
     pub fn new<C>(config: C, graph: diskann::graph::Config) -> ANNResult<Self>
     where
         C: repr::RepresentationConfig<Representation = R>,
@@ -66,16 +65,16 @@ where
     /// Since this receives by `&mut self`, this effectively disables all indexing operations
     /// while the snapshot is held.
     pub fn inspect_neighbors(&mut self) -> repr::NeighborSnapshot<'_> {
-        repr::RepresentationImpl::inspect_neighbors(&mut self.representation)
+        repr::private::Representation::inspect_neighbors(&mut self.representation)
     }
 
     pub fn read(&self) -> ANNResult<Read<'_, R>> {
-        let guard = repr::RepresentationImpl::read_guard(&self.representation)?;
+        let guard = repr::private::Representation::read_guard(&self.representation)?;
         Ok(Read { index: self, guard })
     }
 
     pub fn write(&self) -> ANNResult<Write<'_, R>> {
-        let guard = repr::RepresentationImpl::write_guard(&self.representation)?;
+        let guard = repr::private::Representation::write_guard(&self.representation)?;
         Ok(Write {
             index: &self,
             guard,
@@ -120,7 +119,7 @@ impl<R> Read<'_, R> {
         R: repr::Search,
         O: SearchOutputBuffer<u32> + Send + ?Sized,
     {
-        let mut accessor = repr::SearchImpl::search_accessor(
+        let mut accessor = repr::private::Search::search_accessor(
             &self.index.representation,
             query,
             Some(self.guard.share()),
@@ -203,7 +202,7 @@ where
         //
         // The internal `Guard` is sufficient for local rollback, but not after
         // `set_element` returns.
-        let guard = repr::InsertImpl::set_at(&self.index.representation, vector, id)?;
+        let guard = repr::private::Insert::set_at(&self.index.representation, vector, id)?;
         let internal = <_ as repr::Guard>::id(&guard);
 
         // Now that insert has succeeded - publish the slot. This method cannot fail, so
@@ -243,7 +242,7 @@ where
         'a: 'q,
     {
         Ok(algorithms::Insert::new(
-            repr::InsertImpl::insert_search_accessor(
+            repr::private::Insert::insert_search_accessor(
                 &self.index.representation,
                 vector,
                 Some(self.guard.read_guard().share()),
@@ -258,7 +257,10 @@ where
     where
         R: repr::Insert,
     {
-        repr::InsertImpl::prune_accessor(&self.index.representation, self.index.local_counters())
+        repr::private::Insert::prune_accessor(
+            &self.index.representation,
+            self.index.local_counters(),
+        )
     }
 }
 

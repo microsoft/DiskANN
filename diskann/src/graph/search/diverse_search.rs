@@ -9,7 +9,7 @@ use hashbrown::HashSet;
 use std::num::NonZeroUsize;
 use thiserror::Error;
 
-use super::{Knn, SearchFor, record::NoopSearchRecord, scratch::SearchScratch};
+use super::{Knn, Search, record::NoopSearchRecord, scratch::SearchScratch};
 use crate::{
     ANNError, ANNResult,
     error::IntoANNResult,
@@ -171,13 +171,13 @@ where
     }
 }
 
-impl<P> SearchFor<P::Id> for Diverse<P>
+impl<P> Search<P::Id> for Diverse<P>
 where
     P: AttributeValueProvider,
 {
     type Output = SearchStats;
 
-    async fn search_for<A, O, PP, OB>(
+    async fn search<A, O, PP, OB>(
         self,
         accessor: &mut A,
         processor: PP,

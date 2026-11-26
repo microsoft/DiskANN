@@ -139,7 +139,7 @@ where
             let degree = algorithms::max_degree_from_hint(accessor.max_degree_hint());
 
             let starting_l = self.starting_l().get();
-            let mut scratch = algorithms::search_scratch_2(degree, starting_l, num_start_ids);
+            let mut scratch = algorithms::search_scratch(degree, starting_l, num_start_ids);
 
             let search_knn = self.range_params.to_knn();
 

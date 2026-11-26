@@ -59,21 +59,21 @@ pub(crate) fn max_degree_from_hint(hint: Option<NonZeroUsize>) -> NonZeroUsize {
     hint.unwrap_or(FALLBACK)
 }
 
-// FIXME: Can we do better?
-pub(crate) fn search_scratch<I>(config: &Config, l: usize, additional: usize) -> SearchScratch<I>
-where
-    I: VectorId,
-{
-    SearchScratch::new(
-        PriorityQueueConfiguration::Fixed(l + additional),
-        Some(scratch::estimate_node_visited_set_size(
-            config.max_degree().get(),
-            l,
-        )),
-    )
-}
+// // FIXME: Can we do better?
+// pub(crate) fn search_scratch<I>(config: &Config, l: usize, additional: usize) -> SearchScratch<I>
+// where
+//     I: VectorId,
+// {
+//     SearchScratch::new(
+//         PriorityQueueConfiguration::Fixed(l + additional),
+//         Some(scratch::estimate_node_visited_set_size(
+//             config.max_degree().get(),
+//             l,
+//         )),
+//     )
+// }
 
-pub(crate) fn search_scratch_2<I>(
+pub(crate) fn search_scratch<I>(
     degree: NonZeroUsize,
     l: usize,
     additional: usize,

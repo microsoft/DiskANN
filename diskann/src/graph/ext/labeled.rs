@@ -159,7 +159,9 @@ where
         self.inner.terminate_early()
     }
 
-    fn num_starting_points(&self) -> impl std::future::Future<Output = ANNResult<usize>> + Send {
+    fn num_starting_points(
+        &mut self,
+    ) -> impl std::future::Future<Output = ANNResult<usize>> + Send {
         self.inner.num_starting_points()
     }
 }

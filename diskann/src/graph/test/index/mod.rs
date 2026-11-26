@@ -1662,7 +1662,7 @@ convert_error!(DimMismatch);
 has_id!(Accessor<'_> = u32);
 
 impl glue::SearchAccessor for Accessor<'_> {
-    fn starting_points(&self) -> impl Future<Output = ANNResult<Vec<u32>>> + Send {
+    fn starting_points(&mut self) -> impl Future<Output = ANNResult<Vec<u32>>> + Send {
         futures_util::future::ok(self.provider.start_point_ids().collect())
     }
 
