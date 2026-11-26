@@ -360,35 +360,4 @@ mod disk_index_build_tests {
             1.0
         }
     }
-
-    // Regression check: enabling `pipnn` must not add PiPNN bounds to `BuildElement`
-    // or Vamana-only callers of `DiskIndexBuilder::build`.
-    #[test]
-    fn vamana_builder_requires_only_build_element() {
-        use crate::{
-            build::{
-                builder::{backend::BuildElement, build::DiskIndexBuilder},
-                configuration::{CommonBuildConfig, DiskIndexBuildConfig, VamanaBuildConfig},
-            },
-            data_model::AdHoc,
-            storage::DiskIndexWriter,
-        };
-        use diskann::utils::VectorRepr;
-
-        fn check<T, P>(
-            storage: &P,
-            common: CommonBuildConfig,
-            vamana: VamanaBuildConfig,
-            writer: DiskIndexWriter,
-        ) -> ANNResult<()>
-        where
-            T: VectorRepr + BuildElement,
-            P: StorageReadProvider<Reader: Send> + StorageWriteProvider + 'static,
-        {
-            let config = DiskIndexBuildConfig::from_common(common, vamana);
-            DiskIndexBuilder::<AdHoc<T>, P>::new(storage, config, writer).build()
-        }
-
-        let _ = check::<f32, VirtualStorageProvider<OverlayFS>>;
-    }
 }

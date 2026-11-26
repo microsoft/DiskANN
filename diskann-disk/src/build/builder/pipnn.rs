@@ -42,7 +42,7 @@ use crate::error::{ErrorKind, diskann_error};
 /// [`pipnn::Rows`]; [`MinMaxElement`] builds through a pre-validated
 /// [`pipnn::Dataset`].
 pub trait PipnnBuildElement: VectorRepr {
-    #[doc(hidden)]
+    /// Build the PiPNN graph for the rows in `data`.
     fn build_graph(
         data: rowmajor::Ref<'_, Self>,
         metric: Metric,

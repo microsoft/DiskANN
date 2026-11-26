@@ -190,7 +190,7 @@ pub(super) mod inner {
 /// Non-scalar or compressed representations should implement [`Dataset`]
 /// directly with upfront layout validation.
 pub trait Element: Copy + Debug + DistanceProvider<Self> + Send + Sync + 'static {
-    #[doc(hidden)]
+    /// Convert rows `ids` from `data` into `f32`, writing one row into `output` for each ID.
     fn gather(data: rowmajor::Ref<'_, Self>, ids: &[u32], output: rowmajor::Mut<'_, f32>);
 }
 
