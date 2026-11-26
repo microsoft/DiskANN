@@ -27,12 +27,42 @@ use diskann_utils::{
 };
 use tracing::debug;
 
+use crate::error::{ErrorKind, diskann_error};
+
 /// Configuration for the in-memory builder.
 #[derive(Debug, Clone)]
 pub(super) struct Config {
     pub(super) non_frozen_points: usize,
     pub(super) prefetch_lookahead: Option<NonZeroUsize>,
     pub(super) num_threads: NonZeroUsize,
+}
+
+impl Config {
+    pub(super) fn new(
+        num_points: usize,
+        num_threads: usize,
+        prefetch_lookahead: Option<NonZeroUsize>,
+    ) -> ANNResult<Self> {
+        let num_threads = NonZeroUsize::new(num_threads)
+            .or_else(|| std::thread::available_parallelism().ok())
+            .ok_or_else(|| {
+                diskann_error!(
+                    ErrorKind::IndexError,
+                    "Failed to determine number of threads"
+                )
+            })?;
+        let non_frozen_points = num_points.checked_sub(1).ok_or_else(|| {
+            diskann_error!(
+                ErrorKind::IndexError,
+                "expected dataset to contain at least 1 point"
+            )
+        })?;
+        Ok(Self {
+            non_frozen_points,
+            prefetch_lookahead,
+            num_threads,
+        })
+    }
 }
 
 /// The start point for an inmem build.
@@ -434,11 +464,12 @@ fn count_reachable_nodes(
 /// Preserves all rows, including empty lists, without validating graph completeness.
 /// `start_point` is a dataset ID; no phantom-point rewriting is performed.
 /// The writer must be positioned at the beginning of the output.
-fn save_graph<W: Write + Seek>(
-    snapshot: diskann_inmem::repr::NeighborSnapshot<'_>,
-    writer: W,
-    start_point: u32,
-) -> std::io::Result<u64> {
+pub(super) fn write_graph<W, I, R>(rows: I, writer: W, start_point: u32) -> std::io::Result<u64>
+where
+    W: Write + Seek,
+    I: IntoIterator<Item = std::io::Result<R>>,
+    R: AsRef<[u32]>,
+{
     let mut out = std::io::BufWriter::new(writer);
     let mut index_size = 24u64;
     let mut max_degree = 0u32;
@@ -448,13 +479,9 @@ fn save_graph<W: Write + Seek>(
     out.write_all(&start_point.to_le_bytes())?;
     out.write_all(&0u64.to_le_bytes())?;
 
-    for id in 0..snapshot.entries() {
-        let neighbors = snapshot.get(id).ok_or_else(|| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("snapshot is missing adjacency list {id}"),
-            )
-        })?;
+    for row in rows {
+        let row = row?;
+        let neighbors = row.as_ref();
         let degree = u32::try_from(neighbors.len())
             .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
         out.write_all(&degree.to_le_bytes())?;
@@ -471,4 +498,23 @@ fn save_graph<W: Write + Seek>(
     out.write_all(&max_degree.to_le_bytes())?;
     out.flush()?;
     Ok(index_size)
+}
+
+fn save_graph<W: Write + Seek>(
+    snapshot: diskann_inmem::repr::NeighborSnapshot<'_>,
+    writer: W,
+    start_point: u32,
+) -> std::io::Result<u64> {
+    write_graph(
+        (0..snapshot.entries()).map(|id| {
+            snapshot.get(id).ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("snapshot is missing adjacency list {id}"),
+                )
+            })
+        }),
+        writer,
+        start_point,
+    )
 }
