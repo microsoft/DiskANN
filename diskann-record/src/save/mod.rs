@@ -56,6 +56,22 @@ where
     context.finish(value)
 }
 
+/// Serialize `x` into an in-memory context.
+///
+/// The returned context owns both the manifest value and any side-car artifacts created
+/// by `x`. It can be loaded with [`crate::load::load_from_memory`].
+///
+/// # Errors
+///
+/// Returns [`Error`] if a user impl returns an error or if the context fails to commit
+/// the in-memory save.
+pub fn save_to_memory<T>(x: &T) -> Result<crate::MemoryContext>
+where
+    T: Saveable,
+{
+    save(x, crate::MemorySaveContext::new())
+}
+
 /// Serialize `x` to disk.
 ///
 /// The manifest (a JSON document) is written atomically to `metadata`; any side-car

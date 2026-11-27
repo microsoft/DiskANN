@@ -23,10 +23,14 @@
 //!
 //! # Entry Points
 //!
+//! - [`save::save_to_memory`] and [`load::load_from_memory`]: Round-trip a value through
+//!   an owned in-memory context without serialization or the `disk` feature.
 //! - `save::save_to_disk` (requires the `disk` feature): Save a value to a directory
 //!   plus a manifest path.
 //! - `load::load_from_disk` (requires the `disk` feature): Reload a value from a
 //!   manifest and its artifact directory.
+//! - [`load::load_from_memory_with`]: Load in memory with caller-supplied settings or
+//!   resources. Use `load::load_from_disk_with` for the equivalent disk operation.
 //!
 //! # Defining Save / Load
 //!
@@ -34,6 +38,10 @@
 //! wants to persist. For plain structs, the [`save_fields!`] and [`load_fields!`] macros
 //! handle the field-by-field plumbing. See [`save`] and [`load`] for the relevant traits
 //! and helpers.
+//!
+//! Implement [`load::Loader`] when loading requires runtime settings or resources.
+//! Use [`load::Context::load_with`] or [`load::Object::field_with`] for nested values,
+//! and `load::load_from_disk_with` (requires the `disk` feature) for disk loading.
 //!
 //! ## Example
 //!
@@ -542,6 +550,9 @@ mod tests {
             &metadata,
         )?;
         let restored: Upgraded = load::load_from_disk(&metadata, dir)?;
+        let with_loader =
+            load::load_from_disk_with(&metadata, dir, std::marker::PhantomData::<Upgraded>)?;
+        assert_eq!(restored, with_loader);
 
         assert_eq!(
             restored,

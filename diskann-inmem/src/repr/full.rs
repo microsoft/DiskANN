@@ -10,6 +10,10 @@
 //!
 //! The [`FullPrecision`] generic bound can be used to constrain these data types.
 
+pub(crate) mod load;
+mod save;
+pub(crate) use save::Compaction;
+
 mod internal_docs {
     //! Internally, the [`super::repr::Search`] and [`super::repr::Insert`] traits
     //! are implemented via [`super::FullPrecisionImpl`], which creates:
@@ -404,6 +408,10 @@ where
         self.bytes().value() / std::mem::size_of::<T>()
     }
 
+    pub(crate) fn frozen_ids(&self) -> Range {
+        self.start_point_ids
+    }
+
     /// Return the number of payload bytes in each stored vector.
     pub fn bytes(&self) -> Bytes {
         self.store.slots().bytes()
@@ -445,6 +453,11 @@ where
     fn writer(&self) -> Result<packed::Reader<'_>, epoch::Unavailable> {
         self.store
             .write_guard(|packed, guard| packed.reader(guard.into_read_guard()))
+    }
+
+    /// Block new writers and wait for active writers to finish.
+    pub(crate) fn try_exclude_writers(&self) -> Option<epoch::WriterExclusionGuard<'_>> {
+        self.store.try_exclude_writers()
     }
 }
 
