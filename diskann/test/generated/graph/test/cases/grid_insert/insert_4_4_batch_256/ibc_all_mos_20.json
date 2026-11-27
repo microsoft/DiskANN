@@ -1,35 +1,35 @@
 {
   "file": "diskann/src/graph/test/cases/grid_insert.rs",
-  "test": "graph/test/cases/grid_insert/insert_4_4_single/ibc_none",
+  "test": "graph/test/cases/grid_insert/insert_4_4_batch_256/ibc_all_mos_20",
   "payload": {
     "context_metrics": {
-      "clones": 0,
-      "spawns": 0
+      "clones": 5,
+      "spawns": 5
     },
-    "description": "After inserting 256 points (one-by-one, ibc=none) into a 4D grid of size 4.",
+    "description": "After inserting 256 points (batch (all-at-once), ibc=all) into a 4D grid of size 4.",
     "grid_dims": 4,
     "grid_size": 4,
     "insert_metrics": {
-      "append_neighbors": 1096,
-      "get_neighbors": 22321,
-      "get_vector": 51996,
-      "set_neighbors": 503,
+      "append_neighbors": 81,
+      "get_neighbors": 513,
+      "get_vector": 512,
+      "set_neighbors": 256,
       "set_vector": 256
     },
     "num_inserted": 256,
     "searches": [
       {
         "beam_width": 1,
-        "comparisons": 74,
-        "description": "After inserting 256 points (one-by-one, ibc=none) into a 4D grid of size 4. Search with query of all -1s. The nearest neighbor should be coordinate 0 (all zeros).",
+        "comparisons": 78,
+        "description": "After inserting 256 points (batch (all-at-once), ibc=all) into a 4D grid of size 4. Search with query of all -1s. The nearest neighbor should be coordinate 0 (all zeros).",
         "grid_dims": 4,
         "grid_size": 4,
-        "hops": 19,
+        "hops": 22,
         "metrics": {
-          "append_neighbors": 1096,
-          "get_neighbors": 22340,
-          "get_vector": 52070,
-          "set_neighbors": 503,
+          "append_neighbors": 81,
+          "get_neighbors": 535,
+          "get_vector": 590,
+          "set_neighbors": 256,
           "set_vector": 256
         },
         "num_results": 10,
@@ -45,7 +45,7 @@
             4.0
           ],
           [
-            64,
+            4,
             7.0
           ],
           [
@@ -53,7 +53,7 @@
             7.0
           ],
           [
-            4,
+            64,
             7.0
           ],
           [
@@ -65,15 +65,15 @@
             10.0
           ],
           [
-            65,
-            10.0
-          ],
-          [
             5,
             10.0
           ],
           [
-            20,
+            65,
+            10.0
+          ],
+          [
+            80,
             10.0
           ],
           [
@@ -84,16 +84,16 @@
       },
       {
         "beam_width": 1,
-        "comparisons": 33,
-        "description": "After inserting 256 points (one-by-one, ibc=none) into a 4D grid of size 4. Search with query of all `size`. The start point should appear as it is not filtered by default.",
+        "comparisons": 30,
+        "description": "After inserting 256 points (batch (all-at-once), ibc=all) into a 4D grid of size 4. Search with query of all `size`. The start point should appear as it is not filtered by default.",
         "grid_dims": 4,
         "grid_size": 4,
         "hops": 11,
         "metrics": {
-          "append_neighbors": 1096,
-          "get_neighbors": 22351,
-          "get_vector": 52103,
-          "set_neighbors": 503,
+          "append_neighbors": 81,
+          "get_neighbors": 546,
+          "get_vector": 620,
+          "set_neighbors": 256,
           "set_vector": 256
         },
         "num_results": 10,
@@ -109,15 +109,11 @@
             4.0
           ],
           [
-            239,
-            7.0
-          ],
-          [
-            254,
-            7.0
-          ],
-          [
             251,
+            7.0
+          ],
+          [
+            239,
             7.0
           ],
           [
@@ -125,8 +121,8 @@
             7.0
           ],
           [
-            187,
-            10.0
+            254,
+            7.0
           ],
           [
             190,
@@ -138,6 +134,10 @@
           ],
           [
             175,
+            10.0
+          ],
+          [
+            250,
             10.0
           ],
           [
