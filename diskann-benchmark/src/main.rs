@@ -789,6 +789,15 @@ mod tests {
         prefix_search_directories(&mut raw, &root_directory());
 
         let tempdir = tempfile::tempdir().unwrap();
+        // Direct the index build artifacts into the tempdir (via the top-level
+        // output directory) so the test cleans up after itself instead of
+        // leaving them in the package directory.
+        raw["output_directory"] = tempdir
+            .path()
+            .to_str()
+            .expect("tempdir path should be valid UTF-8")
+            .into();
+
         let input_path = tempdir.path().join("disk-index-filter.json");
         save_to_file(&input_path, &raw);
         let output_path = tempdir.path().join("output.json");
