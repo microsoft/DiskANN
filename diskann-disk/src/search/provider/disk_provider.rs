@@ -446,6 +446,12 @@ where
     VP: VertexProvider<Data>,
 {
     type Error = ANNError;
+    #[tracing::instrument(
+        name = "diskann.disk.search.postprocess",
+        target = "diskann::disk::search::postprocess",
+        level = "debug",
+        skip_all
+    )]
     async fn post_process<I, B>(
         &self,
         accessor: &mut DiskAccessor<'_, Data, VP>,
@@ -513,6 +519,12 @@ where
     VP: VertexProvider<Data>,
 {
     type Error = ANNError;
+    #[tracing::instrument(
+        name = "diskann.disk.search.postprocess",
+        target = "diskann::disk::search::postprocess",
+        level = "debug",
+        skip_all
+    )]
     async fn post_process<I, B>(
         &self,
         accessor: &mut DiskAccessor<'_, Data, VP>,
@@ -1519,6 +1531,13 @@ mod disk_provider_tests {
     use diskann_vector::distance::Metric;
     use rayon::prelude::IndexedParallelIterator;
     use rstest::rstest;
+    use std::sync::Mutex;
+    use tracing::{Instrument, Subscriber, instrument::WithSubscriber};
+    use tracing_subscriber::{
+        filter::{LevelFilter, Targets},
+        layer::{Context, SubscriberExt},
+        registry::LookupSpan,
+    };
     use vfs::OverlayFS;
 
     use super::*;
@@ -1567,6 +1586,118 @@ mod disk_provider_tests {
     // 0.015625. Allow one ULP for architecture-dependent SIMD accumulation;
     // an absolute tolerance of 1e-4 would require identical f32 results.
     const SIFT_DISTANCE_ABS_TOLERANCE: f32 = 0.02;
+
+    const POSTPROCESS_TARGET: &str = "diskann::disk::search::postprocess";
+    const TRAVERSAL_TARGET: &str = "diskann::graph::search::traversal";
+    const SCAN_TARGET: &str = "diskann::flat::search::scan";
+
+    struct SearchPhaseSpans(Arc<Mutex<Vec<(&'static str, bool)>>>);
+
+    impl<S> tracing_subscriber::Layer<S> for SearchPhaseSpans
+    where
+        S: Subscriber + for<'a> LookupSpan<'a>,
+    {
+        fn on_new_span(
+            &self,
+            attrs: &tracing::span::Attributes<'_>,
+            id: &tracing::span::Id,
+            ctx: Context<'_, S>,
+        ) {
+            let metadata = attrs.metadata();
+            let name = match metadata.target() {
+                POSTPROCESS_TARGET => "diskann.disk.search.postprocess",
+                TRAVERSAL_TARGET => "diskann.graph.search.traversal",
+                SCAN_TARGET => "diskann.flat.search.scan",
+                _ => return,
+            };
+            assert_eq!(metadata.name(), name);
+            assert_eq!(*metadata.level(), tracing::Level::DEBUG);
+            assert!(metadata.fields().is_empty());
+            let span = ctx.span(id).unwrap();
+            assert_eq!(span.parent().unwrap().metadata().name(), "caller.search");
+            self.0.lock().unwrap().push((metadata.name(), true));
+        }
+
+        fn on_close(&self, id: tracing::span::Id, ctx: Context<'_, S>) {
+            let span = ctx.span(&id).unwrap();
+            if matches!(
+                span.metadata().target(),
+                POSTPROCESS_TARGET | TRAVERSAL_TARGET | SCAN_TARGET
+            ) {
+                self.0.lock().unwrap().push((span.metadata().name(), false));
+            }
+        }
+    }
+
+    #[rstest]
+    #[case::graph(|| SearchMode::graph_filtered(|id| id % 2 == 0), "diskann.graph.search.traversal")]
+    #[case::inline(|| SearchMode::inline_filter(|id| id % 2 == 0, None), "diskann.graph.search.traversal")]
+    #[case::flat(|| SearchMode::flat_filtered(|id| id % 2 == 0), "diskann.flat.search.scan")]
+    #[case::determinant_diversity(|| SearchMode::diverse_graph_filtered(
+        |id| id % 2 == 0,
+        DeterminantDiversityParams::new(2.0, 0.01).unwrap(),
+    ), "diskann.graph.search.traversal")]
+    #[tokio::test]
+    async fn test_search_phase_tracing(
+        #[case] mode: fn() -> SearchMode<'static>,
+        #[case] phase: &'static str,
+    ) {
+        let storage_provider = Arc::new(VirtualStorageProvider::new_overlay(test_data_root()));
+        let search_engine = create_disk_index_searcher::<GraphDataF32VectorUnitData>(
+            CreateDiskIndexSearcherParams {
+                pq_pivot_file_path: TEST_PQ_PIVOT,
+                pq_compressed_file_path: TEST_PQ_COMPRESSED,
+                index_path: TEST_INDEX,
+                index_path_prefix: TEST_INDEX_PREFIX,
+                ..Default::default()
+            },
+            &storage_provider,
+        );
+
+        let mut outputs = Vec::new();
+        for level in [LevelFilter::OFF, LevelFilter::DEBUG] {
+            let spans = Arc::new(Mutex::new(Vec::new()));
+            let subscriber = tracing_subscriber::registry()
+                .with(SearchPhaseSpans(Arc::clone(&spans)))
+                .with(
+                    Targets::new()
+                        .with_default(LevelFilter::TRACE)
+                        .with_target(TRAVERSAL_TARGET, level)
+                        .with_target(SCAN_TARGET, level)
+                        .with_target(POSTPROCESS_TARGET, level),
+                );
+            let result = async {
+                search_engine
+                    .search(&[1.0; 128], 10, 20, Some(4), mode())
+                    .instrument(tracing::info_span!("caller.search"))
+                    .await
+                    .unwrap()
+            }
+            .with_subscriber(subscriber)
+            .await;
+
+            let expected = if level == LevelFilter::OFF {
+                vec![]
+            } else {
+                vec![
+                    (phase, true),
+                    (phase, false),
+                    ("diskann.disk.search.postprocess", true),
+                    ("diskann.disk.search.postprocess", false),
+                ]
+            };
+            assert_eq!(*spans.lock().unwrap(), expected);
+            assert_eq!(result.stats.result_count, 10);
+            outputs.push(
+                result
+                    .results
+                    .into_iter()
+                    .map(|r| (r.vertex_id, r.distance, r.data))
+                    .collect::<Vec<_>>(),
+            );
+        }
+        assert_eq!(outputs[0], outputs[1]);
+    }
 
     #[test]
     fn test_disk_search_k10_l20_single_or_multi_thread_100dim() {
