@@ -76,6 +76,37 @@ pub struct MinMaxQuantizer {
     grid_scale: Positive<f32>,
 }
 
+/// Return the average of the values below their mean and the average of the
+/// other values. This is the one-bit range before `grid_scale` is applied.
+///
+/// An empty group, for example when all values are equal, falls back to the mean.
+#[inline]
+pub(super) fn mean_split(values: impl ExactSizeIterator<Item = f32> + Clone) -> (f32, f32) {
+    let (mut min, mut min_count) = (0.0f32, 0.0f32);
+    let (mut max, mut max_count) = (0.0f32, 0.0f32);
+
+    let mean = values.clone().sum::<f32>() / (values.len() as f32);
+
+    values.for_each(|x| {
+        let m = f32::from((x < mean) as u8);
+        min += m * x;
+        min_count += m;
+        max += (1.0 - m) * x;
+        max_count += 1.0 - m;
+    });
+
+    ((min / min_count).min(mean), (max / max_count).max(mean))
+}
+
+/// Scale the range `[min, max]` by `grid_scale` around its midpoint.
+#[inline]
+pub(super) fn scale_range(min: f32, max: f32, grid_scale: f32) -> (f32, f32) {
+    let width = (max - min) / 2.0;
+    let mid = min + width;
+
+    (mid - width * grid_scale, mid + width * grid_scale)
+}
+
 impl MinMaxQuantizer {
     /// Instantiates a new quantizer with specific transform.
     pub fn new(transform: Transform<GlobalAllocator>, grid_scale: Positive<f32>) -> Self {
@@ -115,22 +146,7 @@ impl MinMaxQuantizer {
     ///   `m = (max + min) / 2.0`, `w = (max - min) / 2.0`, and `g = self.grid_scale`.
     fn get_range<const NBITS: usize>(&self, vec: &[f32]) -> (f32, f32) {
         let (min, max) = match NBITS {
-            1 => {
-                let (mut min, mut min_count) = (0.0f32, 0.0f32);
-                let (mut max, mut max_count) = (0.0f32, 0.0f32);
-
-                let mean = vec.iter().sum::<f32>() / (vec.len() as f32);
-
-                vec.iter().for_each(|x| {
-                    let m = f32::from((*x < mean) as u8);
-                    min += m * x;
-                    min_count += m;
-                    max += (1.0 - m) * x;
-                    max_count += 1.0 - m;
-                });
-
-                ((min / min_count).min(mean), (max / max_count).max(mean))
-            }
+            1 => mean_split(vec.iter().copied()),
             _ => {
                 vec // Using `f32::NAN` since [`core::f32::min`] and `max` output the other value if one of them is NAN .
                     .iter()
@@ -140,13 +156,7 @@ impl MinMaxQuantizer {
             }
         };
 
-        let width = (max - min) / 2.0;
-        let mid = min + width;
-
-        (
-            mid - width * self.grid_scale.into_inner(),
-            mid + width * self.grid_scale.into_inner(),
-        )
+        scale_range(min, max, self.grid_scale.into_inner())
     }
 
     fn compress<const NBITS: usize, T>(
