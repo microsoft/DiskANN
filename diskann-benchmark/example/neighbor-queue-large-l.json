@@ -1,0 +1,31 @@
+{
+  "search_directories": [],
+  "jobs": [
+    {
+      "type": "neighbor-queue",
+      "content": {
+        "seed": 20261113,
+        "samples": 9,
+        "queues_per_sample": 8,
+        "blocks_per_sample": 2,
+        "cases": [
+          {"capacity": 2000, "initial_size": 2000, "input_size": 1, "initial_cutoff_survivors": 1, "placement": "uniform", "order": "shuffled"},
+          {"capacity": 2000, "initial_size": 2000, "input_size": 8, "initial_cutoff_survivors": 8, "placement": "uniform", "order": "shuffled"},
+          {"capacity": 2000, "initial_size": 2000, "input_size": 2000, "initial_cutoff_survivors": 2000, "placement": "uniform", "order": "shuffled"},
+          {"capacity": 4000, "initial_size": 4000, "input_size": 1, "initial_cutoff_survivors": 1, "placement": "uniform", "order": "shuffled"},
+          {"capacity": 4000, "initial_size": 4000, "input_size": 8, "initial_cutoff_survivors": 8, "placement": "uniform", "order": "shuffled"},
+          {"capacity": 4000, "initial_size": 4000, "input_size": 2000, "initial_cutoff_survivors": 2000, "placement": "uniform", "order": "shuffled"},
+          {"capacity": 8000, "initial_size": 8000, "input_size": 1, "initial_cutoff_survivors": 1, "placement": "uniform", "order": "shuffled"},
+          {"capacity": 8000, "initial_size": 8000, "input_size": 8, "initial_cutoff_survivors": 8, "placement": "uniform", "order": "shuffled"},
+          {"capacity": 8000, "initial_size": 8000, "input_size": 2000, "initial_cutoff_survivors": 2000, "placement": "uniform", "order": "shuffled"},
+          {"capacity": 16000, "initial_size": 16000, "input_size": 1, "initial_cutoff_survivors": 1, "placement": "uniform", "order": "shuffled"},
+          {"capacity": 16000, "initial_size": 16000, "input_size": 8, "initial_cutoff_survivors": 8, "placement": "uniform", "order": "shuffled"},
+          {"capacity": 16000, "initial_size": 16000, "input_size": 2000, "initial_cutoff_survivors": 2000, "placement": "uniform", "order": "shuffled"},
+          {"capacity": 32000, "initial_size": 32000, "input_size": 1, "initial_cutoff_survivors": 1, "placement": "uniform", "order": "shuffled"},
+          {"capacity": 32000, "initial_size": 32000, "input_size": 8, "initial_cutoff_survivors": 8, "placement": "uniform", "order": "shuffled"},
+          {"capacity": 32000, "initial_size": 32000, "input_size": 2000, "initial_cutoff_survivors": 2000, "placement": "uniform", "order": "shuffled"}
+        ]
+      }
+    }
+  ]
+}
