@@ -1217,7 +1217,7 @@ mod tests {
     where
         A: ConvertA,
     {
-        BlockTransposed::from_matrix_view(a.map(|x| A::convert_a(*x)).as_view())
+        BlockTransposed::try_from_matrix_view(a.map(|x| A::convert_a(*x)).as_view()).unwrap()
     }
 
     /////////////////

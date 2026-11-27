@@ -60,6 +60,7 @@ pub use distance::{
     BoxErase, BuildMaxSimError, Chamfer, Erase, MaxSim, MaxSimElement, MaxSimError, MaxSimIsa,
     MaxSimKernel, NotSupported, ProjectedEigen, QueryMatRef, build_max_sim,
 };
+pub use distance::{BuildTopKError, TopKError, TopKKernel};
 pub use matrix::{
     Defaulted, LayoutError, Mat, MatMut, MatRef, NewCloned, NewMut, NewOwned, NewRef, Overflow,
     Repr, ReprMut, ReprOwned, RowsMut, SliceError, Standard,

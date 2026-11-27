@@ -3,15 +3,13 @@
  * Licensed under the MIT license.
  */
 
-use std::fmt;
-
 use diskann_utils::strided::Strided;
 use diskann_wide::{LoHi, SIMDMask, SIMDMulAdd, SIMDPartialOrd, SIMDSelect, SIMDVector};
 
 use crate::{
     algorithms::kmeans,
     distances::{Cosine, InnerProduct, SquaredL2},
-    multi_vector::BlockTransposed,
+    multi_vector::{BlockTransposed, Overflow},
     product::tables::lookup::DotAndNorm,
 };
 
@@ -21,30 +19,18 @@ diskann_wide::alias!(f32x16 = f32x16);
 diskann_wide::alias!(u32s = u32x8);
 
 /// Error types returned by Chunk construction.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum ChunkConstructionError {
     /// A `Strided` was provided with a dimension of zero.
+    #[error("cannot construct a Chunk from a source with zero dimensions")]
     DimensionCannotBeZero,
     /// A `Strided` was provided with a length of zero.
+    #[error("cannot construct a Chunk from a source with zero length")]
     LengthCannotBeZero,
+    /// The padded centroids exceed the allocation budget.
+    #[error(transparent)]
+    Overflow(#[from] Overflow),
 }
-
-impl fmt::Display for ChunkConstructionError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            ChunkConstructionError::DimensionCannotBeZero => write!(
-                f,
-                "cannot construct a Chunk from a source with zero dimensions"
-            )?,
-            ChunkConstructionError::LengthCannotBeZero => {
-                write!(f, "cannot construct a Chunk from a source with zero length")?
-            }
-        }
-        Ok(())
-    }
-}
-
-impl std::error::Error for ChunkConstructionError {}
 
 /// The index of the closest center found during compression.
 ///
@@ -227,6 +213,7 @@ impl Chunk {
     ///
     /// 1. `data.ncols() == 0`
     /// 2. `data.nrows() == 0`
+    /// 3. The padded storage size overflows.
     pub(super) fn new(data: Strided<'_, f32>) -> Result<Self, ChunkConstructionError> {
         // Error handling.
         if data.ncols() == 0 {
@@ -236,9 +223,12 @@ impl Chunk {
             return Err(ChunkConstructionError::LengthCannotBeZero);
         }
 
+        let packed = BlockTransposed::<f32, 16>::try_from_strided(data)?;
         let square_norms = data.rows().map(kmeans::square_norm).collect();
-        let data = BlockTransposed::<f32, 16>::from_strided(data);
-        Ok(Self { data, square_norms })
+        Ok(Self {
+            data: packed,
+            square_norms,
+        })
     }
 
     /// Return the number of full blocks.

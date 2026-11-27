@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use std::{collections::HashSet, fmt};
+use std::collections::HashSet;
 
 use diskann_utils::{
     strided::Strided,
@@ -17,7 +17,7 @@ use rand::{
 use thiserror::Error;
 
 use super::common::square_norm;
-use crate::multi_vector::{BlockTransposed, BlockTransposedRef};
+use crate::multi_vector::{BlockTransposed, BlockTransposedRef, Overflow};
 
 /// An internal trait implemented for `BlockTransposed` used to accelerate
 ///
@@ -317,15 +317,21 @@ where
     BlockTransposed::<f32, N>::complete_sum(rolling_sum)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Error)]
 pub enum FailureReason {
     /// This error happens when the dataset contains fewer than the requested number of
     /// centers.
+    #[error("dataset does not have enough points")]
     DatasetTooSmall,
     /// The dataset contains fewer than the requested number of points.
+    #[error("dataset is insufficiently diverse")]
     InsufficientDiversity,
     /// Infinity was observed (this also happens when a NaN is present in the input data)
+    #[error("a value of infinity or NaN was observed")]
     SawInfinity,
+    /// The padded dataset does not fit the allocation budget.
+    #[error("{0}")]
+    PackingOverflow(#[source] Overflow),
 }
 
 impl FailureReason {
@@ -335,21 +341,8 @@ impl FailureReason {
             // simply proceed with fewer points.
             Self::DatasetTooSmall | Self::InsufficientDiversity => true,
 
-            // If we see Infinity, downstream algorithms will likely just break.
-            // Don't expect to recover.
-            Self::SawInfinity => false,
+            Self::SawInfinity | Self::PackingOverflow(_) => false,
         }
-    }
-}
-
-impl fmt::Display for FailureReason {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let reason: &str = match self {
-            Self::DatasetTooSmall => "dataset does not have enough points",
-            Self::InsufficientDiversity => "dataset is insufficiently diverse",
-            Self::SawInfinity => "a value of infinity or NaN was observed",
-        };
-        f.write_str(reason)
     }
 }
 
@@ -361,6 +354,7 @@ pub struct KMeansPlusPlusError {
     /// The number of points that were expected.
     pub expected: usize,
     /// A concrete reason for the failure.
+    #[source]
     pub reason: FailureReason,
 }
 
@@ -509,13 +503,16 @@ pub fn kmeans_plusplus_into(
     );
 
     const GROUPSIZE: usize = 16;
+    let transpose =
+        BlockTransposed::<f32, GROUPSIZE>::try_from_matrix_view(data).map_err(|err| {
+            KMeansPlusPlusError::new(0, centers.nrows(), FailureReason::PackingOverflow(err))
+        })?;
     let mut norms: Vec<f32> = vec![0.0; data.nrows()];
 
     for (n, d) in std::iter::zip(norms.iter_mut(), data.rows()) {
         *n = square_norm(d);
     }
 
-    let transpose = BlockTransposed::<f32, GROUPSIZE>::from_matrix_view(data);
     kmeans_plusplus_into_inner(centers, data.into(), transpose.as_view(), &norms, rng)
 }
 
@@ -531,6 +528,16 @@ mod tests {
     fn is_in(needle: &[f32], haystack: rowmajor::Ref<'_, f32>) -> bool {
         assert_eq!(needle.len(), haystack.ncols());
         haystack.rows().any(|row| row == needle)
+    }
+
+    #[test]
+    fn packing_overflow_is_reported_before_allocating_row_scratch() {
+        let data = rowmajor::Ref::try_from_data(&[] as &[f32], usize::MAX, 0).unwrap();
+        let mut centers = rowmajor::Owned::from_element(1, 0, 0.0);
+        let mut rng = StdRng::seed_from_u64(1);
+        let error = kmeans_plusplus_into(centers.as_view_mut(), data, &mut rng).unwrap_err();
+        assert!(matches!(error.reason, FailureReason::PackingOverflow(_)));
+        assert!(!error.is_numerically_recoverable());
     }
 
     fn check_post_conditions(
@@ -619,7 +626,7 @@ mod tests {
         let mut samples = rowmajor::Owned::<f32>::from_element(num_samples, dim, 0.0);
         let mut distances = vec![f32::INFINITY; num_points];
         let distribution = Uniform::<u32>::new(0, (num_points + dim) as u32).unwrap();
-        let transpose = BlockTransposed::<f32, N>::from_matrix_view(data.as_view());
+        let transpose = BlockTransposed::<f32, N>::try_from_matrix_view(data.as_view()).unwrap();
 
         let mut last_residual = f64::INFINITY;
         for i in 0..num_samples {
@@ -1023,7 +1030,9 @@ mod tests {
         let this_square_norm = 0.0;
         update_distances::<16>(
             &mut square_distances,
-            BlockTransposed::<f32, 16>::from_matrix_view(data.as_view()).as_view(),
+            BlockTransposed::<f32, 16>::try_from_matrix_view(data.as_view())
+                .unwrap()
+                .as_view(),
             &norms,
             &this,
             this_square_norm,
@@ -1042,7 +1051,9 @@ mod tests {
         let this_square_norm = 0.0;
         update_distances::<16>(
             &mut square_distances,
-            BlockTransposed::<f32, 16>::from_matrix_view(data.as_view()).as_view(),
+            BlockTransposed::<f32, 16>::try_from_matrix_view(data.as_view())
+                .unwrap()
+                .as_view(),
             &norms,
             &this,
             this_square_norm,
@@ -1061,7 +1072,9 @@ mod tests {
         let this_square_norm = 0.0;
         update_distances::<16>(
             &mut square_distances,
-            BlockTransposed::<f32, 16>::from_matrix_view(data.as_view()).as_view(),
+            BlockTransposed::<f32, 16>::try_from_matrix_view(data.as_view())
+                .unwrap()
+                .as_view(),
             &norms,
             &this,
             this_square_norm,

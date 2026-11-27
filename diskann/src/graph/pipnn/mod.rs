@@ -57,7 +57,6 @@ mod leaf_metric;
 mod partition_kernel;
 mod partition_metric;
 mod partitioning;
-mod simd;
 mod topk;
 
 use std::{
@@ -542,8 +541,8 @@ fn build(backend: Backend<'_>, config: &Config) -> ANNResult<Vec<AdjacencyList<u
 mod test_support {
     use std::collections::BTreeSet;
 
-    use super::simd::Simd;
     use diskann_vector::distance::Metric;
+    use diskann_wide::Architecture;
 
     /// Return the directed edges `(source, target)` of `rows`, where row `i`
     /// lists the neighbors of point `i`. A repeated edge panics, so tests that
@@ -582,7 +581,7 @@ mod test_support {
 
     /// A test body that runs once for each architecture.
     pub(super) trait ArchCheck {
-        fn check<A: Simd>(&self, arch: A);
+        fn check<A: Architecture>(&self, arch: A);
     }
 
     /// Run `test` with `Scalar` and with each SIMD architecture that this CPU supports.

@@ -359,7 +359,7 @@ impl<T> Standard<T> {
 }
 
 /// Error for [`Standard::new`].
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Overflow {
     nrows: usize,
     ncols: usize,

@@ -147,6 +147,7 @@ impl<'a, T, const SZ: usize, const PACK: usize> View<'a, T, SZ, PACK> {
     /// # Safety
     ///
     /// The bound [`Self::k`] must be equal to `k`.
+    #[inline(always)]
     pub(in crate::matrix_kernels) unsafe fn visit_sub_views<F>(
         &self,
         sub_blocks: NonZeroUsize,
@@ -197,6 +198,7 @@ impl<'a, T, const SZ: usize, const PACK: usize> View<'a, T, SZ, PACK> {
     /// # Safety
     ///
     /// The bound [`Self::k`] must be equal to `k`.
+    #[inline(always)]
     pub(in crate::matrix_kernels) unsafe fn visit_panels<F>(&self, k: DimK, mut f: F)
     where
         F: FnMut(Panel<'_, T, SZ, PACK>, usize),
@@ -350,7 +352,7 @@ mod tests {
             value
         });
 
-        let bt = BlockTransposed::<f32, SZ, PACK>::from_matrix_view(matrix.as_view());
+        let bt = BlockTransposed::<f32, SZ, PACK>::try_from_matrix_view(matrix.as_view()).unwrap();
         let padded = bt.padded_ncols();
 
         let view = View::<f32, SZ, PACK>::from_block_transposed(bt.as_view()).unwrap();

@@ -31,6 +31,7 @@ use std::num::NonZeroUsize;
 
 // Kernels
 pub(crate) mod maxsim;
+pub(crate) mod topk;
 
 // Arguments
 pub(crate) mod blocks;

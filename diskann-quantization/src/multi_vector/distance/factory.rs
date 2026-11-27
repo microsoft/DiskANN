@@ -20,7 +20,7 @@ use diskann_wide::arch::x86_64::{V3, V4};
 use thiserror::Error;
 
 use super::fallback::FallbackKernel;
-use super::isa::{MaxSimIsa, NotSupported};
+use super::isa::{MaxSimIsa, NotSupported, dispatch_isa};
 use super::kernel::{Erase, MaxSimKernel};
 use super::max_sim::MaxSimError;
 use crate::matrix_kernels as mk;
@@ -326,205 +326,261 @@ fn reference_scores_i8(
 
 struct BuildAndErase<E>(E);
 
+fn pack_mapped<T, U: Copy + Default, const MR: usize, const PACK: usize>(
+    query: MatRef<'_, Standard<T>>,
+    convert: impl FnMut(&T) -> U,
+) -> Result<BlockTransposed<U, MR, PACK>, Overflow> {
+    let mapped = query
+        .as_matrix_view()
+        .try_map(convert)
+        .map_err(|_| Overflow::for_type::<U>(query.num_vectors(), query.vector_dim()))?;
+    BlockTransposed::try_from_matrix_view(mapped.as_view())
+}
+
 // ───── f32 Target1 impls ─────
 
-impl<E: Erase<f32>> diskann_wide::arch::Target1<Scalar, E::Output, MatRef<'_, Standard<f32>>>
-    for BuildAndErase<E>
+impl<E: Erase<f32>>
+    diskann_wide::arch::Target1<
+        Scalar,
+        Result<E::Output, BuildMaxSimError>,
+        MatRef<'_, Standard<f32>>,
+    > for BuildAndErase<E>
 {
-    fn run(self, arch: Scalar, query: MatRef<'_, Standard<f32>>) -> E::Output {
-        let prepared = BlockTransposed::<f32, 8>::from_matrix_view(query.as_matrix_view());
-        self.0.erase(Prepared {
+    fn run(
+        self,
+        arch: Scalar,
+        query: MatRef<'_, Standard<f32>>,
+    ) -> Result<E::Output, BuildMaxSimError> {
+        let prepared = BlockTransposed::<f32, 8>::try_from_matrix_view(query.as_matrix_view())?;
+        Ok(self.0.erase(Prepared {
             arch,
             prepared,
             _packing: Pack::<2>,
-        })
+        }))
     }
 }
 
 #[cfg(target_arch = "x86_64")]
-impl<E: Erase<f32>> diskann_wide::arch::Target1<V3, E::Output, MatRef<'_, Standard<f32>>>
+impl<E: Erase<f32>>
+    diskann_wide::arch::Target1<V3, Result<E::Output, BuildMaxSimError>, MatRef<'_, Standard<f32>>>
     for BuildAndErase<E>
 {
-    fn run(self, arch: V3, query: MatRef<'_, Standard<f32>>) -> E::Output {
-        let prepared = BlockTransposed::<f32, 16>::from_matrix_view(query.as_matrix_view());
-        self.0.erase(Prepared {
+    fn run(
+        self,
+        arch: V3,
+        query: MatRef<'_, Standard<f32>>,
+    ) -> Result<E::Output, BuildMaxSimError> {
+        let prepared = BlockTransposed::<f32, 16>::try_from_matrix_view(query.as_matrix_view())?;
+        Ok(self.0.erase(Prepared {
             arch,
             prepared,
             _packing: Pack::<6>,
-        })
+        }))
     }
 }
 
 #[cfg(target_arch = "x86_64")]
-impl<E: Erase<f32>> diskann_wide::arch::Target1<V4, E::Output, MatRef<'_, Standard<f32>>>
+impl<E: Erase<f32>>
+    diskann_wide::arch::Target1<V4, Result<E::Output, BuildMaxSimError>, MatRef<'_, Standard<f32>>>
     for BuildAndErase<E>
 {
-    fn run(self, arch: V4, query: MatRef<'_, Standard<f32>>) -> E::Output {
-        let prepared = BlockTransposed::<f32, 32>::from_matrix_view(query.as_matrix_view());
-        self.0.erase(Prepared {
+    fn run(
+        self,
+        arch: V4,
+        query: MatRef<'_, Standard<f32>>,
+    ) -> Result<E::Output, BuildMaxSimError> {
+        let prepared = BlockTransposed::<f32, 32>::try_from_matrix_view(query.as_matrix_view())?;
+        Ok(self.0.erase(Prepared {
             arch,
             prepared,
             _packing: Pack::<6>,
-        })
+        }))
     }
 }
 
 #[cfg(target_arch = "aarch64")]
-impl<E: Erase<f32>> diskann_wide::arch::Target1<Neon, E::Output, MatRef<'_, Standard<f32>>>
-    for BuildAndErase<E>
+impl<E: Erase<f32>>
+    diskann_wide::arch::Target1<
+        Neon,
+        Result<E::Output, BuildMaxSimError>,
+        MatRef<'_, Standard<f32>>,
+    > for BuildAndErase<E>
 {
-    fn run(self, arch: Neon, query: MatRef<'_, Standard<f32>>) -> E::Output {
-        let prepared = BlockTransposed::<f32, 8>::from_matrix_view(query.as_matrix_view());
-        self.0.erase(Prepared {
+    fn run(
+        self,
+        arch: Neon,
+        query: MatRef<'_, Standard<f32>>,
+    ) -> Result<E::Output, BuildMaxSimError> {
+        let prepared = BlockTransposed::<f32, 8>::try_from_matrix_view(query.as_matrix_view())?;
+        Ok(self.0.erase(Prepared {
             arch,
             prepared,
             _packing: Pack::<6>,
-        })
+        }))
     }
 }
 
 // ───── f16 Target1 impls ─────
 
 impl<E: Erase<half::f16>>
-    diskann_wide::arch::Target1<Scalar, E::Output, MatRef<'_, Standard<half::f16>>>
-    for BuildAndErase<E>
+    diskann_wide::arch::Target1<
+        Scalar,
+        Result<E::Output, BuildMaxSimError>,
+        MatRef<'_, Standard<half::f16>>,
+    > for BuildAndErase<E>
 {
-    fn run(self, arch: Scalar, query: MatRef<'_, Standard<half::f16>>) -> E::Output {
-        let prepared = BlockTransposed::<f32, 8>::from_matrix_view(
-            query
-                .as_matrix_view()
-                .map(|v| diskann_wide::cast_f16_to_f32(*v))
-                .as_view(),
-        );
-        self.0.erase(Prepared {
+    fn run(
+        self,
+        arch: Scalar,
+        query: MatRef<'_, Standard<half::f16>>,
+    ) -> Result<E::Output, BuildMaxSimError> {
+        let prepared = pack_mapped::<_, _, 8, 1>(query, |v| diskann_wide::cast_f16_to_f32(*v))?;
+        Ok(self.0.erase(Prepared {
             arch,
             prepared,
             _packing: Pack::<2>,
-        })
+        }))
     }
 }
 
 #[cfg(target_arch = "x86_64")]
 impl<E: Erase<half::f16>>
-    diskann_wide::arch::Target1<V3, E::Output, MatRef<'_, Standard<half::f16>>>
-    for BuildAndErase<E>
+    diskann_wide::arch::Target1<
+        V3,
+        Result<E::Output, BuildMaxSimError>,
+        MatRef<'_, Standard<half::f16>>,
+    > for BuildAndErase<E>
 {
-    fn run(self, arch: V3, query: MatRef<'_, Standard<half::f16>>) -> E::Output {
-        let prepared = BlockTransposed::<f32, 16>::from_matrix_view(
-            query
-                .as_matrix_view()
-                .map(|v| diskann_wide::cast_f16_to_f32(*v))
-                .as_view(),
-        );
-        self.0.erase(Prepared {
+    fn run(
+        self,
+        arch: V3,
+        query: MatRef<'_, Standard<half::f16>>,
+    ) -> Result<E::Output, BuildMaxSimError> {
+        let prepared = pack_mapped::<_, _, 16, 1>(query, |v| diskann_wide::cast_f16_to_f32(*v))?;
+        Ok(self.0.erase(Prepared {
             arch,
             prepared,
             _packing: Pack::<6>,
-        })
+        }))
     }
 }
 
 #[cfg(target_arch = "x86_64")]
 impl<E: Erase<half::f16>>
-    diskann_wide::arch::Target1<V4, E::Output, MatRef<'_, Standard<half::f16>>>
-    for BuildAndErase<E>
+    diskann_wide::arch::Target1<
+        V4,
+        Result<E::Output, BuildMaxSimError>,
+        MatRef<'_, Standard<half::f16>>,
+    > for BuildAndErase<E>
 {
-    fn run(self, arch: V4, query: MatRef<'_, Standard<half::f16>>) -> E::Output {
-        let prepared = BlockTransposed::<f32, 32>::from_matrix_view(
-            query
-                .as_matrix_view()
-                .map(|v| diskann_wide::cast_f16_to_f32(*v))
-                .as_view(),
-        );
-        self.0.erase(Prepared {
+    fn run(
+        self,
+        arch: V4,
+        query: MatRef<'_, Standard<half::f16>>,
+    ) -> Result<E::Output, BuildMaxSimError> {
+        let prepared = pack_mapped::<_, _, 32, 1>(query, |v| diskann_wide::cast_f16_to_f32(*v))?;
+        Ok(self.0.erase(Prepared {
             arch,
             prepared,
             _packing: Pack::<6>,
-        })
+        }))
     }
 }
 
 #[cfg(target_arch = "aarch64")]
 impl<E: Erase<half::f16>>
-    diskann_wide::arch::Target1<Neon, E::Output, MatRef<'_, Standard<half::f16>>>
-    for BuildAndErase<E>
+    diskann_wide::arch::Target1<
+        Neon,
+        Result<E::Output, BuildMaxSimError>,
+        MatRef<'_, Standard<half::f16>>,
+    > for BuildAndErase<E>
 {
-    fn run(self, arch: Neon, query: MatRef<'_, Standard<half::f16>>) -> E::Output {
+    fn run(
+        self,
+        arch: Neon,
+        query: MatRef<'_, Standard<half::f16>>,
+    ) -> Result<E::Output, BuildMaxSimError> {
         // Neon dispatches to Scalar (no Neon-specific kernel).
-        let prepared = BlockTransposed::<f32, 8>::from_matrix_view(
-            query
-                .as_matrix_view()
-                .map(|v| diskann_wide::cast_f16_to_f32(*v))
-                .as_view(),
-        );
-        self.0.erase(Prepared {
+        let prepared = pack_mapped::<_, _, 8, 1>(query, |v| diskann_wide::cast_f16_to_f32(*v))?;
+        Ok(self.0.erase(Prepared {
             arch,
             prepared,
             _packing: Pack::<6>,
-        })
+        }))
     }
 }
 
 // ───── i8 Target1 impls ─────
 
-impl<E: Erase<i8>> diskann_wide::arch::Target1<Scalar, E::Output, MatRef<'_, Standard<i8>>>
-    for BuildAndErase<E>
+impl<E: Erase<i8>>
+    diskann_wide::arch::Target1<
+        Scalar,
+        Result<E::Output, BuildMaxSimError>,
+        MatRef<'_, Standard<i8>>,
+    > for BuildAndErase<E>
 {
-    fn run(self, arch: Scalar, query: MatRef<'_, Standard<i8>>) -> E::Output {
-        let prepared = BlockTransposed::<i8, 8, 2>::from_matrix_view(query.as_matrix_view());
-        self.0.erase(Prepared {
+    fn run(
+        self,
+        arch: Scalar,
+        query: MatRef<'_, Standard<i8>>,
+    ) -> Result<E::Output, BuildMaxSimError> {
+        let prepared = BlockTransposed::<i8, 8, 2>::try_from_matrix_view(query.as_matrix_view())?;
+        Ok(self.0.erase(Prepared {
             arch,
             prepared,
             _packing: Pack::<2>,
-        })
+        }))
     }
 }
 
 #[cfg(target_arch = "x86_64")]
-impl<E: Erase<i8>> diskann_wide::arch::Target1<V3, E::Output, MatRef<'_, Standard<i8>>>
+impl<E: Erase<i8>>
+    diskann_wide::arch::Target1<V3, Result<E::Output, BuildMaxSimError>, MatRef<'_, Standard<i8>>>
     for BuildAndErase<E>
 {
-    fn run(self, arch: V3, query: MatRef<'_, Standard<i8>>) -> E::Output {
+    fn run(self, arch: V3, query: MatRef<'_, Standard<i8>>) -> Result<E::Output, BuildMaxSimError> {
         // `PrepareB for V3` expects the query widened to `i16`.
-        let prepared = BlockTransposed::<i16, 16, 2>::from_matrix_view(
-            query.as_matrix_view().map(|v| i16::from(*v)).as_view(),
-        );
-        self.0.erase(Prepared {
+        let prepared = pack_mapped::<_, _, 16, 2>(query, |v| i16::from(*v))?;
+        Ok(self.0.erase(Prepared {
             arch,
             prepared,
             _packing: Pack::<6>,
-        })
+        }))
     }
 }
 
 #[cfg(target_arch = "x86_64")]
-impl<E: Erase<i8>> diskann_wide::arch::Target1<V4, E::Output, MatRef<'_, Standard<i8>>>
+impl<E: Erase<i8>>
+    diskann_wide::arch::Target1<V4, Result<E::Output, BuildMaxSimError>, MatRef<'_, Standard<i8>>>
     for BuildAndErase<E>
 {
-    fn run(self, arch: V4, query: MatRef<'_, Standard<i8>>) -> E::Output {
+    fn run(self, arch: V4, query: MatRef<'_, Standard<i8>>) -> Result<E::Output, BuildMaxSimError> {
         // `PrepareB for V4` expects the query packed as `x + 128` in `u8`.
-        let prepared = BlockTransposed::<u8, 32, 4>::from_matrix_view(
-            query.as_matrix_view().map(|v| (*v as u8) ^ 0x80).as_view(),
-        );
-        self.0.erase(Prepared {
+        let prepared = pack_mapped::<_, _, 32, 4>(query, |v| (*v as u8) ^ 0x80)?;
+        Ok(self.0.erase(Prepared {
             arch,
             prepared,
             _packing: Pack::<6>,
-        })
+        }))
     }
 }
 
 #[cfg(target_arch = "aarch64")]
-impl<E: Erase<i8>> diskann_wide::arch::Target1<Neon, E::Output, MatRef<'_, Standard<i8>>>
+impl<E: Erase<i8>>
+    diskann_wide::arch::Target1<Neon, Result<E::Output, BuildMaxSimError>, MatRef<'_, Standard<i8>>>
     for BuildAndErase<E>
 {
-    fn run(self, arch: Neon, query: MatRef<'_, Standard<i8>>) -> E::Output {
-        let prepared = BlockTransposed::<i8, 8, 4>::from_matrix_view(query.as_matrix_view());
-        self.0.erase(Prepared {
+    fn run(
+        self,
+        arch: Neon,
+        query: MatRef<'_, Standard<i8>>,
+    ) -> Result<E::Output, BuildMaxSimError> {
+        let prepared = BlockTransposed::<i8, 8, 4>::try_from_matrix_view(query.as_matrix_view())?;
+        Ok(self.0.erase(Prepared {
             arch,
             prepared,
             _packing: Pack::<6>,
-        })
+        }))
     }
 }
 
@@ -558,6 +614,7 @@ pub trait MaxSimElement: sealed::Sealed + Sized + Copy + Send + Sync + 'static {
     /// run on this build (e.g. AVX-512 unavailable; aarch64 on x86_64), and
     /// [`BuildMaxSimError::DimTooLarge`] when an `i8` query has more than
     /// `131_071` dimensions, beyond which `i32` scores could overflow.
+    /// Returns [`BuildMaxSimError::Overflow`] if the packed query is too large.
     fn build<E: Erase<Self>>(
         isa: MaxSimIsa,
         query: MatRef<'_, Standard<Self>>,
@@ -578,52 +635,12 @@ impl MaxSimElement for f32 {
         query: MatRef<'_, Standard<f32>>,
         erase: E,
     ) -> Result<E::Output, BuildMaxSimError> {
-        match isa {
-            MaxSimIsa::Auto => Ok(diskann_wide::arch::dispatch1_no_features(
-                BuildAndErase(erase),
-                query,
-            )),
-            MaxSimIsa::Scalar => Ok(Scalar::new().run1(BuildAndErase(erase), query)),
-            #[cfg(target_arch = "x86_64")]
-            MaxSimIsa::X86_64_V3 => {
-                let arch = V3::new_checked().ok_or(NotSupported {
-                    isa,
-                    reason: "AVX2/FMA unavailable on this CPU",
-                })?;
-                Ok(arch.run1(BuildAndErase(erase), query))
-            }
-            #[cfg(target_arch = "x86_64")]
-            MaxSimIsa::X86_64_V4 => {
-                let arch = V4::new_checked().ok_or(NotSupported {
-                    isa,
-                    reason: "AVX-512 unavailable on this CPU",
-                })?;
-                Ok(arch.run1(BuildAndErase(erase), query))
-            }
-            #[cfg(not(target_arch = "x86_64"))]
-            MaxSimIsa::X86_64_V3 | MaxSimIsa::X86_64_V4 => Err(NotSupported {
-                isa,
-                reason: "x86_64 target only",
-            }
-            .into()),
-            #[cfg(target_arch = "aarch64")]
-            MaxSimIsa::Neon => {
-                let arch = Neon::new_checked().ok_or(NotSupported {
-                    isa,
-                    reason: "Neon unavailable on this CPU",
-                })?;
-                Ok(arch.run1(BuildAndErase(erase), query))
-            }
-            #[cfg(not(target_arch = "aarch64"))]
-            MaxSimIsa::Neon => Err(NotSupported {
-                isa,
-                reason: "aarch64 target only",
-            }
-            .into()),
-            MaxSimIsa::Reference => {
-                Ok(erase.erase(ReferenceKernel::new(query, reference_scores::<f32>)))
-            }
-        }
+        dispatch_isa!(
+            isa,
+            BuildAndErase(erase),
+            query,
+            Ok(erase.erase(ReferenceKernel::new(query, reference_scores::<f32>))),
+        )?
     }
 }
 
@@ -636,52 +653,12 @@ impl MaxSimElement for half::f16 {
         query: MatRef<'_, Standard<half::f16>>,
         erase: E,
     ) -> Result<E::Output, BuildMaxSimError> {
-        match isa {
-            MaxSimIsa::Auto => Ok(diskann_wide::arch::dispatch1_no_features(
-                BuildAndErase(erase),
-                query,
-            )),
-            MaxSimIsa::Scalar => Ok(Scalar::new().run1(BuildAndErase(erase), query)),
-            #[cfg(target_arch = "x86_64")]
-            MaxSimIsa::X86_64_V3 => {
-                let arch = V3::new_checked().ok_or(NotSupported {
-                    isa,
-                    reason: "AVX2/FMA unavailable on this CPU",
-                })?;
-                Ok(arch.run1(BuildAndErase(erase), query))
-            }
-            #[cfg(target_arch = "x86_64")]
-            MaxSimIsa::X86_64_V4 => {
-                let arch = V4::new_checked().ok_or(NotSupported {
-                    isa,
-                    reason: "AVX-512 unavailable on this CPU",
-                })?;
-                Ok(arch.run1(BuildAndErase(erase), query))
-            }
-            #[cfg(not(target_arch = "x86_64"))]
-            MaxSimIsa::X86_64_V3 | MaxSimIsa::X86_64_V4 => Err(NotSupported {
-                isa,
-                reason: "x86_64 target only",
-            }
-            .into()),
-            #[cfg(target_arch = "aarch64")]
-            MaxSimIsa::Neon => {
-                let arch = Neon::new_checked().ok_or(NotSupported {
-                    isa,
-                    reason: "Neon unavailable on this CPU",
-                })?;
-                Ok(arch.run1(BuildAndErase(erase), query))
-            }
-            #[cfg(not(target_arch = "aarch64"))]
-            MaxSimIsa::Neon => Err(NotSupported {
-                isa,
-                reason: "aarch64 target only",
-            }
-            .into()),
-            MaxSimIsa::Reference => {
-                Ok(erase.erase(ReferenceKernel::new(query, reference_scores::<half::f16>)))
-            }
-        }
+        dispatch_isa!(
+            isa,
+            BuildAndErase(erase),
+            query,
+            Ok(erase.erase(ReferenceKernel::new(query, reference_scores::<half::f16>))),
+        )?
     }
 }
 
@@ -704,52 +681,12 @@ impl MaxSimElement for i8 {
             ));
         }
 
-        match isa {
-            MaxSimIsa::Auto => Ok(diskann_wide::arch::dispatch1_no_features(
-                BuildAndErase(erase),
-                query,
-            )),
-            MaxSimIsa::Scalar => Ok(Scalar::new().run1(BuildAndErase(erase), query)),
-            #[cfg(target_arch = "x86_64")]
-            MaxSimIsa::X86_64_V3 => {
-                let arch = V3::new_checked().ok_or(NotSupported {
-                    isa,
-                    reason: "AVX2/FMA unavailable on this CPU",
-                })?;
-                Ok(arch.run1(BuildAndErase(erase), query))
-            }
-            #[cfg(target_arch = "x86_64")]
-            MaxSimIsa::X86_64_V4 => {
-                let arch = V4::new_checked().ok_or(NotSupported {
-                    isa,
-                    reason: "AVX-512 unavailable on this CPU",
-                })?;
-                Ok(arch.run1(BuildAndErase(erase), query))
-            }
-            #[cfg(not(target_arch = "x86_64"))]
-            MaxSimIsa::X86_64_V3 | MaxSimIsa::X86_64_V4 => Err(NotSupported {
-                isa,
-                reason: "x86_64 target only",
-            }
-            .into()),
-            #[cfg(target_arch = "aarch64")]
-            MaxSimIsa::Neon => {
-                let arch = Neon::new_checked().ok_or(NotSupported {
-                    isa,
-                    reason: "Neon unavailable on this CPU",
-                })?;
-                Ok(arch.run1(BuildAndErase(erase), query))
-            }
-            #[cfg(not(target_arch = "aarch64"))]
-            MaxSimIsa::Neon => Err(NotSupported {
-                isa,
-                reason: "aarch64 target only",
-            }
-            .into()),
-            MaxSimIsa::Reference => {
-                Ok(erase.erase(ReferenceKernel::new(query, reference_scores_i8)))
-            }
-        }
+        dispatch_isa!(
+            isa,
+            BuildAndErase(erase),
+            query,
+            Ok(erase.erase(ReferenceKernel::new(query, reference_scores_i8))),
+        )?
     }
 }
 
@@ -779,6 +716,7 @@ pub enum BuildMaxSimError {
 /// Returns [`BuildMaxSimError::NotSupported`] when the requested ISA cannot run
 /// on this build, and [`BuildMaxSimError::DimTooLarge`] when an `i8` query has
 /// more than `131_071` dimensions.
+/// Returns [`BuildMaxSimError::Overflow`] if the packed query is too large.
 pub fn build_max_sim<T: MaxSimElement, E: Erase<T>>(
     isa: MaxSimIsa,
     query: MatRef<'_, Standard<T>>,
@@ -917,17 +855,22 @@ mod tests {
             let mut expected_scores = vec![0.0f32; nq];
             let _ = MaxSim::new(&mut expected_scores).evaluate(QueryMatRef::from(query), doc);
 
-            let kernel = build_max_sim::<T, _>(MaxSimIsa::Auto, query, BoxErase).unwrap();
-            let mut actual_scores = scores_buffer::<T>(nq);
-            kernel.compute_max_sim(doc, &mut actual_scores).unwrap();
+            for isa in MaxSimIsa::all()
+                .into_iter()
+                .filter(|isa| isa.is_available())
+            {
+                let kernel = build_max_sim::<T, _>(isa, query, BoxErase).unwrap();
+                let mut actual_scores = scores_buffer::<T>(nq);
+                kernel.compute_max_sim(doc, &mut actual_scores).unwrap();
 
-            for i in 0..nq {
-                let actual = T::score_as_f32(actual_scores[i]);
-                assert!(
-                    (actual - expected_scores[i]).abs() < tol,
-                    "{label}MaxSim[{i}] mismatch for ({nq},{nd},{dim}): actual={actual}, expected={}",
-                    expected_scores[i],
-                );
+                for i in 0..nq {
+                    let actual = T::score_as_f32(actual_scores[i]);
+                    assert!(
+                        (actual - expected_scores[i]).abs() < tol,
+                        "{label}({isa:?}) MaxSim[{i}] mismatch for ({nq},{nd},{dim}): actual={actual}, expected={}",
+                        expected_scores[i],
+                    );
+                }
             }
         }
     }
@@ -954,6 +897,15 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn packed_query_overflow_is_reported_by_the_factory() {
+        let query = make_mat::<f32>(&[], usize::MAX, 0);
+        assert!(matches!(
+            build_max_sim(MaxSimIsa::Scalar, query, BoxErase),
+            Err(BuildMaxSimError::Overflow(_))
+        ));
     }
 
     #[test]

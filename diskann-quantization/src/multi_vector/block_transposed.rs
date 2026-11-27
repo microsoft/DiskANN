@@ -1114,24 +1114,13 @@ impl<'this, T: Copy, const GROUP: usize, const PACK: usize> Reborrow<'this>
 impl<T: Copy + Default, const GROUP: usize, const PACK: usize> BlockTransposed<T, GROUP, PACK> {
     /// Construct a default-initialized block-transposed matrix from dimensions.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if the dimensions overflow the allocation budget.
-    #[expect(clippy::expect_used)]
-    pub fn new(nrows: usize, ncols: usize) -> Self {
-        let repr = BlockTransposedRepr::<T, GROUP, PACK>::new(nrows, ncols)
-            .expect("dimensions should not overflow");
-        Self {
-            data: Mat::new(repr, Defaulted).expect("infallible"),
-        }
-    }
-
-    /// Fallible variant of [`new`](Self::new).
+    /// Returns [`Overflow`] if the padded dimensions exceed the allocation budget.
     pub fn try_new(nrows: usize, ncols: usize) -> Result<Self, Overflow> {
         let repr = BlockTransposedRepr::<T, GROUP, PACK>::new(nrows, ncols)?;
-        Ok(Self {
-            data: Mat::new(repr, Defaulted).expect("infallible"),
-        })
+        let Ok(data) = Mat::new(repr, Defaulted);
+        Ok(Self { data })
     }
 
     /// Construct a block-transposed matrix by copying data from a [`Strided`].
@@ -1145,10 +1134,14 @@ impl<T: Copy + Default, const GROUP: usize, const PACK: usize> BlockTransposed<T
     /// row-within-block, pack-lane — so that writes to the backing allocation are
     /// sequential. Source reads stride across rows of the [`Strided`], which is
     /// acceptable because read-side prefetch is more effective than write-side.
-    pub fn from_strided(v: Strided<'_, T>) -> Self {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Overflow`] if the padded dimensions exceed the allocation budget.
+    pub fn try_from_strided(v: Strided<'_, T>) -> Result<Self, Overflow> {
         let nrows = v.nrows();
         let ncols = v.ncols();
-        let mut mat = Self::new(nrows, ncols);
+        let mut mat = Self::try_new(nrows, ncols)?;
 
         let repr = *mat.data.repr();
         let num_blocks = repr.num_blocks();
@@ -1192,12 +1185,16 @@ impl<T: Copy + Default, const GROUP: usize, const PACK: usize> BlockTransposed<T
             }
         }
 
-        mat
+        Ok(mat)
     }
 
     /// Construct a block-transposed matrix by copying data from a [`rowmajor::Ref`].
-    pub fn from_matrix_view(v: rowmajor::Ref<'_, T>) -> Self {
-        Self::from_strided(v.into())
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Overflow`] if the padded dimensions exceed the allocation budget.
+    pub fn try_from_matrix_view(v: rowmajor::Ref<'_, T>) -> Result<Self, Overflow> {
+        Self::try_from_strided(v.into())
     }
 }
 
@@ -1270,7 +1267,8 @@ mod tests {
             .iter_mut()
             .enumerate()
             .for_each(|(i, value)| *value = (i + 1) as i32);
-        let mut original = BlockTransposed::<i32, 4, 2>::from_matrix_view(data.as_view());
+        let mut original =
+            BlockTransposed::<i32, 4, 2>::try_from_matrix_view(data.as_view()).unwrap();
         let column_padding = linear_index::<4, 2>(0, 3, original.ncols());
         let row_padding = linear_index::<4, 2>(5, 0, original.ncols());
         let row_and_column_padding = linear_index::<4, 2>(5, 3, original.ncols());
@@ -1301,7 +1299,7 @@ mod tests {
     /// immutable row views (`Row`), mutable row views (`RowMut`),
     /// `as_slice` / `as_mut_slice`, block views (immutable and mutable),
     /// `remainder_block` / `remainder_block_mut`, `block_ptr_unchecked`,
-    /// `from_matrix_view`, OOB `get_row` returns, and both column and row
+    /// `try_from_matrix_view`, OOB `get_row` returns, and both column and row
     /// padding verification.
     fn test_full_api<
         T: Copy + Default + PartialEq + std::fmt::Debug + 'static,
@@ -1329,7 +1327,8 @@ mod tests {
             .enumerate()
             .for_each(|(i, d)| *d = gen_element(i));
 
-        let mut transpose = BlockTransposed::<T, GROUP, PACK>::from_strided(data.as_view().into());
+        let mut transpose =
+            BlockTransposed::<T, GROUP, PACK>::try_from_strided(data.as_view().into()).unwrap();
 
         let expected_padded = div_round_up(ncols, PACK) * PACK;
         let expected_remainder = nrows % GROUP;
@@ -1708,7 +1707,8 @@ mod tests {
 
         // ── Padding verification (fresh construction) ────────────
 
-        let transpose = BlockTransposed::<T, GROUP, PACK>::from_strided(data.as_view().into());
+        let transpose =
+            BlockTransposed::<T, GROUP, PACK>::try_from_strided(data.as_view().into()).unwrap();
         let raw = transpose.as_slice();
 
         // Column padding.
@@ -1751,12 +1751,11 @@ mod tests {
             context,
         );
 
-        // ── from_matrix_view produces identical results ──────────
+        // ── try_from_matrix_view produces identical results ─────
 
-        if nrows > 0 && ncols > 0 {
-            let via_matrix = BlockTransposed::<T, GROUP, PACK>::from_matrix_view(data.as_view());
-            assert_eq!(via_matrix.as_slice(), transpose.as_slice(), "{}", context);
-        }
+        let via_matrix =
+            BlockTransposed::<T, GROUP, PACK>::try_from_matrix_view(data.as_view()).unwrap();
+        assert_eq!(via_matrix.as_slice(), transpose.as_slice(), "{}", context);
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -1883,7 +1882,8 @@ mod tests {
             .enumerate()
             .for_each(|(i, d)| *d = gen_element(i));
 
-        let transpose = BlockTransposed::<T, GROUP, 1>::from_strided(data.as_view().into());
+        let transpose =
+            BlockTransposed::<T, GROUP, 1>::try_from_strided(data.as_view().into()).unwrap();
 
         // Full blocks.
         for b in 0..transpose.full_blocks() {
@@ -1994,7 +1994,7 @@ mod tests {
         let ncols = 3;
         let repr = BlockTransposedRepr::<f32, 4>::new(nrows, ncols).unwrap();
 
-        let mat = BlockTransposed::<f32, 4>::new(nrows, ncols);
+        let mat = BlockTransposed::<f32, 4>::try_new(nrows, ncols).unwrap();
         let raw: &[f32] = mat.as_slice();
 
         let mat_ref = BlockTransposedRef::new(repr.new_ref(raw).unwrap());
@@ -2024,7 +2024,7 @@ mod tests {
         /// Verify that immutable and mutable empty-row views are sound for a
         /// given `GROUP`/`PACK` combination.
         fn check_empty<const GROUP: usize, const PACK: usize>() {
-            let mut mat = BlockTransposed::<f32, GROUP, PACK>::new(4, 0);
+            let mut mat = BlockTransposed::<f32, GROUP, PACK>::try_new(4, 0).unwrap();
 
             // Immutable views.
             let view = mat.as_view();
@@ -2053,7 +2053,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "column index 3 out of bounds")]
     fn test_row_view_index_oob() {
-        let mat = BlockTransposed::<f32, 4>::new(4, 3);
+        let mat = BlockTransposed::<f32, 4>::try_new(4, 3).unwrap();
         let view = mat.as_view();
         let row = view.get_row(0).unwrap();
         let _ = row[3];
@@ -2062,7 +2062,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "column index 3 out of bounds")]
     fn test_row_view_mut_index_oob() {
-        let mut mat = BlockTransposed::<f32, 4>::new(4, 3);
+        let mut mat = BlockTransposed::<f32, 4>::try_new(4, 3).unwrap();
         let row = mat.get_row_mut(0).unwrap();
         let _ = row[3];
     }
@@ -2070,7 +2070,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "column index 3 out of bounds")]
     fn test_row_view_mut_index_mut_oob() {
-        let mut mat = BlockTransposed::<f32, 4>::new(4, 3);
+        let mut mat = BlockTransposed::<f32, 4>::try_new(4, 3).unwrap();
         let mut row = mat.get_row_mut(0).unwrap();
         row[3] = 1.0;
     }
@@ -2078,7 +2078,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "column index 3 out of bounds")]
     fn test_row_view_set_oob() {
-        let mut mat = BlockTransposed::<f32, 4>::new(4, 3);
+        let mut mat = BlockTransposed::<f32, 4>::try_new(4, 3).unwrap();
         let mut row = mat.get_row_mut(0).unwrap();
         row.set(3, 1.0);
     }
@@ -2086,46 +2086,46 @@ mod tests {
     #[test]
     #[should_panic(expected = "row 4 out of bounds")]
     fn test_get_element_row_oob() {
-        let mat = BlockTransposed::<f32, 4>::new(4, 3);
+        let mat = BlockTransposed::<f32, 4>::try_new(4, 3).unwrap();
         mat.get_element(4, 0);
     }
 
     #[test]
     #[should_panic(expected = "col 3 out of bounds")]
     fn test_get_element_col_oob() {
-        let mat = BlockTransposed::<f32, 4>::new(4, 3);
+        let mat = BlockTransposed::<f32, 4>::try_new(4, 3).unwrap();
         mat.get_element(0, 3);
     }
 
     #[test]
     #[should_panic(expected = "assertion failed")]
     fn test_index_tuple_row_oob() {
-        let mat = BlockTransposed::<f32, 4>::new(4, 3);
+        let mat = BlockTransposed::<f32, 4>::try_new(4, 3).unwrap();
         let _ = mat[(4, 0)];
     }
 
     #[test]
     #[should_panic(expected = "assertion failed")]
     fn test_index_tuple_col_oob() {
-        let mat = BlockTransposed::<f32, 4>::new(4, 3);
+        let mat = BlockTransposed::<f32, 4>::try_new(4, 3).unwrap();
         let _ = mat[(0, 3)];
     }
 
     #[test]
     #[should_panic]
     fn test_block_oob() {
-        let mat = BlockTransposed::<f32, 4>::new(4, 3);
+        let mat = BlockTransposed::<f32, 4>::try_new(4, 3).unwrap();
         let _ = mat.block(1);
     }
 
     #[test]
     #[should_panic]
     fn test_block_mut_oob() {
-        let mut mat = BlockTransposed::<f32, 4>::new(4, 3);
+        let mut mat = BlockTransposed::<f32, 4>::try_new(4, 3).unwrap();
         let _ = mat.block_mut(1);
     }
 
-    // ── from_strided with non-unit stride ───────────────────────────
+    // ── try_from_strided with non-unit stride ───────────────────────
 
     #[test]
     fn test_from_strided_nonunit_stride() {
@@ -2145,7 +2145,7 @@ mod tests {
 
         let strided = Strided::try_from_data(&flat, nrows, ncols, cstride)
             .expect("should construct strided view");
-        let transpose = BlockTransposed::<f32, GROUP, PACK>::from_strided(strided);
+        let transpose = BlockTransposed::<f32, GROUP, PACK>::try_from_strided(strided).unwrap();
 
         assert_eq!(transpose.nrows(), nrows);
         assert_eq!(transpose.ncols(), ncols);
@@ -2177,6 +2177,18 @@ mod tests {
         }
     }
 
+    #[test]
+    fn fallible_packing_rejects_padded_extent_overflow() {
+        let view = rowmajor::Ref::try_from_data(&[] as &[f32], usize::MAX, 0).unwrap();
+        assert!(BlockTransposed::<f32, 8>::try_from_matrix_view(view).is_err());
+        assert!(BlockTransposed::<f32, 8>::try_from_strided(view.into()).is_err());
+
+        // A single real input element can also exceed the packed byte budget.
+        const GROUP: usize = 1 << (usize::BITS - 2);
+        let one = rowmajor::Ref::row_vector(&[1.0f32]);
+        assert!(BlockTransposed::<f32, GROUP>::try_from_matrix_view(one).is_err());
+    }
+
     // ── Concurrent multi-row mutation ───────────────────────────────
 
     #[test]
@@ -2186,7 +2198,7 @@ mod tests {
 
         let (nrows, ncols, num_threads) = if cfg!(miri) { (8, 4, 2) } else { (64, 16, 4) };
 
-        let mut mat = BlockTransposed::<f32, GROUP, PACK>::new(nrows, ncols);
+        let mut mat = BlockTransposed::<f32, GROUP, PACK>::try_new(nrows, ncols).unwrap();
         let rows: Vec<RowMut<'_, f32, GROUP, PACK>> = mat.data.rows_mut().collect();
         let rows_per_thread = nrows / num_threads;
         let mut rows = rows.into_boxed_slice();

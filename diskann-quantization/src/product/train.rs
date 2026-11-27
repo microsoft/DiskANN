@@ -136,8 +136,16 @@ impl TrainQuantizer for LightPQTrainingParameters {
                 })?;
 
                 // Allocate scratch data structures.
+                let transpose =
+                    BlockTransposed::<f32, 16>::try_from_strided(view).map_err(|err| {
+                        PQTrainingError {
+                            chunk: i,
+                            of: schema.len(),
+                            dim: range.len(),
+                            kind: PQTrainingErrorKind::InternalError(Box::new(err)),
+                        }
+                    })?;
                 let norms: Vec<f32> = view.rows().map(square_norm).collect();
-                let transpose = BlockTransposed::<f32, 16>::from_strided(view);
                 let mut centers =
                     rowmajor::Owned::try_from_element(trainer.ncenters, range.len(), 0.0).map_err(
                         |err| PQTrainingError {

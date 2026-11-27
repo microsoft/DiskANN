@@ -49,10 +49,13 @@ mod isa;
 mod kernel;
 mod max_sim;
 mod projected_eigen;
+mod topk;
 
 pub use factory::{BuildMaxSimError, MaxSimElement, build_max_sim};
 pub use fallback::QueryMatRef;
+pub(crate) use isa::RuntimeArch;
 pub use isa::{MaxSimIsa, NotSupported};
 pub use kernel::{BoxErase, Erase, MaxSimKernel};
 pub use max_sim::{Chamfer, MaxSim, MaxSimError};
 pub use projected_eigen::ProjectedEigen;
+pub use topk::{BuildTopKError, TopKError, TopKKernel};
