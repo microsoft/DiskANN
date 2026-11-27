@@ -60,9 +60,7 @@ where
 
     let total = std::time::Instant::now();
 
-    // Lints: Using `ParallelIterator::collect`. It's the caller's responsibility to invoke
-    // this in a properly sized Rayon environment.
-    #[expect(clippy::disallowed_methods)]
+    // It's the caller's responsibility to invoke this in a properly sized Rayon environment.
     let times: Vec<Times> = output
         .par_rows_mut()
         .zip(queries.par_rows())

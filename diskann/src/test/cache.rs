@@ -6,6 +6,7 @@
 use std::path::{Path, PathBuf};
 
 use relative_path::RelativePath;
+use serde::Serialize;
 
 /// Return previously generated results generated for `test_name`.
 ///
@@ -32,9 +33,30 @@ pub(crate) fn get_or_save_test_results<R>(test_name: &str, results: &R) -> R
 where
     R: serde::Serialize + for<'a> serde::Deserialize<'a> + Clone,
 {
+    get_or_save_test_results_with_format(test_name, results, TestFormat::Pretty)
+}
+
+/// Whitespace used when regenerating baselines; reading is independent of the format.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum TestFormat {
+    Pretty,
+    InlineNumericPairs,
+}
+
+/// Like [`get_or_save_test_results`], with opt-in formatting for regenerated files.
+#[track_caller]
+pub(crate) fn get_or_save_test_results_with_format<R>(
+    test_name: &str,
+    results: &R,
+    format: TestFormat,
+) -> R
+where
+    R: serde::Serialize + for<'a> serde::Deserialize<'a> + Clone,
+{
     match _get_or_save_test_results(
         test_name,
         serde_json::to_value(results).expect("while serializing results"),
+        format,
     ) {
         Some(output) => match R::deserialize(output) {
             Ok(deserialized) => deserialized,
@@ -188,14 +210,63 @@ fn result_path(relative: &RelativePath) -> PathBuf {
 
 /// A thin wrapper for serialized payloads that adds a little more metadata to test results.
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
-struct TestResult {
+struct TestResult<T = serde_json::Value> {
     file: String,
     test: String,
-    payload: serde_json::Value,
+    payload: T,
+}
+
+impl TestResult {
+    fn write(self, writer: impl std::io::Write, format: TestFormat) -> serde_json::Result<()> {
+        match format {
+            TestFormat::Pretty => serde_json::to_writer_pretty(writer, &self),
+            TestFormat::InlineNumericPairs => {
+                let result = TestResult {
+                    file: self.file,
+                    test: self.test,
+                    payload: InlineNumericPairs(&self.payload),
+                };
+                serde_json::to_writer_pretty(writer, &result)
+            }
+        }
+    }
+}
+
+/// Keep two-number arrays inline without changing string contents or other containers.
+struct InlineNumericPairs<'a>(&'a serde_json::Value);
+
+impl Serialize for InlineNumericPairs<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self.0 {
+            serde_json::Value::Array(values)
+                if values.len() == 2 && values.iter().all(serde_json::Value::is_number) =>
+            {
+                let raw = serde_json::value::RawValue::from_string(format!(
+                    "[{}, {}]",
+                    values[0], values[1]
+                ))
+                .map_err(serde::ser::Error::custom)?;
+                raw.serialize(serializer)
+            }
+            serde_json::Value::Array(values) => {
+                serializer.collect_seq(values.iter().map(InlineNumericPairs))
+            }
+            serde_json::Value::Object(values) => serializer.collect_map(
+                values
+                    .iter()
+                    .map(|(key, value)| (key, InlineNumericPairs(value))),
+            ),
+            value => value.serialize(serializer),
+        }
+    }
 }
 
 #[track_caller]
-fn _get_or_save_test_results(test: &str, value: serde_json::Value) -> Option<serde_json::Value> {
+fn _get_or_save_test_results(
+    test: &str,
+    value: serde_json::Value,
+    format: TestFormat,
+) -> Option<serde_json::Value> {
     // Get the location of the caller to allow us to construct a full path.
     let caller = std::panic::Location::caller();
 
@@ -258,7 +329,9 @@ fn _get_or_save_test_results(test: &str, value: serde_json::Value) -> Option<ser
                 test: normalize_file(test),
                 payload: value,
             };
-            serde_json::to_writer_pretty(buffer, &result).expect("serialization should succeed");
+            result
+                .write(buffer, format)
+                .expect("serialization should succeed");
             None
         }
     }
@@ -278,6 +351,57 @@ fn normalize_file(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn record() -> TestResult {
+        TestResult {
+            file: "source.rs".into(),
+            test: "formatting".into(),
+            payload: serde_json::json!({
+                "pairs": [[7, 2.5], [u64::MAX, i64::MIN]],
+                "nested": {"pair": [1.25, -0.0]},
+                "empty": [],
+                "single": [1],
+                "long": [1, 2, 3],
+                "mixed": [1, "2"],
+                "strings": ["[1, 2]", "\"[3,4]\""],
+            }),
+        }
+    }
+
+    #[test]
+    fn pretty_format_is_unchanged() {
+        let result = record();
+        let expected = serde_json::to_vec_pretty(&result).unwrap();
+        let mut output = Vec::new();
+        result.write(&mut output, TestFormat::Pretty).unwrap();
+        assert_eq!(output, expected);
+    }
+
+    #[test]
+    fn inline_numeric_pairs_preserves_nested_values() {
+        let result = record();
+        let expected = serde_json::to_value(&result).unwrap();
+        let mut output = Vec::new();
+        result
+            .write(&mut output, TestFormat::InlineNumericPairs)
+            .unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&output).unwrap(),
+            expected
+        );
+
+        let text = std::str::from_utf8(&output).unwrap();
+        for expected in [
+            "[7, 2.5]",
+            "[18446744073709551615, -9223372036854775808]",
+            "[1.25, -0.0]",
+            "\"long\": [\n",
+            "\"mixed\": [\n",
+            "\"strings\": [\n",
+        ] {
+            assert!(text.contains(expected), "missing {expected:?} in {text}");
+        }
+    }
 
     #[test]
     fn test_path() {

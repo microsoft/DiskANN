@@ -32,6 +32,7 @@ diskann-wide = { workspace = true }
 # Optional Dependencies
 dashmap = { workspace = true, optional = true }
 diskann-linalg = { workspace = true, optional = true }
+diskann-quantization = { workspace = true, optional = true }
 
 [dev-dependencies]
 diskann-utils = { workspace = true, features = ["testing"] }
@@ -41,7 +42,7 @@ rand.workspace = true
 relative-path = "2.0.1"
 rstest.workspace = true
 serde = { workspace = true, features = ["derive"] }
-serde_json = { workspace = true }
+serde_json = { workspace = true, features = ["raw_value"] }
 tokio = { workspace = true, features = ["macros", "sync"] }
 dashmap = { workspace = true }
 
@@ -63,6 +64,9 @@ default = ["tracing"]
 
 # Enable PiPNN batch graph construction.
 pipnn = ["dep:diskann-linalg", "dep:rayon", "diskann-utils/rayon"]
+
+# Enable clustering for IVF
+ivf = ["dep:diskann-quantization", "diskann-quantization/rayon", "dep:rayon"]
 
 # Enable "tracing" diagnostics.
 tracing = ["dep:tracing"]

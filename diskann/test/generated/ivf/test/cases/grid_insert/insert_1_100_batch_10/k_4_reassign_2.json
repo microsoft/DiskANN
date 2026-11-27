@@ -1,0 +1,253 @@
+{
+  "file": "diskann/src/ivf/test/cases/grid_insert.rs",
+  "test": "ivf/test/cases/grid_insert/insert_1_100_batch_10/k_4_reassign_2",
+  "payload": {
+    "description": "Insert 100 grid points in batches of 10.",
+    "insert_metrics": {
+      "append_members": 58,
+      "create": 40,
+      "distances": 0,
+      "fill": 20,
+      "find": 40,
+      "finish": 10,
+      "region_finish": 20,
+      "remove_members": 58,
+      "retire": 10,
+      "route": 10,
+      "scan": 0
+    },
+    "list_sizes": [
+      [1, 1],
+      [2, 2],
+      [3, 3],
+      [5, 2],
+      [6, 3],
+      [7, 4],
+      [9, 3],
+      [10, 3],
+      [11, 4],
+      [13, 3],
+      [14, 3],
+      [15, 4],
+      [17, 3],
+      [18, 3],
+      [19, 4],
+      [21, 3],
+      [22, 3],
+      [23, 4],
+      [25, 3],
+      [26, 3],
+      [27, 4],
+      [29, 3],
+      [30, 3],
+      [31, 4],
+      [33, 3],
+      [34, 3],
+      [35, 4],
+      [37, 3],
+      [38, 3],
+      [39, 4],
+      [40, 5]
+    ],
+    "num_inserted": 100,
+    "parameters": {
+      "batch_size": 10,
+      "grid_dims": 1,
+      "grid_size": 100,
+      "reassign_count": 2,
+      "split_iterations": 10,
+      "split_k": 4,
+      "split_threshold": 8
+    },
+    "searches": [
+      {
+        "k": 10,
+        "metrics": {
+          "append_members": 0,
+          "create": 0,
+          "distances": 1,
+          "fill": 0,
+          "find": 0,
+          "finish": 0,
+          "region_finish": 0,
+          "remove_members": 0,
+          "retire": 0,
+          "route": 0,
+          "scan": 1
+        },
+        "nprobe": 1,
+        "num_results": 1,
+        "query": [
+          -1.0
+        ],
+        "results": [
+          [0, 1.0]
+        ]
+      },
+      {
+        "k": 10,
+        "metrics": {
+          "append_members": 0,
+          "create": 0,
+          "distances": 3,
+          "fill": 0,
+          "find": 0,
+          "finish": 0,
+          "region_finish": 0,
+          "remove_members": 0,
+          "retire": 0,
+          "route": 0,
+          "scan": 2
+        },
+        "nprobe": 2,
+        "num_results": 3,
+        "query": [
+          -1.0
+        ],
+        "results": [
+          [0, 1.0],
+          [1, 4.0],
+          [2, 9.0]
+        ]
+      },
+      {
+        "k": 10,
+        "metrics": {
+          "append_members": 0,
+          "create": 0,
+          "distances": 100,
+          "fill": 0,
+          "find": 0,
+          "finish": 0,
+          "region_finish": 0,
+          "remove_members": 0,
+          "retire": 0,
+          "route": 0,
+          "scan": 31
+        },
+        "nprobe": 31,
+        "num_results": 10,
+        "query": [
+          -1.0
+        ],
+        "results": [
+          [0, 1.0],
+          [1, 4.0],
+          [2, 9.0],
+          [3, 16.0],
+          [4, 25.0],
+          [5, 36.0],
+          [6, 49.0],
+          [7, 64.0],
+          [8, 81.0],
+          [9, 100.0]
+        ]
+      },
+      {
+        "k": 10,
+        "metrics": {
+          "append_members": 0,
+          "create": 0,
+          "distances": 5,
+          "fill": 0,
+          "find": 0,
+          "finish": 0,
+          "region_finish": 0,
+          "remove_members": 0,
+          "retire": 0,
+          "route": 0,
+          "scan": 1
+        },
+        "nprobe": 1,
+        "num_results": 5,
+        "query": [
+          100.0
+        ],
+        "results": [
+          [99, 1.0],
+          [98, 4.0],
+          [97, 9.0],
+          [96, 16.0],
+          [95, 25.0]
+        ]
+      },
+      {
+        "k": 10,
+        "metrics": {
+          "append_members": 0,
+          "create": 0,
+          "distances": 9,
+          "fill": 0,
+          "find": 0,
+          "finish": 0,
+          "region_finish": 0,
+          "remove_members": 0,
+          "retire": 0,
+          "route": 0,
+          "scan": 2
+        },
+        "nprobe": 2,
+        "num_results": 9,
+        "query": [
+          100.0
+        ],
+        "results": [
+          [99, 1.0],
+          [98, 4.0],
+          [97, 9.0],
+          [96, 16.0],
+          [95, 25.0],
+          [94, 36.0],
+          [93, 49.0],
+          [92, 64.0],
+          [91, 81.0]
+        ]
+      },
+      {
+        "k": 10,
+        "metrics": {
+          "append_members": 0,
+          "create": 0,
+          "distances": 100,
+          "fill": 0,
+          "find": 0,
+          "finish": 0,
+          "region_finish": 0,
+          "remove_members": 0,
+          "retire": 0,
+          "route": 0,
+          "scan": 31
+        },
+        "nprobe": 31,
+        "num_results": 10,
+        "query": [
+          100.0
+        ],
+        "results": [
+          [99, 1.0],
+          [98, 4.0],
+          [97, 9.0],
+          [96, 16.0],
+          [95, 25.0],
+          [94, 36.0],
+          [93, 49.0],
+          [92, 64.0],
+          [91, 81.0],
+          [90, 100.0]
+        ]
+      }
+    ],
+    "splits_per_batch": [
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1
+    ]
+  }
+}
