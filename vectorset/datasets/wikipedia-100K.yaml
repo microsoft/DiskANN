@@ -1,0 +1,9 @@
+vectors: 100000
+queries: 5000
+dim: 768
+data-type: "float32"
+metric: "innerproduct"
+base-path: "wikipedia_cohere/wikipedia_base.bin.crop_nb_100000"
+query-path: "wikipedia_cohere/wikipedia_query.bin"
+gt-path: "wikipedia_cohere/wikipedia-100K"
+step-gt-dir: "wikipedia_cohere/100000"
