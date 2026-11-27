@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-//! Sequential ("flat") search.
+//! Exhaustive ("flat") search.
 //!
 //! This module is the streaming counterpart to the random-access
 //! [`crate::graph::glue::SearchAccessor`] family. It is designed for backends whose natural access
@@ -22,9 +22,13 @@
 //!
 pub mod index;
 pub mod strategy;
+mod topk;
 
-pub use index::{SearchStats, knn_search};
-pub use strategy::DistancesUnordered;
+#[cfg(feature = "flat-gemm")]
+pub mod gemm;
+
+pub use index::{SearchOptions, SearchStats, knn_search, knn_search_with_options};
+pub use strategy::{DistanceHandler, DistancesUnordered};
 
 #[cfg(test)]
 mod test;

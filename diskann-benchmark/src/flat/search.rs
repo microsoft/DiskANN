@@ -11,7 +11,7 @@
 use std::{io::Write, num::NonZeroUsize, sync::Arc};
 
 use diskann::{
-    flat::{knn_search, DistancesUnordered},
+    flat::{knn_search, DistanceHandler, DistancesUnordered},
     graph::{glue::CopyIds, SearchOutputBuffer},
     provider::HasId,
     utils::VectorRepr,
@@ -215,6 +215,36 @@ impl<T: VectorRepr> DistancesUnordered for Visitor<'_, T> {
             for (i, vector) in self.data.rows().enumerate() {
                 let dist = self.computer.evaluate_similarity(vector);
                 f(i as u32, dist);
+            }
+            Ok(())
+        }
+    }
+
+    fn distances_unordered_with<H>(
+        &mut self,
+        handler: &mut H,
+    ) -> impl SendFuture<Result<(), Self::Error>>
+    where
+        H: DistanceHandler<Self::Id>,
+    {
+        async move {
+            let dim = self.data.ncols();
+            // Zero-width rows still represent candidates, but cannot form slice chunks.
+            if dim == 0 || !handler.prefers_buffered_batches() {
+                return self
+                    .distances_unordered(|id, distance| handler.add(id, distance))
+                    .await;
+            }
+            const BATCH: usize = 32;
+            let mut ids = [0u32; BATCH];
+            let mut distances = [0.0f32; BATCH];
+            for (block, vectors) in self.data.as_slice().chunks(BATCH * dim).enumerate() {
+                let len = vectors.len() / dim;
+                for (lane, vector) in vectors.chunks_exact(dim).enumerate() {
+                    ids[lane] = (block * BATCH + lane) as u32;
+                    distances[lane] = self.computer.evaluate_similarity(vector);
+                }
+                handler.add_batch(&ids[..len], &distances[..len]);
             }
             Ok(())
         }
@@ -440,6 +470,103 @@ mod tests {
     use super::*;
     use crate::inputs::Example;
     use diskann_benchmark_runner::utils::MicroSeconds;
+
+    #[test]
+    fn visitor_batches_preserve_candidates_and_honor_staging_hint() {
+        use diskann::neighbor::{Neighbor, NeighborPriorityQueue};
+
+        struct Recorder {
+            stage: bool,
+            singles: usize,
+            batches: usize,
+            values: Vec<(u32, u32)>,
+        }
+        impl DistanceHandler<u32> for Recorder {
+            fn prefers_buffered_batches(&self) -> bool {
+                self.stage
+            }
+            fn add(&mut self, id: u32, distance: f32) {
+                self.singles += 1;
+                self.values.push((id, distance.to_bits()));
+            }
+            fn add_batch(&mut self, ids: &[u32], distances: &[f32]) {
+                assert_eq!(ids.len(), distances.len());
+                self.batches += 1;
+                self.values
+                    .extend(ids.iter().zip(distances).map(|(&id, d)| (id, d.to_bits())));
+            }
+        }
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap()
+            .block_on(async {
+                for nrows in [0usize, 3, 32, 65, 129] {
+                    for dim in [0, 1] {
+                        let provider = InMemProvider {
+                            data: Arc::new(rowmajor::Owned::from_fn(nrows, dim, |rc| {
+                                (rc.row % 11) as f32
+                            })),
+                        };
+                        let query = vec![2.0; dim];
+                        let mut expected = Vec::new();
+                        Visitor::new(&provider, &query, Metric::L2)
+                            .distances_unordered(|id, d| expected.push((id, d.to_bits())))
+                            .await
+                            .unwrap();
+                        assert_eq!(expected.len(), nrows);
+                        for stage in [false, true] {
+                            let mut recorder = Recorder {
+                                stage,
+                                singles: 0,
+                                batches: 0,
+                                values: Vec::new(),
+                            };
+                            Visitor::new(&provider, &query, Metric::L2)
+                                .distances_unordered_with(&mut recorder)
+                                .await
+                                .unwrap();
+                            let batched = stage && dim != 0;
+                            assert_eq!(recorder.values, expected);
+                            assert_eq!(recorder.singles, if batched { 0 } else { nrows });
+                            assert_eq!(
+                                recorder.batches,
+                                if batched { nrows.div_ceil(32) } else { 0 }
+                            );
+                        }
+                        for k in [1, 2, 100] {
+                            let mut reference = NeighborPriorityQueue::new(k);
+                            for &(id, bits) in &expected {
+                                reference.insert(Neighbor::new(id, f32::from_bits(bits)));
+                            }
+                            let mut visitor = Visitor::new(&provider, &query, Metric::L2);
+                            let mut output = Vec::new();
+                            let stats = knn_search(
+                                &mut visitor,
+                                NonZeroUsize::new(k).unwrap(),
+                                CopyIds,
+                                (),
+                                &mut output,
+                            )
+                            .await
+                            .unwrap();
+                            assert_eq!(
+                                output
+                                    .iter()
+                                    .map(|n| (*n.id(), n.distance().to_bits()))
+                                    .collect::<Vec<_>>(),
+                                reference
+                                    .iter()
+                                    .map(|n| (*n.id(), n.distance().to_bits()))
+                                    .collect::<Vec<_>>(),
+                                "nrows={nrows}, dim={dim}, k={k}"
+                            );
+                            assert_eq!(stats.cmps as usize, nrows);
+                            assert_eq!(stats.result_count as usize, nrows.min(k));
+                        }
+                    }
+                }
+            });
+    }
 
     fn make_dummy_results(num_results: usize) -> FlatResult {
         let results = (0..num_results)

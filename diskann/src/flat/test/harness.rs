@@ -59,23 +59,6 @@ impl KnnOracleRun {
         current_thread_runtime().block_on(Self::run(provider, oracle, query, k))
     }
 
-    /// Run [`knn_search`] with an already initialized visitor.
-    pub fn run_sync_with_visitor<O: OracleProcessor>(
-        provider: &Provider,
-        mut visitor: Visitor<'_>,
-        oracle: &O,
-        query: &[f32],
-        k: usize,
-    ) -> ANNResult<Self> {
-        current_thread_runtime().block_on(Self::run_with_visitor(
-            provider,
-            &mut visitor,
-            oracle,
-            query,
-            k,
-        ))
-    }
-
     /// Async variant of [`KnnOracleRun::run_sync`]. Use this from tests that already
     /// have a Tokio runtime (e.g. `#[tokio::test]`) or that need to drive
     /// `knn_search` concurrently across tasks.
