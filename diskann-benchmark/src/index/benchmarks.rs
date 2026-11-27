@@ -8,7 +8,7 @@ use std::{io::Write, num::NonZeroUsize, sync::Arc};
 use diskann::{
     graph::SampleableForStart,
     graph::{glue, DiskANNIndex},
-    provider::{self, DataProvider, DefaultContext},
+    provider::{self, DataProvider, DefaultContext, PathSeerGraph},
     utils::VectorRepr,
 };
 use diskann_benchmark_core::{
@@ -46,11 +46,13 @@ use crate::{
         search::plugins,
         streaming::{self, managed, stats::StreamStats, FullPrecisionStream, Managed},
     },
-    inputs::graph_index::{DynamicIndexRun, IndexBuild, IndexOperation, IndexSource, SearchPhase},
+    inputs::graph_index::{
+        DynamicIndexRun, IndexBuild, IndexOperation, IndexSource, PathSeerMethodId, SearchPhase,
+    },
     utils::{
         self,
         datafiles::{self},
-        filters::{generate_bitmaps, setup_filter_strategies},
+        filters::{get_filter_bitmaps, setup_filter_strategies},
     },
 };
 
@@ -79,6 +81,7 @@ pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
             .search(plugins::FilteredRange)
             .search(plugins::TopkBetaFilter)
             .search(plugins::TopkMultihopFilter)
+            .search(plugins::TopkPathseerFilter)
             .search(plugins::TopkInlineFilter)
             .search(plugins::DeterminantDiversity),
     )?;
@@ -92,6 +95,8 @@ pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
         FullPrecision::<u8>::new()
             .search(plugins::Topk)
             .search(plugins::TopkBetaFilter)
+            .search(plugins::TopkMultihopFilter)
+            .search(plugins::TopkPathseerFilter)
             .search(plugins::TopkInlineFilter)
             .search(plugins::FilteredRange),
     )?;
@@ -612,9 +617,11 @@ where
             &filtered_range.runs,
         );
 
-        let bit_maps = generate_bitmaps(
+        let bit_maps = get_filter_bitmaps(
             &filtered_range.query_predicates,
             &filtered_range.data_labels,
+            &filtered_range.filter_bitmaps,
+            queries.nrows(),
         )?;
 
         let labels: Arc<[_]> = bit_maps
@@ -672,7 +679,12 @@ where
         let groundtruth =
             datafiles::load_range_groundtruth(datafiles::BinFile(&beta_filter.groundtruth))?;
 
-        let bit_maps = generate_bitmaps(&beta_filter.query_predicates, &beta_filter.data_labels)?;
+        let bit_maps = get_filter_bitmaps(
+            &beta_filter.query_predicates,
+            &beta_filter.data_labels,
+            &beta_filter.filter_bitmaps,
+            queries.nrows(),
+        )?;
 
         let search_strategies = setup_filter_strategies(
             beta_filter.beta,
@@ -745,7 +757,12 @@ where
             GroundTruthMode::Flexible,
         );
 
-        let bit_maps = generate_bitmaps(&multihop.query_predicates, &multihop.data_labels)?;
+        let bit_maps = get_filter_bitmaps(
+            &multihop.query_predicates,
+            &multihop.data_labels,
+            &multihop.filter_bitmaps,
+            queries.nrows(),
+        )?;
 
         let multihop = benchmark_core::search::graph::MultiHop::new(
             index,
@@ -758,6 +775,82 @@ where
         )?;
 
         let result = search::knn::run(&multihop, &groundtruth, steps)?;
+        Ok(AggregatedSearchResults::Topk(result))
+    }
+}
+
+//------------//
+// PathSeer   //
+//------------//
+
+impl<DP, S> search::Plugin<DP, SearchPhase, Strategy<S>> for plugins::TopkPathseerFilter
+where
+    DP: PathSeerGraph<Context: Default, InternalId = u32, ExternalId = u32> + QueryType,
+    S: for<'a> glue::DefaultSearchStrategy<
+            'a,
+            DP,
+            &'a [DP::Element],
+            SearchAccessor: glue::SearchAccessor,
+        > + Clone
+        + AsyncFriendly,
+{
+    fn is_match(&self, phase: &SearchPhase) -> bool {
+        plugins::TopkPathseerFilter::is_match(phase)
+    }
+
+    fn kind(&self) -> &'static str {
+        plugins::TopkPathseerFilter::as_str()
+    }
+
+    fn run(
+        &self,
+        index: Arc<DiskANNIndex<DP>>,
+        phase: &SearchPhase,
+        strategy: &Strategy<S>,
+    ) -> anyhow::Result<AggregatedSearchResults> {
+        let pathseer = phase.as_topk_pathseer_filter()?;
+        let method_id = match pathseer.method_id {
+            PathSeerMethodId::Original => diskann::graph::search::PathSeerMethod::Original,
+            PathSeerMethodId::WhatIf1 => diskann::graph::search::PathSeerMethod::WhatIf1,
+            PathSeerMethodId::WhatIf2 => diskann::graph::search::PathSeerMethod::WhatIf2,
+            PathSeerMethodId::WhatIf3 => diskann::graph::search::PathSeerMethod::WhatIf3,
+            PathSeerMethodId::WhatIf4 => diskann::graph::search::PathSeerMethod::WhatIf4,
+            PathSeerMethodId::WhatIf5 => diskann::graph::search::PathSeerMethod::WhatIf5,
+        };
+
+        let queries: Arc<rowmajor::Owned<DP::Element>> = Arc::new(datafiles::load_dataset(
+            datafiles::BinFile(&pathseer.queries),
+        )?);
+
+        let groundtruth =
+            datafiles::load_range_groundtruth(datafiles::BinFile(&pathseer.groundtruth))?;
+
+        let steps = search::knn::SearchSteps::new(
+            pathseer.reps,
+            &pathseer.num_threads,
+            &pathseer.runs,
+            GroundTruthMode::Flexible,
+        );
+
+        let bit_maps = get_filter_bitmaps(
+            &pathseer.query_predicates,
+            &pathseer.data_labels,
+            &pathseer.filter_bitmaps,
+            queries.nrows(),
+        )?;
+
+        let pathseer = benchmark_core::search::graph::PathSeer::new(
+            index,
+            queries,
+            benchmark_core::search::graph::Strategy::broadcast(strategy.inner()),
+            bit_maps
+                .into_iter()
+                .map(utils::filters::as_query_label_provider)
+                .collect(),
+            method_id,
+        )?;
+
+        let result = search::knn::run(&pathseer, &groundtruth, steps)?;
         Ok(AggregatedSearchResults::Topk(result))
     }
 }
@@ -807,7 +900,12 @@ where
             GroundTruthMode::Flexible,
         );
 
-        let bit_maps = generate_bitmaps(&inline.query_predicates, &inline.data_labels)?;
+        let bit_maps = get_filter_bitmaps(
+            &inline.query_predicates,
+            &inline.data_labels,
+            &inline.filter_bitmaps,
+            queries.nrows(),
+        )?;
 
         let inline = benchmark_core::search::graph::InlineFilterSearch::new(
             index,

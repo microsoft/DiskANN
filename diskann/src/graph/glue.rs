@@ -432,6 +432,11 @@ impl<T> From<Reject<T>> for Decision<T> {
 ///
 /// See also: [`SearchAccessor`].
 pub trait FilteredAccessor: HasId + Send + Sync {
+    /// Exact number of matching vector IDs, if available before search.
+    fn match_count(&self) -> Option<usize> {
+        None
+    }
+
     /// Compute the distance to all start points, invoking `f` with all results.
     fn start_point_distances<F>(
         &mut self,
@@ -496,6 +501,27 @@ pub trait FilteredAccessor: HasId + Send + Sync {
 
     /// Return the number of starting points.
     fn num_starting_points(&self) -> impl std::future::Future<Output = ANNResult<usize>> + Send;
+}
+
+/// A filtered accessor that can classify a point without computing its distance.
+/// Used by PathSeer to budget matching second-order neighbors and visit rejected IDs.
+pub trait FilterClassifier: FilteredAccessor {
+    /// Classify `id` using the same filter as the expansion methods.
+    fn classify(&self, id: Self::Id) -> Decision<Self::Id>;
+
+    /// Expand using a predicate that selects only previously classified matching IDs.
+    /// No additional filter checks are performed. The caller must ensure every ID
+    /// admitted by `pred` has already been classified as accepted for this query.
+    fn expand_beam_preclassified<Itr, P, F>(
+        &mut self,
+        ids: Itr,
+        pred: P,
+        on_neighbors: F,
+    ) -> impl std::future::Future<Output = ANNResult<()>> + Send
+    where
+        Itr: Iterator<Item = Self::Id> + Send,
+        P: HybridPredicate<Self::Id> + Send + Sync,
+        F: FnMut(Self::Id, f32) + Send;
 }
 
 /// A predicate evaluating `item`.
