@@ -243,12 +243,15 @@ where
     scratch_pool: &'a Arc<ObjectPool<DiskSearchScratch<Data, ProviderFactory::VertexProviderType>>>,
 }
 
-// Struct to track IO. This is used by single thread, but needs to be Atomic as the Strategy has "Send" trait bound.
-// There should be minimal to no overhead compared to using a raw reference.
+// Accessors share this tracker through references and must be Send + Sync.
 struct IOTracker {
     io_time_us: AtomicU64,
     preprocess_time_us: AtomicU64,
     io_count: AtomicUsize,
+    diagnostics: tracing::Span,
+    vector_ns: AtomicU64,
+    pq_distance_ns: AtomicU64,
+    adjacency_ns: AtomicU64,
 }
 
 impl Default for IOTracker {
@@ -257,11 +260,31 @@ impl Default for IOTracker {
             io_time_us: AtomicU64::new(0),
             preprocess_time_us: AtomicU64::new(0),
             io_count: AtomicUsize::new(0),
+            diagnostics: tracing::debug_span!(
+                target: "diskann::disk::search::diagnostics",
+                "diskann.disk.search.diagnostics",
+                vector_ns = tracing::field::Empty,
+                pq_distance_ns = tracing::field::Empty,
+                adjacency_ns = tracing::field::Empty,
+            ),
+            vector_ns: AtomicU64::new(0),
+            pq_distance_ns: AtomicU64::new(0),
+            adjacency_ns: AtomicU64::new(0),
         }
     }
 }
 
 impl IOTracker {
+    fn diagnostic_start(&self) -> Option<Instant> {
+        (!self.diagnostics.is_disabled()).then(Instant::now)
+    }
+
+    fn add_diagnostic_time(category: &AtomicU64, start: Option<Instant>) {
+        if let Some(start) = start {
+            Self::add_time(category, start.elapsed().as_nanos() as u64);
+        }
+    }
+
     fn add_time(category: &AtomicU64, time: u64) {
         category.fetch_add(time, std::sync::atomic::Ordering::Relaxed);
     }
@@ -409,6 +432,7 @@ where
         })));
     }
 
+    let timer = accessor.io_tracker.diagnostic_start();
     let mut count = 0;
     for candidate in reranked {
         if output.size_hint() == Some(0) {
@@ -432,6 +456,7 @@ where
             break;
         }
     }
+    IOTracker::add_diagnostic_time(&accessor.io_tracker.vector_ns, timer);
     Ok(count)
 }
 
@@ -486,12 +511,14 @@ where
         };
         if !uncached_ids.is_empty() {
             ensure_vertex_loaded(&mut accessor.scratch.vertex_provider, &uncached_ids)?;
+            let timer = accessor.io_tracker.diagnostic_start();
             for n in &uncached_ids {
                 let v = accessor.scratch.vertex_provider.get_vector(n)?;
                 let d = provider.distance_comparer.evaluate_similarity(query, v);
                 let a = accessor.scratch.vertex_provider.get_associated_data(n)?;
                 reranked.push(Neighbor::new((*n, *a), d));
             }
+            IOTracker::add_diagnostic_time(&accessor.io_tracker.vector_ns, timer);
         }
 
         // Sort the full precision distances.
@@ -549,6 +576,7 @@ where
         let mut candidate_distances = Vec::with_capacity(candidate_ids.len());
         let mut associated_data = Vec::with_capacity(candidate_ids.len());
 
+        let timer = accessor.io_tracker.diagnostic_start();
         for (row_idx, id) in candidate_ids.iter().enumerate() {
             let vector = accessor.scratch.vertex_provider.get_vector(id)?;
             let distance = provider
@@ -563,6 +591,7 @@ where
             candidate_distances.push(distance);
             associated_data.push(*data);
         }
+        IOTracker::add_diagnostic_time(&accessor.io_tracker.vector_ns, timer);
 
         let reranked = determinant_diversity(
             candidate_vectors.as_view_mut(),
@@ -784,6 +813,7 @@ where
         F: FnMut(f32, u32),
     {
         let pq_scratch = &mut self.scratch.pq_scratch;
+        let timer = self.io_tracker.diagnostic_start();
         compute_pq_distance(
             ids,
             self.provider.pq_data.get_num_chunks(),
@@ -792,6 +822,7 @@ where
             &mut pq_scratch.aligned_pq_coord_scratch,
             &mut pq_scratch.aligned_dist_scratch,
         )?;
+        IOTracker::add_diagnostic_time(&self.io_tracker.pq_distance_ns, timer);
 
         for (i, id) in ids.iter().enumerate() {
             let distance = self.scratch.pq_scratch.aligned_dist_scratch[i];
@@ -886,6 +917,7 @@ where
             self.ensure_loaded(&load_ids)?;
             let mut ids = Vec::new();
             for i in load_ids {
+                let timer = self.io_tracker.diagnostic_start();
                 ids.clear();
                 ids.extend(
                     self.scratch
@@ -895,6 +927,7 @@ where
                         .copied()
                         .filter(|id| pred.eval_mut(id)),
                 );
+                IOTracker::add_diagnostic_time(&self.io_tracker.adjacency_ns, timer);
 
                 self.pq_distances(&ids, &mut |dist, id| f(id, dist))?;
             }
@@ -967,6 +1000,7 @@ where
             timer.elapsed().as_micros() as u64,
         );
         self.io_tracker.add_io_count(ids.len());
+        let timer = self.io_tracker.diagnostic_start();
         for id in ids {
             let vector = scratch.vertex_provider.get_vector(id)?;
             let distance = self
@@ -979,6 +1013,7 @@ where
                 .distance_cache
                 .insert(*id, (distance, associated_data, indexed_vector));
         }
+        IOTracker::add_diagnostic_time(&self.io_tracker.vector_ns, timer);
         Ok(())
     }
 }
@@ -1476,6 +1511,14 @@ where
         query_stats.cpu_time_us = query_stats.total_execution_time_us
             - query_stats.io_time_us
             - query_stats.query_pq_preprocess_time_us;
+        io_tracker
+            .diagnostics
+            .record("vector_ns", IOTracker::time(&io_tracker.vector_ns))
+            .record(
+                "pq_distance_ns",
+                IOTracker::time(&io_tracker.pq_distance_ns),
+            )
+            .record("adjacency_ns", IOTracker::time(&io_tracker.adjacency_ns));
         Ok(SearchResultStats {
             cmps: query_stats.total_comparisons,
             result_count: stats.result_count,
@@ -1519,6 +1562,15 @@ mod disk_provider_tests {
     use diskann_vector::distance::Metric;
     use rayon::prelude::IndexedParallelIterator;
     use rstest::rstest;
+    use std::{collections::BTreeMap, sync::Mutex};
+    use tracing::{Instrument, Subscriber, field::Visit, instrument::WithSubscriber};
+    use tracing_subscriber::{
+        Layer, Registry,
+        filter::{LevelFilter, Targets},
+        layer::{Context, SubscriberExt},
+        registry::LookupSpan,
+        reload,
+    };
     use vfs::OverlayFS;
 
     use super::*;
@@ -1543,6 +1595,255 @@ mod disk_provider_tests {
     /// [`TEST_TRUTH_RESULT_10PTS_128DIM`], which matches the prebuilt [`TEST_INDEX_128DIM`].
     const TEST_TRUTH_RESULT_ASSOCIATED_DATA_10PTS_128DIM: &str = "/disk_index_search/disk_index_sift_learn_R4_L50_A1.2_associated_data_10pts_truth_search_res.bin";
     const TEST_QUERY_10PTS_128DIM: &str = "/disk_index_search/disk_index_sample_query_10pts.fbin";
+
+    #[derive(Default)]
+    struct CapturedSpan {
+        name: &'static str,
+        parent: Option<&'static str>,
+        fields: BTreeMap<String, u64>,
+    }
+
+    impl Visit for CapturedSpan {
+        fn record_u64(&mut self, field: &tracing::field::Field, value: u64) {
+            self.fields.insert(field.name().to_owned(), value);
+        }
+
+        fn record_debug(&mut self, _: &tracing::field::Field, _: &dyn std::fmt::Debug) {}
+    }
+
+    #[derive(Clone, Default)]
+    struct CaptureSpans(Arc<Mutex<Vec<(CapturedSpan, u128)>>>);
+
+    impl<S> Layer<S> for CaptureSpans
+    where
+        S: Subscriber + for<'lookup> LookupSpan<'lookup>,
+    {
+        fn on_new_span(
+            &self,
+            attrs: &tracing::span::Attributes<'_>,
+            id: &tracing::Id,
+            ctx: Context<'_, S>,
+        ) {
+            let span = ctx.span(id).unwrap();
+            let mut captured = CapturedSpan {
+                name: span.name(),
+                parent: span.parent().map(|parent| parent.name()),
+                ..Default::default()
+            };
+            attrs.record(&mut captured);
+            span.extensions_mut().insert((captured, Instant::now()));
+        }
+
+        fn on_record(
+            &self,
+            id: &tracing::Id,
+            values: &tracing::span::Record<'_>,
+            ctx: Context<'_, S>,
+        ) {
+            let span = ctx.span(id).unwrap();
+            let mut extensions = span.extensions_mut();
+            values.record(&mut extensions.get_mut::<(CapturedSpan, Instant)>().unwrap().0);
+        }
+
+        fn on_close(&self, id: tracing::Id, ctx: Context<'_, S>) {
+            let span = ctx.span(&id).unwrap();
+            let (captured, start) = span
+                .extensions_mut()
+                .remove::<(CapturedSpan, Instant)>()
+                .unwrap();
+            self.0
+                .lock()
+                .unwrap()
+                .push((captured, start.elapsed().as_nanos()));
+        }
+    }
+
+    #[rstest]
+    #[case::graph(0)]
+    #[case::flat(1)]
+    #[case::inline(2)]
+    #[case::diverse(3)]
+    fn search_diagnostics_follow_scoped_subscriber_and_reload(
+        #[case] mode: u8,
+        #[values(false, true)] indexed_vectors: bool,
+    ) {
+        let storage = Arc::new(VirtualStorageProvider::new_overlay(test_data_root()));
+        let searcher = Arc::new(create_disk_index_searcher::<GraphDataF32VectorUnitData>(
+            CreateDiskIndexSearcherParams {
+                pq_pivot_file_path: TEST_PQ_PIVOT_128DIM,
+                pq_compressed_file_path: TEST_PQ_COMPRESSED_128DIM,
+                index_path: TEST_INDEX_128DIM,
+                index_path_prefix: TEST_INDEX_PREFIX_128DIM,
+                ..Default::default()
+            },
+            &storage,
+        ));
+        let queries = load_source_data(storage.as_ref(), TEST_QUERY_10PTS_128DIM);
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .build()
+            .unwrap();
+        let targets = |enabled| {
+            Targets::new().with_default(LevelFilter::TRACE).with_target(
+                "diskann::disk::search::diagnostics",
+                if enabled {
+                    LevelFilter::DEBUG
+                } else {
+                    LevelFilter::OFF
+                },
+            )
+        };
+        let (filter, reload) = reload::Layer::new(targets(false));
+        let capture = CaptureSpans::default();
+        let subscriber = Registry::default().with(filter).with(capture.clone());
+        let mut baseline = None;
+
+        tracing::subscriber::with_default(subscriber, || {
+            for enabled in [false, true, false] {
+                reload.reload(targets(enabled)).unwrap();
+                if !enabled {
+                    assert!(IOTracker::default().diagnostic_start().is_none());
+                }
+                let searcher = Arc::clone(&searcher);
+                let query = queries.row(0).to_vec();
+                let caller = tracing::info_span!("diagnostics_test_caller");
+                let caller_id = caller.id();
+                let results = runtime.block_on(async {
+                    tokio::spawn(
+                        async move {
+                            let mode = match mode {
+                                0 => SearchMode::graph(),
+                                1 => SearchMode::flat(),
+                                2 => SearchMode::inline_filter(|id| id % 2 == 0, None),
+                                3 => SearchMode::diverse_graph(
+                                    DeterminantDiversityParams::new(2.0, 0.01).unwrap(),
+                                ),
+                                _ => unreachable!(),
+                            };
+                            let results: Vec<_> = if indexed_vectors {
+                                searcher
+                                    .search_with_indexed_vectors(&query, 10, 20, Some(4), mode)
+                                    .await
+                                    .unwrap()
+                                    .results
+                                    .into_iter()
+                                    .map(|r| {
+                                        assert_eq!(r.indexed_vector.len(), query.len());
+                                        (r.vertex_id, r.distance)
+                                    })
+                                    .collect()
+                            } else {
+                                let result = searcher
+                                    .search(&query, 10, 20, Some(4), mode)
+                                    .await
+                                    .unwrap();
+                                result
+                                    .results
+                                    .into_iter()
+                                    .take(result.stats.result_count as usize)
+                                    .map(|r| (r.vertex_id, r.distance))
+                                    .collect()
+                            };
+                            assert_eq!(tracing::Span::current().id(), caller_id);
+                            results
+                        }
+                        .instrument(caller)
+                        .with_current_subscriber(),
+                    )
+                    .await
+                    .unwrap()
+                });
+                if let Some(baseline) = &baseline {
+                    assert_eq!(&results, baseline);
+                } else {
+                    baseline = Some(results);
+                }
+                let mut closed = capture.0.lock().unwrap();
+                if enabled {
+                    assert_eq!(closed.len(), 2);
+                    let (diagnostics, duration_ns) = &closed[0];
+                    assert_eq!(diagnostics.name, "diskann.disk.search.diagnostics");
+                    assert_eq!(diagnostics.parent, Some("diagnostics_test_caller"));
+                    assert_eq!(diagnostics.fields.len(), 3);
+                    assert!(diagnostics.fields["vector_ns"] > 0);
+                    assert!(diagnostics.fields["pq_distance_ns"] > 0);
+                    assert_eq!(diagnostics.fields["adjacency_ns"] > 0, mode != 1);
+                    assert!(u128::from(diagnostics.fields.values().sum::<u64>()) <= *duration_ns);
+                } else {
+                    assert_eq!(closed.len(), 1);
+                }
+                assert_eq!(closed.last().unwrap().0.name, "diagnostics_test_caller");
+                closed.clear();
+            }
+        });
+    }
+
+    #[test]
+    fn pq_diagnostics_exclude_callback() {
+        let storage = Arc::new(VirtualStorageProvider::new_overlay(test_data_root()));
+        let searcher = create_disk_index_searcher::<GraphDataF32VectorUnitData>(
+            CreateDiskIndexSearcherParams {
+                pq_pivot_file_path: TEST_PQ_PIVOT_128DIM,
+                pq_compressed_file_path: TEST_PQ_COMPRESSED_128DIM,
+                index_path: TEST_INDEX_128DIM,
+                index_path_prefix: TEST_INDEX_PREFIX_128DIM,
+                ..Default::default()
+            },
+            &storage,
+        );
+        let queries = load_source_data(storage.as_ref(), TEST_QUERY_10PTS_128DIM);
+        tracing::subscriber::with_default(Registry::default(), || {
+            let tracker = IOTracker::default();
+            let strategy =
+                searcher.search_strategy(&tracker, PostprocessStrategy::AcceptAll, false);
+            let mut accessor =
+                DiskAccessor::new(searcher.index.provider(), queries.row(0), &strategy).unwrap();
+            let mut measured_ns = 0;
+            accessor
+                .pq_distances(&[0, 1], |_, _| {
+                    // The measurement must already be complete before invoking user code.
+                    measured_ns = IOTracker::time(&tracker.pq_distance_ns);
+                    assert!(measured_ns > 0);
+                })
+                .unwrap();
+            assert_eq!(measured_ns, IOTracker::time(&tracker.pq_distance_ns));
+        });
+    }
+
+    #[test]
+    fn failed_search_does_not_publish_diagnostic_totals() {
+        let storage = Arc::new(VirtualStorageProvider::new_overlay(test_data_root()));
+        let searcher = create_disk_index_searcher::<GraphDataF32VectorUnitData>(
+            CreateDiskIndexSearcherParams {
+                pq_pivot_file_path: TEST_PQ_PIVOT_128DIM,
+                pq_compressed_file_path: TEST_PQ_COMPRESSED_128DIM,
+                index_path: TEST_INDEX_128DIM,
+                index_path_prefix: TEST_INDEX_PREFIX_128DIM,
+                ..Default::default()
+            },
+            &storage,
+        );
+        let queries = load_source_data(storage.as_ref(), TEST_QUERY_10PTS_128DIM);
+        let capture = CaptureSpans::default();
+        let subscriber = Registry::default().with(capture.clone());
+        tracing::subscriber::with_default(subscriber, || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .build()
+                .unwrap();
+            let result = runtime.block_on(searcher.search(
+                queries.row(0),
+                10,
+                20,
+                Some(0),
+                SearchMode::graph(),
+            ));
+            assert!(result.is_err());
+        });
+        let closed = capture.0.lock().unwrap();
+        assert_eq!(closed.len(), 1);
+        assert_eq!(closed[0].0.name, "diskann.disk.search.diagnostics");
+        assert!(closed[0].0.fields.is_empty());
+    }
 
     const TEST_INDEX_PREFIX_100DIM: &str = "/disk_index_search/256pts_100dim_f32_truth_Index";
     const TEST_INDEX_100DIM: &str = "/disk_index_search/256pts_100dim_f32_truth_Index_disk.index";
